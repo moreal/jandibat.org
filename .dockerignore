@@ -1,0 +1,15 @@
+.git
+.github
+.agents
+.codex
+.env
+.env.*
+!.env.example
+.yarn
+node_modules
+**/node_modules
+**/dist
+**/coverage
+**/*.test
+**/*.out
+.DS_Store

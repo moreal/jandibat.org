@@ -1,0 +1,282 @@
+name: Deploy staging
+
+on:
+  workflow_dispatch:
+    inputs:
+      security_review_path:
+        description: Committed human security-review record under docs/evidence/security
+        required: true
+        type: string
+      run_load_check:
+        description: Run the public API load gate after smoke checks
+        required: true
+        type: boolean
+        default: true
+      run_rollback_rehearsal:
+        description: Roll back to the recorded previous release and re-promote the candidate
+        required: true
+        type: boolean
+        default: true
+      run_fault_rehearsal:
+        description: Restart API and worker containers under load (isolated staging only)
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+jobs:
+  security-review:
+    name: Verify human security review binding
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out candidate with history
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate review evidence and reviewed code binding
+        env:
+          SECURITY_REVIEW: ${{ inputs.security_review_path }}
+        run: |
+          case "$SECURITY_REVIEW" in docs/evidence/security/*.md) ;; *) echo "invalid security review path" >&2; exit 2;; esac
+          test -f "$SECURITY_REVIEW"
+          reviewed_sha=$(awk -F '|' '$2 ~ /^[[:space:]]*Commit SHA[[:space:]]*$/ { gsub(/[[:space:]]/, "", $3); print $3; exit }' "$SECURITY_REVIEW")
+          node scripts/validate-security-review.mjs "$SECURITY_REVIEW" "$reviewed_sha"
+          git merge-base --is-ancestor "$reviewed_sha" "$GITHUB_SHA"
+          test -z "$(git diff --name-only "$reviewed_sha".."$GITHUB_SHA" | awk -v review="$SECURITY_REVIEW" '$0 != review { print }')"
+
+  build:
+    name: Build immutable images
+    needs: security-review
+    runs-on: ubuntu-24.04
+    outputs:
+      api_ref: ${{ steps.refs.outputs.api_ref }}
+      web_ref: ${{ steps.refs.outputs.web_ref }}
+      api_digest: ${{ steps.api.outputs.digest }}
+      restore_tools_ref: ${{ steps.restore-tools.outputs.ref }}
+      web_digest: ${{ steps.web.outputs.digest }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Log in to GitHub Container Registry
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+      - name: Build and push API image
+        id: api
+        shell: bash
+        run: |
+          repository=${GITHUB_REPOSITORY,,}
+          image="ghcr.io/${repository}/api"
+          docker buildx build --file apps/api/Dockerfile --platform linux/amd64 --tag "$image:$GITHUB_SHA" --push apps/api
+          digest=$(docker buildx imagetools inspect "$image:$GITHUB_SHA" --format '{{json .Manifest.Digest}}' | tr -d '"')
+          test -n "$digest"
+          printf 'ref=%s@%s\n' "$image" "$digest" >>"$GITHUB_OUTPUT"
+          printf 'digest=%s\n' "$digest" >>"$GITHUB_OUTPUT"
+      - name: Build and push web image
+        id: web
+        shell: bash
+        run: |
+          repository=${GITHUB_REPOSITORY,,}
+          image="ghcr.io/${repository}/web"
+          docker buildx build --file apps/web/Dockerfile --platform linux/amd64 --tag "$image:$GITHUB_SHA" --push .
+          digest=$(docker buildx imagetools inspect "$image:$GITHUB_SHA" --format '{{json .Manifest.Digest}}' | tr -d '"')
+          test -n "$digest"
+          printf 'ref=%s@%s\n' "$image" "$digest" >>"$GITHUB_OUTPUT"
+          printf 'digest=%s\n' "$digest" >>"$GITHUB_OUTPUT"
+      - name: Build and push restore drill tools image
+        id: restore-tools
+        shell: bash
+        env:
+          API_REF: ${{ steps.api.outputs.ref }}
+        run: |
+          repository=${GITHUB_REPOSITORY,,}
+          image="ghcr.io/${repository}/restore-tools"
+          docker buildx build --file deploy/restore-tools.Dockerfile --build-arg "API_IMAGE=$API_REF" --platform linux/amd64 --tag "$image:$GITHUB_SHA" --push .
+          digest=$(docker buildx imagetools inspect "$image:$GITHUB_SHA" --format '{{json .Manifest.Digest}}' | tr -d '"')
+          test -n "$digest"
+          printf 'ref=%s@%s\n' "$image" "$digest" >>"$GITHUB_OUTPUT"
+      - name: Export immutable references
+        id: refs
+        env:
+          API_REF: ${{ steps.api.outputs.ref }}
+          WEB_REF: ${{ steps.web.outputs.ref }}
+        run: |
+          printf 'api_ref=%s\n' "$API_REF" >>"$GITHUB_OUTPUT"
+          printf 'web_ref=%s\n' "$WEB_REF" >>"$GITHUB_OUTPUT"
+
+  deploy:
+    name: Backup, migrate, deploy, and verify
+    needs: build
+    runs-on: ubuntu-24.04
+    environment:
+      name: staging
+      url: ${{ secrets.STAGING_WEB_URL }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Set up Node.js for evidence gates
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24.18.0
+      - name: Configure pinned SSH host identity
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/staging-evidence"
+          install -m 700 -d "$RUNNER_TEMP/jandibat-ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" >"$RUNNER_TEMP/jandibat-ssh/id_ed25519"
+          chmod 600 "$RUNNER_TEMP/jandibat-ssh/id_ed25519"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" >"$RUNNER_TEMP/jandibat-ssh/known_hosts"
+      - name: Upload release control files
+        env:
+          DEPLOY_DIR: ${{ secrets.STAGING_DEPLOY_DIR }}
+          SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+          SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+        run: |
+          ssh_options="-i $RUNNER_TEMP/jandibat-ssh/id_ed25519 -o UserKnownHostsFile=$RUNNER_TEMP/jandibat-ssh/known_hosts -o IdentitiesOnly=yes"
+          tar -czf "$RUNNER_TEMP/jandibat-release.tgz" deploy/staging db/migrations scripts/deploy-staging.sh scripts/rehearse-staging-rollback.sh scripts/rehearse-staging-faults.sh scripts/db-migrate-url.sh scripts/db-verify-schema-locks.sh scripts/db-configure-runtime-roles.sh scripts/db-backup.sh scripts/db-configure-backup-schedule.sh scripts/db-verify-backup-roles.sh scripts/db-restore-verify.sh scripts/verify-audit-log.sh
+          ssh $ssh_options "$SSH_USER@$SSH_HOST" "mkdir -p '$DEPLOY_DIR'"
+          scp $ssh_options "$RUNNER_TEMP/jandibat-release.tgz" "$SSH_USER@$SSH_HOST:$DEPLOY_DIR/jandibat-release.tgz"
+          ssh $ssh_options "$SSH_USER@$SSH_HOST" "tar -xzf '$DEPLOY_DIR/jandibat-release.tgz' -C '$DEPLOY_DIR'"
+      - name: Authenticate the staging host to GHCR
+        env:
+          GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+          SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+        run: |
+          ssh_options="-i $RUNNER_TEMP/jandibat-ssh/id_ed25519 -o UserKnownHostsFile=$RUNNER_TEMP/jandibat-ssh/known_hosts -o IdentitiesOnly=yes"
+          printf '%s' "$GHCR_PULL_TOKEN" | ssh $ssh_options "$SSH_USER@$SSH_HOST" "docker login ghcr.io --username '$GHCR_USERNAME' --password-stdin"
+      - name: Deploy with automatic application rollback
+        env:
+          API_IMAGE: ${{ needs.build.outputs.api_ref }}
+          BUILD_SHA: ${{ github.sha }}
+          DEPLOY_DIR: ${{ secrets.STAGING_DEPLOY_DIR }}
+          SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+          SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+          WEB_IMAGE: ${{ needs.build.outputs.web_ref }}
+          REGION: ${{ vars.STAGING_REGION }}
+          RESTORE_TOOLS_IMAGE: ${{ needs.build.outputs.restore_tools_ref }}
+        run: |
+          ssh_options="-i $RUNNER_TEMP/jandibat-ssh/id_ed25519 -o UserKnownHostsFile=$RUNNER_TEMP/jandibat-ssh/known_hosts -o IdentitiesOnly=yes"
+          ssh $ssh_options "$SSH_USER@$SSH_HOST" "cd '$DEPLOY_DIR' && API_IMAGE='$API_IMAGE' WEB_IMAGE='$WEB_IMAGE' RESTORE_TOOLS_IMAGE='$RESTORE_TOOLS_IMAGE' BUILD_SHA='$BUILD_SHA' REGION='$REGION' STAGING_ENV_FILE='$DEPLOY_DIR/deploy/staging/.env.staging' sh scripts/deploy-staging.sh"
+      - name: Capture deployment and migration evidence
+        env:
+          API_IMAGE: ${{ needs.build.outputs.api_ref }}
+          BUILD_SHA: ${{ github.sha }}
+          DEPLOY_DIR: ${{ secrets.STAGING_DEPLOY_DIR }}
+          SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+          SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+          WEB_IMAGE: ${{ needs.build.outputs.web_ref }}
+          REGION: ${{ vars.STAGING_REGION }}
+          RESTORE_TOOLS_IMAGE: ${{ needs.build.outputs.restore_tools_ref }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/staging-evidence"
+          ssh_options="-i $RUNNER_TEMP/jandibat-ssh/id_ed25519 -o UserKnownHostsFile=$RUNNER_TEMP/jandibat-ssh/known_hosts -o IdentitiesOnly=yes"
+          ssh $ssh_options "$SSH_USER@$SSH_HOST" "cd '$DEPLOY_DIR' && docker compose --env-file deploy/staging/.env.staging --env-file deploy/staging/.current-images -f deploy/staging/compose.yaml --profile tools run --rm migrate" >"$RUNNER_TEMP/staging-evidence/migration-idempotency.log"
+          ssh $ssh_options "$SSH_USER@$SSH_HOST" "cd '$DEPLOY_DIR' && docker compose --env-file deploy/staging/.env.staging --env-file deploy/staging/.current-images -f deploy/staging/compose.yaml --profile tools run --rm schema-lock-verify" >"$RUNNER_TEMP/staging-evidence/schema-locks.log"
+          printf '{"commitSha":"%s","apiImage":"%s","webImage":"%s","deployedAt":"%s","result":"passed"}\n' "$GITHUB_SHA" "$API_IMAGE" "$WEB_IMAGE" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$RUNNER_TEMP/staging-evidence/deploy.json"
+      - name: Run security HTTP smoke
+        env:
+          SECURITY_ALLOWED_ORIGIN: ${{ secrets.STAGING_WEB_URL }}
+          SECURITY_BASE_URL: ${{ secrets.STAGING_API_URL }}
+          SECURITY_ENABLE_SLOW_BODY: "true"
+          SECURITY_ISOLATED_FIXTURE: "true"
+          SECURITY_LOG_CANARY_VERIFY_BEARER: ${{ secrets.STAGING_LOG_VERIFY_BEARER }}
+          SECURITY_LOG_CANARY_VERIFY_URL: ${{ secrets.STAGING_LOG_VERIFY_URL }}
+          SECURITY_MAGIC_LINK_TOKEN: ${{ secrets.STAGING_MAGIC_LINK_TOKEN }}
+          SECURITY_NONOWNER_SESSION_COOKIE: ${{ secrets.STAGING_NONOWNER_SESSION_COOKIE }}
+          SECURITY_OUTPUT_FILE: ${{ runner.temp }}/staging-evidence/security-smoke.json
+          SECURITY_OWNER_SESSION_COOKIE: ${{ secrets.STAGING_OWNER_SESSION_COOKIE }}
+          SECURITY_PRIVATE_SUBJECT: ${{ secrets.STAGING_PRIVATE_SUBJECT }}
+          SECURITY_REQUIRE_EXTENDED: "true"
+          SECURITY_SUBJECT: ${{ secrets.STAGING_PUBLIC_SUBJECT }}
+        run: node scripts/security-smoke.mjs
+      - name: Reconcile durable audit intent/outcome and deletion completion
+        env:
+          DEPLOY_DIR: ${{ secrets.STAGING_DEPLOY_DIR }}
+          SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+          SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+        run: |
+          ssh_options="-i $RUNNER_TEMP/jandibat-ssh/id_ed25519 -o UserKnownHostsFile=$RUNNER_TEMP/jandibat-ssh/known_hosts -o IdentitiesOnly=yes"
+          ssh $ssh_options "$SSH_USER@$SSH_HOST" "cd '$DEPLOY_DIR' && docker compose --env-file deploy/staging/.env.staging --env-file deploy/staging/.current-images -f deploy/staging/compose.yaml --profile tools run --rm audit-verify" >"$RUNNER_TEMP/staging-evidence/audit-reconciliation.json"
+      - name: Run staging load gate
+        if: inputs.run_load_check
+        env:
+          LOAD_BASE_URL: ${{ secrets.STAGING_API_URL }}
+          LOAD_SUBJECT: ${{ secrets.STAGING_PUBLIC_SUBJECT }}
+          LOAD_DURATION_SECONDS: 1800
+          LOAD_CONCURRENCY: 20
+          LOAD_HEALTH_P95_MS: 100
+          LOAD_ACTIVITY_P95_MS: 300
+          LOAD_RENDER_P95_MS: 500
+          LOAD_MAX_ERROR_RATE: 0.001
+          LOAD_OUTPUT_FILE: ${{ runner.temp }}/staging-evidence/load.json
+          LOAD_INGEST_PROVIDER_ID: ${{ secrets.STAGING_CUSTOM_PROVIDER_ID }}
+          LOAD_INGEST_PROVIDER_KEY: ${{ secrets.STAGING_CUSTOM_PROVIDER_KEY }}
+          LOAD_REQUIRE_INGEST: "true"
+        run: node scripts/load-check.mjs
+      - name: Record skipped load gate explicitly
+        if: ${{ ! inputs.run_load_check }}
+        run: printf '{"result":"not-run","reason":"workflow input run_load_check=false"}\n' >"$RUNNER_TEMP/staging-evidence/load.json"
+      - name: Verify the latest backup with an isolated restore
+        env:
+          DEPLOY_DIR: ${{ secrets.STAGING_DEPLOY_DIR }}
+          SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+          SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+        run: |
+          ssh_options="-i $RUNNER_TEMP/jandibat-ssh/id_ed25519 -o UserKnownHostsFile=$RUNNER_TEMP/jandibat-ssh/known_hosts -o IdentitiesOnly=yes"
+          ssh $ssh_options "$SSH_USER@$SSH_HOST" "cd '$DEPLOY_DIR' && docker compose --env-file deploy/staging/.env.staging --env-file deploy/staging/.current-images -f deploy/staging/compose.yaml --profile tools run --rm restore-verify" >"$RUNNER_TEMP/staging-evidence/restore-verify.json"
+      - name: Rehearse previous-release rollback and candidate re-promotion
+        if: inputs.run_rollback_rehearsal
+        env:
+          API_IMAGE: ${{ needs.build.outputs.api_ref }}
+          BUILD_SHA: ${{ github.sha }}
+          DEPLOY_DIR: ${{ secrets.STAGING_DEPLOY_DIR }}
+          SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+          SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+          WEB_IMAGE: ${{ needs.build.outputs.web_ref }}
+          REGION: ${{ vars.STAGING_REGION }}
+          RESTORE_TOOLS_IMAGE: ${{ needs.build.outputs.restore_tools_ref }}
+        run: |
+          ssh_options="-i $RUNNER_TEMP/jandibat-ssh/id_ed25519 -o UserKnownHostsFile=$RUNNER_TEMP/jandibat-ssh/known_hosts -o IdentitiesOnly=yes"
+          ssh $ssh_options "$SSH_USER@$SSH_HOST" "cd '$DEPLOY_DIR' && API_IMAGE='$API_IMAGE' WEB_IMAGE='$WEB_IMAGE' RESTORE_TOOLS_IMAGE='$RESTORE_TOOLS_IMAGE' BUILD_SHA='$BUILD_SHA' REGION='$REGION' STAGING_ENV_FILE='$DEPLOY_DIR/deploy/staging/.env.staging' sh scripts/rehearse-staging-rollback.sh" >"$RUNNER_TEMP/staging-evidence/rollback-rehearsal.log"
+      - name: Record skipped rollback rehearsal explicitly
+        if: ${{ ! inputs.run_rollback_rehearsal }}
+        run: printf '{"result":"not-run","reason":"workflow input run_rollback_rehearsal=false"}\n' >"$RUNNER_TEMP/staging-evidence/rollback-rehearsal.log"
+      - name: Rehearse API and worker termination recovery
+        if: inputs.run_fault_rehearsal
+        env:
+          DEPLOY_DIR: ${{ secrets.STAGING_DEPLOY_DIR }}
+          SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+          SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+        run: |
+          ssh_options="-i $RUNNER_TEMP/jandibat-ssh/id_ed25519 -o UserKnownHostsFile=$RUNNER_TEMP/jandibat-ssh/known_hosts -o IdentitiesOnly=yes"
+          ssh $ssh_options "$SSH_USER@$SSH_HOST" "cd '$DEPLOY_DIR' && ALLOW_STAGING_FAULTS=true APP_ENVIRONMENT=staging STAGING_ENV_FILE='$DEPLOY_DIR/deploy/staging/.env.staging' sh scripts/rehearse-staging-faults.sh" >"$RUNNER_TEMP/staging-evidence/fault-rehearsal.log"
+      - name: Record skipped fault rehearsal explicitly
+        if: ${{ ! inputs.run_fault_rehearsal }}
+        run: printf '{"result":"not-run","reason":"workflow input run_fault_rehearsal=false"}\n' >"$RUNNER_TEMP/staging-evidence/fault-rehearsal.log"
+      - name: Upload staging evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: staging-evidence-${{ github.sha }}
+          path: ${{ runner.temp }}/staging-evidence
+          if-no-files-found: error
+          retention-days: 400
+      - name: Remove runner SSH material
+        if: always()
+        run: rm -f "$RUNNER_TEMP/jandibat-ssh/id_ed25519" "$RUNNER_TEMP/jandibat-ssh/known_hosts"

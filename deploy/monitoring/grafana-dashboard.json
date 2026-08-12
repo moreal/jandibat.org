@@ -1,0 +1,101 @@
+{
+  "annotations": { "list": [] },
+  "editable": false,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "id": 1,
+      "title": "Eligible request error ratio by route (5m)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (route) (rate(http_server_requests_total{environment=\"$environment\",region=~\"$region\",status_class=\"5xx\"}[5m])) / clamp_min(sum by (route) (rate(http_server_requests_total{environment=\"$environment\",region=~\"$region\",status_class=~\"2xx|3xx|5xx\"}[5m])), 1e-12)",
+          "legendFormat": "{{route}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 0.001 }] } }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 }
+    },
+    {
+      "id": 2,
+      "title": "HTTP p95 / p99 by route",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "histogram_quantile(0.95, sum by (le, route) (rate(http_server_request_duration_seconds_bucket{environment=\"$environment\",region=~\"$region\"}[5m])))", "legendFormat": "p95 {{route}}" },
+        { "expr": "histogram_quantile(0.99, sum by (le, route) (rate(http_server_request_duration_seconds_bucket{environment=\"$environment\",region=~\"$region\"}[5m])))", "legendFormat": "p99 {{route}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 }
+    },
+    {
+      "id": 3,
+      "title": "Oldest ready sync job",
+      "type": "stat",
+      "targets": [{ "expr": "max(sync_queue_oldest_ready_seconds{environment=\"$environment\",region=~\"$region\"})" }],
+      "fieldConfig": { "defaults": { "unit": "s", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1800 }] } }, "overrides": [] },
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 8 }
+    },
+    {
+      "id": 4,
+      "title": "Provider revocation dead jobs",
+      "type": "stat",
+      "targets": [{ "expr": "max(provider_token_revocation_dead_jobs{environment=\"$environment\",region=~\"$region\"})" }],
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] } }, "overrides": [] },
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 8 }
+    },
+    {
+      "id": 5,
+      "title": "Activity freshness by provider/visibility",
+      "type": "timeseries",
+      "targets": [{ "expr": "max by (provider, visibility) (activity_freshness_seconds{environment=\"$environment\",region=~\"$region\"})", "legendFormat": "{{provider}} {{visibility}}" }],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 8 }
+    },
+    {
+      "id": 6,
+      "title": "Database pool in use / wait p99",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "db_pool_in_use{environment=\"$environment\",region=~\"$region\"}", "legendFormat": "connections {{region}}" },
+        { "expr": "histogram_quantile(0.99, sum by (le, environment, region) (rate(db_pool_wait_duration_seconds_bucket{environment=\"$environment\",region=~\"$region\"}[5m])))", "legendFormat": "wait p99 {{region}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 14 }
+    },
+    {
+      "id": 7,
+      "title": "Audit and custom-ingest outcomes",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "sum by (action, outcome) (rate(audit_events_total{environment=\"$environment\",region=~\"$region\"}[5m]))", "legendFormat": "audit {{action}} {{outcome}}" },
+        { "expr": "sum by (outcome) (rate(custom_ingest_events_total{environment=\"$environment\",region=~\"$region\"}[5m]))", "legendFormat": "ingest {{outcome}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 14 }
+    },
+    {
+      "id": 8,
+      "title": "Credential decrypts by key and outcome",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "sum by (key_id, outcome) (rate(credential_decrypt_operations_total{environment=\"$environment\",region=~\"$region\"}[5m]))", "legendFormat": "{{key_id}} {{outcome}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 21 }
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 41,
+  "tags": ["jandibat", "slo"],
+  "templating": {
+    "list": [
+      { "name": "environment", "type": "query", "query": "label_values(http_server_requests_total, environment)", "current": { "text": "staging", "value": "staging" } },
+      { "name": "region", "type": "query", "query": "label_values(http_server_requests_total{environment=\"$environment\"}, region)", "includeAll": true, "allValue": ".*" }
+    ]
+  },
+  "time": { "from": "now-6h", "to": "now" },
+  "timezone": "utc",
+  "title": "jandibat SLO and operations",
+  "uid": "jandibat-slo",
+  "version": 1
+}

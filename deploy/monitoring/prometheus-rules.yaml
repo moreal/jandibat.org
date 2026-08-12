@@ -1,0 +1,97 @@
+groups:
+  - name: jandibat-slo-burn
+    rules:
+      - record: jandibat:http_server_error_ratio:rate5m
+        expr: sum by (environment, region, route) (rate(http_server_requests_total{status_class="5xx"}[5m])) / clamp_min(sum by (environment, region, route) (rate(http_server_requests_total{status_class=~"2xx|3xx|5xx"}[5m])), 1e-12)
+      - record: jandibat:http_server_error_ratio:rate30m
+        expr: sum by (environment, region, route) (rate(http_server_requests_total{status_class="5xx"}[30m])) / clamp_min(sum by (environment, region, route) (rate(http_server_requests_total{status_class=~"2xx|3xx|5xx"}[30m])), 1e-12)
+      - record: jandibat:http_server_error_ratio:rate1h
+        expr: sum by (environment, region, route) (rate(http_server_requests_total{status_class="5xx"}[1h])) / clamp_min(sum by (environment, region, route) (rate(http_server_requests_total{status_class=~"2xx|3xx|5xx"}[1h])), 1e-12)
+      - record: jandibat:http_server_error_ratio:rate6h
+        expr: sum by (environment, region, route) (rate(http_server_requests_total{status_class="5xx"}[6h])) / clamp_min(sum by (environment, region, route) (rate(http_server_requests_total{status_class=~"2xx|3xx|5xx"}[6h])), 1e-12)
+      - record: jandibat:http_server_error_ratio:rate3d
+        expr: sum by (environment, region, route) (rate(http_server_requests_total{status_class="5xx"}[3d])) / clamp_min(sum by (environment, region, route) (rate(http_server_requests_total{status_class=~"2xx|3xx|5xx"}[3d])), 1e-12)
+      - alert: JandibatSLOFastBurn
+        expr: jandibat:http_server_error_ratio:rate1h > (14.4 * 0.001) and jandibat:http_server_error_ratio:rate5m > (14.4 * 0.001)
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: Jandibat request SLO is burning at 14.4x
+          runbook: docs/SLO.ko.md#5-error-budget과-경보
+      - alert: JandibatSLOMediumBurn
+        expr: jandibat:http_server_error_ratio:rate6h > (6 * 0.001) and jandibat:http_server_error_ratio:rate30m > (6 * 0.001)
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: Jandibat request SLO is burning at 6x
+          runbook: docs/SLO.ko.md#5-error-budget과-경보
+      - alert: JandibatSLOLongBurn
+        expr: jandibat:http_server_error_ratio:rate3d > 0.001
+        for: 1h
+        labels:
+          severity: ticket
+        annotations:
+          summary: Jandibat three-day error budget burn is above 1x
+          runbook: docs/SLO.ko.md#5-error-budget과-경보
+      - alert: JandibatSyncQueueTooOld
+        expr: sync_queue_oldest_ready_seconds > 1800
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: Oldest ready sync job is over 30 minutes old
+          runbook: docs/SLO.ko.md#5-error-budget과-경보
+      - alert: JandibatProviderRevocationDeadLetter
+        expr: provider_token_revocation_dead_jobs > 0
+        labels:
+          severity: page
+        annotations:
+          summary: OAuth provider token revocation has dead-letter jobs
+          runbook: docs/runbooks/KEY_ROTATION.ko.md#7-provider-oauth-token-rotationrevoke
+      - alert: JandibatAuditPersistenceFailure
+        expr: increase(audit_events_total{outcome="failed"}[5m]) > 0
+        labels:
+          severity: page
+        annotations:
+          summary: A required audit event failed to persist
+          runbook: docs/runbooks/AUDIT_LOGGING.ko.md
+      - alert: JandibatFreshnessThirtyMinuteSLO
+        expr: (sum by (environment, region, provider, visibility) (activity_freshness_subjects{threshold="le_30m"}) / clamp_min(sum by (environment, region, provider, visibility) (activity_freshness_subjects{threshold="total"}), 1)) < 0.95 and sum by (environment, region, provider, visibility) (activity_freshness_subjects{threshold="total"}) > 0
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: Fewer than 95% of subjects are fresh within 30 minutes
+          runbook: docs/SLO.ko.md#3-비동기-처리와-데이터-slo
+      - alert: JandibatFreshnessTwoHourSLO
+        expr: (sum by (environment, region, provider, visibility) (activity_freshness_subjects{threshold="le_2h"}) / clamp_min(sum by (environment, region, provider, visibility) (activity_freshness_subjects{threshold="total"}), 1)) < 0.99 and sum by (environment, region, provider, visibility) (activity_freshness_subjects{threshold="total"}) > 0
+        for: 15m
+        labels:
+          severity: page
+        annotations:
+          summary: Fewer than 99% of subjects are fresh within two hours
+          runbook: docs/SLO.ko.md#3-비동기-처리와-데이터-slo
+      - alert: JandibatDeletionRequestTooOld
+        expr: deletion_request_age_seconds > 604800
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: A primary-data deletion request is older than seven days
+          runbook: docs/DATA_RETENTION_AND_DELETION.ko.md
+      - alert: JandibatCockroachRetryRequired
+        expr: increase(cockroach_transaction_errors_total{outcome="retry_required"}[5m]) > 0
+        labels:
+          severity: ticket
+        annotations:
+          summary: Cockroach returned a final transaction retry-required error
+          runbook: docs/SLO.ko.md#6-배포-전-부하-시험
+      - alert: JandibatCredentialDecryptFailure
+        expr: increase(credential_decrypt_operations_total{outcome="failed"}[5m]) > 0
+        labels:
+          severity: page
+        annotations:
+          summary: A configured or unknown credential envelope failed to decrypt
+          runbook: docs/runbooks/KEY_ROTATION.ko.md#4-credential-encryption-key-무중단-회전

@@ -1,0 +1,222 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '37 2 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: 24.18.0
+  YARN_VERSION: 4.6.0
+  GO_VERSION: 1.26.5
+  GO_SECURITY_VERSION: 1.26.5
+
+jobs:
+  contract:
+    name: OpenAPI contract
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Activate pinned Yarn
+        run: corepack prepare yarn@${YARN_VERSION} --activate
+      - name: Install dependencies
+        run: yarn install --immutable
+      - name: Lint OpenAPI and detect generated type drift
+        run: yarn openapi:check
+      - name: Require contract artifacts to move together
+        env:
+          CONTRACT_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: make contract-change-check
+
+  backend:
+    name: Go tests
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: apps/api/go.sum
+      - name: Run tests, race detector, and static analysis
+        run: make test-api test-api-race vet-api
+
+  migrations:
+    name: CockroachDB migrations
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: apps/api/go.sum
+      - name: Start CockroachDB
+        run: make db-up
+      - name: Apply migrations twice and verify checksums
+        run: |
+          make db-migrate
+          make db-migrate
+      - name: Prove failed DDL and migration ledger roll back together
+        run: make migration-atomicity-test
+      - name: Configure and verify least-privilege runtime roles
+        run: make db-runtime-roles-test
+      - name: Exercise every Cockroach opt-in integration package
+        env:
+          JANDIBAT_TEST_DATABASE_URL: postgresql://root@127.0.0.1:26257/jandibat?sslmode=disable
+          JANDIBAT_TEST_API_DATABASE_URL: postgresql://jandibat_api@127.0.0.1:26257/jandibat?sslmode=disable
+          JANDIBAT_TEST_WORKER_DATABASE_URL: postgresql://jandibat_worker@127.0.0.1:26257/jandibat?sslmode=disable
+          JANDIBAT_TEST_MAINTENANCE_DATABASE_URL: postgresql://jandibat_maintenance@127.0.0.1:26257/jandibat?sslmode=disable
+        run: make test-api-integration
+      - name: Validate staging Compose configuration
+        run: make staging-compose-check monitoring-check
+      - name: Stop CockroachDB
+        if: always()
+        run: make db-down
+
+  security:
+    name: Dependency and static security
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Scan commit history with Gitleaks
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITLEAKS_ENABLE_COMMENTS: "false"
+      - name: Scan repository for secret patterns
+        run: make secret-scan
+      - name: Set up security scanner Go toolchain
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: ${{ env.GO_SECURITY_VERSION }}
+          cache-dependency-path: apps/api/go.sum
+      - name: Scan reachable Go vulnerabilities
+        working-directory: apps/api
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+      - name: Run Go static security analysis
+        working-directory: apps/api
+        run: go run github.com/securego/gosec/v2/cmd/gosec@v2.28.0 -severity high -confidence medium -nosec-require-rules -nosec-require-justification ./...
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Activate pinned Yarn
+        run: corepack prepare yarn@${YARN_VERSION} --activate
+      - name: Install dependencies
+        run: yarn install --immutable
+      - name: Audit all JavaScript workspaces
+        run: yarn npm audit --all --recursive --severity high
+      - name: Test security and recovery evidence validators
+        run: make security-review-validator-test audit-verifier-test restore-verifier-test
+      - name: Require human review evidence for security-sensitive PRs
+        if: github.event_name == 'pull_request'
+        env:
+          SECURITY_REVIEW_BASE: ${{ github.event.pull_request.base.sha }}
+        run: make security-review-gate
+
+  frontend:
+    name: Frontend typecheck and build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Activate pinned Yarn
+        run: corepack prepare yarn@${YARN_VERSION} --activate
+      - name: Install dependencies
+        run: yarn install --immutable
+      - name: Typecheck
+        run: make typecheck
+      - name: Test
+        run: make test-web test-sdk
+      - name: Build
+        run: make build-web
+
+  images:
+    name: Production container builds
+    needs: [backend, frontend]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Build API image
+        run: docker build --file apps/api/Dockerfile --tag jandibat-api:ci apps/api
+      - name: Build web image
+        run: docker build --file apps/web/Dockerfile --tag jandibat-web:ci .
+      - name: Assert non-root image users
+        run: |
+          test "$(docker image inspect jandibat-api:ci --format '{{.Config.User}}')" = "nonroot:nonroot"
+          test "$(docker image inspect jandibat-web:ci --format '{{.Config.User}}')" = "101:101"
+      - name: Generate API SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: jandibat-api:ci
+          artifact-name: jandibat-api-ci.spdx.json
+          output-file: jandibat-api-ci.spdx.json
+          format: spdx-json
+      - name: Generate Web SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: jandibat-web:ci
+          artifact-name: jandibat-web-ci.spdx.json
+          output-file: jandibat-web-ci.spdx.json
+          format: spdx-json
+      - name: Scan API image for high and critical vulnerabilities
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+        with:
+          image: jandibat-api:ci
+          severity-cutoff: high
+          output-format: json
+          output-file: jandibat-api-grype.json
+      - name: Scan Web image for high and critical vulnerabilities
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+        with:
+          image: jandibat-web:ci
+          severity-cutoff: high
+          output-format: json
+          output-file: jandibat-web-grype.json
+      - name: Upload image scan evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: image-security-${{ github.sha }}
+          path: |
+            jandibat-api-grype.json
+            jandibat-web-grype.json
+          if-no-files-found: error
+          retention-days: 90

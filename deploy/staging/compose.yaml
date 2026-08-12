@@ -1,0 +1,262 @@
+name: jandibat-staging
+
+services:
+  migrate:
+    profiles: [tools]
+    image: cockroachdb/cockroach:v26.2.5@sha256:771325a0586bf61d53322d24f5a6de8962568b0fc181fa45db364278e5961282
+    working_dir: /workspace
+    entrypoint: ["/bin/sh", "/workspace/scripts/db-migrate-url.sh"]
+    environment:
+      COCKROACH_DATABASE: jandibat
+      DATABASE_URL: ${MIGRATION_DATABASE_URL:?MIGRATION_DATABASE_URL is required}
+      MIGRATIONS_DIR: /workspace/db/migrations
+    volumes:
+      - ../../db:/workspace/db:ro
+      - ../../scripts:/workspace/scripts:ro
+
+  schema-lock-verify:
+    profiles: [tools]
+    image: cockroachdb/cockroach:v26.2.5@sha256:771325a0586bf61d53322d24f5a6de8962568b0fc181fa45db364278e5961282
+    working_dir: /workspace
+    entrypoint: ["/bin/sh", "/workspace/scripts/db-verify-schema-locks.sh"]
+    environment:
+      COCKROACH_DATABASE: jandibat
+      DATABASE_URL: ${MIGRATION_DATABASE_URL:?MIGRATION_DATABASE_URL is required}
+      MIGRATIONS_DIR: /workspace/db/migrations
+    volumes:
+      - ../../db:/workspace/db:ro
+      - ../../scripts:/workspace/scripts:ro
+
+  grant-runtime-roles:
+    profiles: [tools]
+    image: cockroachdb/cockroach:v26.2.5@sha256:771325a0586bf61d53322d24f5a6de8962568b0fc181fa45db364278e5961282
+    working_dir: /workspace
+    entrypoint: ["/bin/sh", "/workspace/scripts/db-configure-runtime-roles.sh"]
+    environment:
+      COCKROACH_DATABASE: jandibat
+      MIGRATION_DATABASE_URL: ${MIGRATION_DATABASE_URL:?MIGRATION_DATABASE_URL is required}
+    volumes:
+      - ../../scripts:/workspace/scripts:ro
+
+  backup:
+    profiles: [tools]
+    image: cockroachdb/cockroach:v26.2.5@sha256:771325a0586bf61d53322d24f5a6de8962568b0fc181fa45db364278e5961282
+    working_dir: /workspace
+    entrypoint: ["/bin/sh", "/workspace/scripts/db-backup.sh"]
+    environment:
+      BACKUP_EXTERNAL_CONNECTION: ${BACKUP_EXTERNAL_CONNECTION:?BACKUP_EXTERNAL_CONNECTION is required}
+      COCKROACH_DATABASE: jandibat
+      DATABASE_URL: ${BACKUP_DATABASE_URL:?BACKUP_DATABASE_URL is required}
+    volumes:
+      - ../../scripts:/workspace/scripts:ro
+
+  backup-schedule:
+    profiles: [tools]
+    image: cockroachdb/cockroach:v26.2.5@sha256:771325a0586bf61d53322d24f5a6de8962568b0fc181fa45db364278e5961282
+    working_dir: /workspace
+    entrypoint: ["/bin/sh", "/workspace/scripts/db-configure-backup-schedule.sh"]
+    environment:
+      BACKUP_DATABASE_URL: ${BACKUP_DATABASE_URL:?BACKUP_DATABASE_URL is required}
+      BACKUP_EXTERNAL_CONNECTION: ${BACKUP_EXTERNAL_CONNECTION:?BACKUP_EXTERNAL_CONNECTION is required}
+      BACKUP_SCHEDULE_LABEL: ${BACKUP_SCHEDULE_LABEL:-jandibat_hourly_backup}
+      COCKROACH_DATABASE: jandibat
+    volumes:
+      - ../../scripts:/workspace/scripts:ro
+
+  backup-role-verify:
+    profiles: [tools]
+    image: cockroachdb/cockroach:v26.2.5@sha256:771325a0586bf61d53322d24f5a6de8962568b0fc181fa45db364278e5961282
+    working_dir: /workspace
+    entrypoint: ["/bin/sh", "/workspace/scripts/db-verify-backup-roles.sh"]
+    environment:
+      BACKUP_EXTERNAL_CONNECTION: ${BACKUP_EXTERNAL_CONNECTION:?BACKUP_EXTERNAL_CONNECTION is required}
+      COCKROACH_DATABASE: jandibat
+      MIGRATION_DATABASE_URL: ${MIGRATION_DATABASE_URL:?MIGRATION_DATABASE_URL is required}
+    volumes:
+      - ../../scripts:/workspace/scripts:ro
+
+  restore-verify:
+    profiles: [tools]
+    image: ${RESTORE_TOOLS_IMAGE:?RESTORE_TOOLS_IMAGE is required}
+    working_dir: /workspace
+    entrypoint: ["/bin/sh", "/workspace/scripts/db-restore-verify.sh"]
+    environment:
+      BACKUP_EXTERNAL_CONNECTION: ${BACKUP_EXTERNAL_CONNECTION:?BACKUP_EXTERNAL_CONNECTION is required}
+      COCKROACH_DATABASE: jandibat
+      RESTORE_DATABASE_URL: ${RESTORE_DATABASE_URL:?RESTORE_DATABASE_URL is required}
+      SOURCE_DATABASE_URL: ${MIGRATION_DATABASE_URL:?MIGRATION_DATABASE_URL is required}
+      RESTORE_KEEP_DATABASE: "false"
+      RESTORE_REQUIRE_FULL_DRILL: "true"
+      RESTORE_DRILL_STARTED_AT: ${RESTORE_DRILL_STARTED_AT:-}
+      RESTORE_MAINTENANCE_DATABASE_URL_TEMPLATE: ${RESTORE_MAINTENANCE_DATABASE_URL_TEMPLATE:-}
+      RESTORE_API_DATABASE_URL_TEMPLATE: ${RESTORE_API_DATABASE_URL_TEMPLATE:-}
+      RESTORE_MAINTENANCE_BIN: /jandibat-maintenance
+      RESTORE_API_BIN: /jandibat-api
+      RESTORE_HTTP_BIN: /busybox
+      RESTORE_FIXTURE_SUBJECT: ${RESTORE_FIXTURE_SUBJECT:-}
+      RESTORE_MAX_RPO_SECONDS: ${RESTORE_MAX_RPO_SECONDS:-3600}
+      RESTORE_MAX_RTO_SECONDS: ${RESTORE_MAX_RTO_SECONDS:-14400}
+      APP_ENV: production
+      BUILD_SHA: ${BUILD_SHA:?BUILD_SHA is required}
+      REGION: ${REGION:?REGION is required}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?PUBLIC_BASE_URL is required}
+      WEB_BASE_URL: ${WEB_BASE_URL:?WEB_BASE_URL is required}
+      SESSION_SIGNING_KEY: ${SESSION_SIGNING_KEY:?SESSION_SIGNING_KEY is required}
+      DELETED_IDENTITY_HMAC_ACTIVE_KEY_ID: ${DELETED_IDENTITY_HMAC_ACTIVE_KEY_ID:?DELETED_IDENTITY_HMAC_ACTIVE_KEY_ID is required}
+      DELETED_IDENTITY_HMAC_KEYS: ${DELETED_IDENTITY_HMAC_KEYS:?DELETED_IDENTITY_HMAC_KEYS is required}
+      CREDENTIAL_ACTIVE_KEY_ID: ${CREDENTIAL_ACTIVE_KEY_ID:?CREDENTIAL_ACTIVE_KEY_ID is required}
+      CREDENTIAL_ENCRYPTION_PUBLIC_KEYS: ${CREDENTIAL_ENCRYPTION_PUBLIC_KEYS:?CREDENTIAL_ENCRYPTION_PUBLIC_KEYS is required}
+      CREDENTIAL_ENCRYPTION_PRIVATE_KEYS: ${CREDENTIAL_ENCRYPTION_PRIVATE_KEYS:?CREDENTIAL_ENCRYPTION_PRIVATE_KEYS is required}
+      DELETION_PSEUDONYM_KEY: ${DELETION_PSEUDONYM_KEY:?DELETION_PSEUDONYM_KEY is required}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:?GITHUB_CLIENT_ID is required}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:?GITHUB_CLIENT_SECRET is required}
+      GITLAB_CLIENT_ID: ${GITLAB_CLIENT_ID:?GITLAB_CLIENT_ID is required}
+      GITLAB_CLIENT_SECRET: ${GITLAB_CLIENT_SECRET:?GITLAB_CLIENT_SECRET is required}
+      CODEBERG_CLIENT_ID: ${CODEBERG_CLIENT_ID:?CODEBERG_CLIENT_ID is required}
+      CODEBERG_CLIENT_SECRET: ${CODEBERG_CLIENT_SECRET:?CODEBERG_CLIENT_SECRET is required}
+      DEVELOPMENT_ALL_IN_ONE: "false"
+    volumes:
+      - ../../scripts:/workspace/scripts:ro
+
+  audit-verify:
+    profiles: [tools]
+    image: cockroachdb/cockroach:v26.2.5@sha256:771325a0586bf61d53322d24f5a6de8962568b0fc181fa45db364278e5961282
+    working_dir: /workspace
+    entrypoint: ["/bin/sh", "/workspace/scripts/verify-audit-log.sh"]
+    command: ["--window", "24h", "--orphan-age", "5m"]
+    environment:
+      AUDIT_DATABASE_URL: ${MAINTENANCE_DATABASE_URL:?MAINTENANCE_DATABASE_URL is required}
+    volumes:
+      - ../../scripts:/workspace/scripts:ro
+
+  api:
+    image: ${API_IMAGE:?API_IMAGE is required}
+    restart: unless-stopped
+    environment:
+      APP_ENV: production
+      BUILD_SHA: ${BUILD_SHA:?BUILD_SHA is required}
+      REGION: ${REGION:?REGION is required}
+      API_ADDR: :8080
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?PUBLIC_BASE_URL is required}
+      WEB_BASE_URL: ${WEB_BASE_URL:?WEB_BASE_URL is required}
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      SESSION_SIGNING_KEY: ${SESSION_SIGNING_KEY:?SESSION_SIGNING_KEY is required}
+      DELETED_IDENTITY_HMAC_ACTIVE_KEY_ID: ${DELETED_IDENTITY_HMAC_ACTIVE_KEY_ID:?DELETED_IDENTITY_HMAC_ACTIVE_KEY_ID is required}
+      DELETED_IDENTITY_HMAC_KEYS: ${DELETED_IDENTITY_HMAC_KEYS:?DELETED_IDENTITY_HMAC_KEYS is required}
+      CREDENTIAL_ACTIVE_KEY_ID: ${CREDENTIAL_ACTIVE_KEY_ID:?CREDENTIAL_ACTIVE_KEY_ID is required}
+      CREDENTIAL_ENCRYPTION_PUBLIC_KEYS: ${CREDENTIAL_ENCRYPTION_PUBLIC_KEYS:?CREDENTIAL_ENCRYPTION_PUBLIC_KEYS is required}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:?GITHUB_CLIENT_ID is required}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:?GITHUB_CLIENT_SECRET is required}
+      GITLAB_CLIENT_ID: ${GITLAB_CLIENT_ID:?GITLAB_CLIENT_ID is required}
+      GITLAB_CLIENT_SECRET: ${GITLAB_CLIENT_SECRET:?GITLAB_CLIENT_SECRET is required}
+      CODEBERG_CLIENT_ID: ${CODEBERG_CLIENT_ID:?CODEBERG_CLIENT_ID is required}
+      CODEBERG_CLIENT_SECRET: ${CODEBERG_CLIENT_SECRET:?CODEBERG_CLIENT_SECRET is required}
+      SHUTDOWN_TIMEOUT: ${SHUTDOWN_TIMEOUT:-40s}
+      TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-false}
+      DEVELOPMENT_ALL_IN_ONE: "false"
+    ports:
+      - 127.0.0.1:${API_PORT:-18081}:8080
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+
+  worker:
+    image: ${API_IMAGE:?API_IMAGE is required}
+    entrypoint: ["/jandibat-worker"]
+    restart: unless-stopped
+    environment:
+      APP_ENV: production
+      BUILD_SHA: ${BUILD_SHA:?BUILD_SHA is required}
+      REGION: ${REGION:?REGION is required}
+      WORKER_HEALTH_ADDR: :8081
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?PUBLIC_BASE_URL is required}
+      WORKER_DATABASE_URL: ${WORKER_DATABASE_URL:?WORKER_DATABASE_URL is required}
+      CREDENTIAL_ACTIVE_KEY_ID: ${CREDENTIAL_ACTIVE_KEY_ID:?CREDENTIAL_ACTIVE_KEY_ID is required}
+      CREDENTIAL_ENCRYPTION_PUBLIC_KEYS: ${CREDENTIAL_ENCRYPTION_PUBLIC_KEYS:?CREDENTIAL_ENCRYPTION_PUBLIC_KEYS is required}
+      CREDENTIAL_ENCRYPTION_PRIVATE_KEYS: ${CREDENTIAL_ENCRYPTION_PRIVATE_KEYS:?CREDENTIAL_ENCRYPTION_PRIVATE_KEYS is required}
+      SMTP_ADDR: ${SMTP_ADDR:?SMTP_ADDR is required}
+      SMTP_USERNAME: ${SMTP_USERNAME:?SMTP_USERNAME is required}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:?SMTP_PASSWORD is required}
+      SMTP_FROM: ${SMTP_FROM:?SMTP_FROM is required}
+      CREDENTIAL_ENCRYPTION_KEYS: ${CREDENTIAL_ENCRYPTION_KEYS:-{}}
+      CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:-}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:?GITHUB_CLIENT_ID is required}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:?GITHUB_CLIENT_SECRET is required}
+      GITLAB_CLIENT_ID: ${GITLAB_CLIENT_ID:?GITLAB_CLIENT_ID is required}
+      GITLAB_CLIENT_SECRET: ${GITLAB_CLIENT_SECRET:?GITLAB_CLIENT_SECRET is required}
+      SCHEDULER_INTERVAL: ${SCHEDULER_INTERVAL:-15m}
+      SHUTDOWN_TIMEOUT: ${SHUTDOWN_TIMEOUT:-40s}
+      DEVELOPMENT_ALL_IN_ONE: "false"
+    expose:
+      - "8081"
+    healthcheck:
+      test: ["CMD", "/busybox", "wget", "--spider", "-q", "-T", "3", "http://127.0.0.1:8081/healthz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+
+  maintenance:
+    image: ${API_IMAGE:?API_IMAGE is required}
+    entrypoint: ["/jandibat-maintenance"]
+    restart: unless-stopped
+    environment:
+      APP_ENV: production
+      BUILD_SHA: ${BUILD_SHA:?BUILD_SHA is required}
+      REGION: ${REGION:?REGION is required}
+      MAINTENANCE_HEALTH_ADDR: :8082
+      MAINTENANCE_DATABASE_URL: ${MAINTENANCE_DATABASE_URL:?MAINTENANCE_DATABASE_URL is required}
+      DELETION_PSEUDONYM_KEY: ${DELETION_PSEUDONYM_KEY:?DELETION_PSEUDONYM_KEY is required}
+      DELETED_IDENTITY_HMAC_ACTIVE_KEY_ID: ${DELETED_IDENTITY_HMAC_ACTIVE_KEY_ID:?DELETED_IDENTITY_HMAC_ACTIVE_KEY_ID is required}
+      DELETED_IDENTITY_HMAC_KEYS: ${DELETED_IDENTITY_HMAC_KEYS:?DELETED_IDENTITY_HMAC_KEYS is required}
+      CREDENTIAL_ACTIVE_KEY_ID: ${CREDENTIAL_ACTIVE_KEY_ID:?CREDENTIAL_ACTIVE_KEY_ID is required}
+      CREDENTIAL_ENCRYPTION_PUBLIC_KEYS: ${CREDENTIAL_ENCRYPTION_PUBLIC_KEYS:?CREDENTIAL_ENCRYPTION_PUBLIC_KEYS is required}
+      CREDENTIAL_ENCRYPTION_PRIVATE_KEYS: ${CREDENTIAL_ENCRYPTION_PRIVATE_KEYS:?CREDENTIAL_ENCRYPTION_PRIVATE_KEYS is required}
+      CREDENTIAL_ENCRYPTION_KEYS: ${CREDENTIAL_ENCRYPTION_KEYS:-{}}
+      CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:-}
+      SHUTDOWN_TIMEOUT: ${SHUTDOWN_TIMEOUT:-40s}
+      RETENTION_INTERVAL: ${RETENTION_INTERVAL:-24h}
+      REENCRYPTION_INTERVAL: ${REENCRYPTION_INTERVAL:-1h}
+      MAINTENANCE_TIMEOUT: ${MAINTENANCE_TIMEOUT:-15m}
+      MAINTENANCE_BATCH_SIZE: ${MAINTENANCE_BATCH_SIZE:-500}
+      RETENTION_MAX_BATCHES: ${RETENTION_MAX_BATCHES:-30}
+      DEVELOPMENT_ALL_IN_ONE: "false"
+    expose:
+      - "8082"
+    healthcheck:
+      test: ["CMD", "/busybox", "wget", "--spider", "-q", "-T", "3", "http://127.0.0.1:8082/healthz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+
+  web:
+    image: ${WEB_IMAGE:?WEB_IMAGE is required}
+    restart: unless-stopped
+    environment:
+      JANDIBAT_API_BASE_URL: ${JANDIBAT_API_BASE_URL:?JANDIBAT_API_BASE_URL is required}
+    ports:
+      - 127.0.0.1:${WEB_PORT:-18080}:8080
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+      - /var/cache/nginx:size=16m,mode=0755
+      - /var/run:size=1m,mode=0755
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]

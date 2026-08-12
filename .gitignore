@@ -1,0 +1,36 @@
+# macOS
+.DS_Store
+
+# Node / Yarn
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
+node_modules
+
+# Go
+bin/
+*.test
+*.out
+.gocache/
+
+# IDE
+.vscode/
+.idea/
+
+# Env
+.env
+.env.*
+!.env.example
+!*.env.staging.example
+!deploy/staging/.env.staging.example
+
+# Deployment runtime state
+deploy/**/.current-images*
+
+# Build outputs
+dist/
+build/
+coverage/

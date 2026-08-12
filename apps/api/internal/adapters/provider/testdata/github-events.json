@@ -1,0 +1,30 @@
+[
+  {
+    "id": "github-push-1",
+    "type": "PushEvent",
+    "created_at": "2026-03-02T16:00:00Z",
+    "repo": {"name": "octocat/grass"},
+    "payload": {"size": 3}
+  },
+  {
+    "id": "github-issue-1",
+    "type": "IssuesEvent",
+    "created_at": "2026-03-02T10:00:00Z",
+    "repo": {"name": "octocat/grass"},
+    "payload": {"action": "opened"}
+  },
+  {
+    "id": "github-pr-1",
+    "type": "PullRequestEvent",
+    "created_at": "2026-03-03T02:00:00Z",
+    "repo": {"name": "octocat/grass"},
+    "payload": {"action": "closed"}
+  },
+  {
+    "id": "github-watch-1",
+    "type": "WatchEvent",
+    "created_at": "2026-03-02T12:00:00Z",
+    "repo": {"name": "octocat/grass"},
+    "payload": {"action": "started"}
+  }
+]

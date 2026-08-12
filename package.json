@@ -1,0 +1,26 @@
+{
+  "name": "jandibat-org",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "packageManager": "yarn@4.6.0",
+  "workspaces": [
+    "apps/web",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:web": "yarn workspace @jandibat/web dev",
+    "build:web": "yarn workspace @jandibat/web build",
+    "test:web": "yarn workspace @jandibat/web test",
+    "test:sdk": "yarn workspace @jandibat/custom-provider-sdk test",
+    "typecheck:contracts": "yarn workspace @jandibat/contracts typecheck",
+    "typecheck:web": "yarn workspace @jandibat/web typecheck",
+    "typecheck:sdk": "yarn workspace @jandibat/custom-provider-sdk typecheck",
+    "typecheck": "yarn typecheck:contracts && yarn typecheck:sdk && yarn typecheck:web",
+    "openapi:types": "yarn workspace @jandibat/web openapi:types",
+    "openapi:lint": "redocly lint openapi/jandibat.yaml",
+    "openapi:check": "yarn openapi:lint && sh scripts/check-openapi-types.sh"
+  },
+  "devDependencies": {
+    "@redocly/cli": "2.46.1"
+  }
+}

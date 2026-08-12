@@ -1,0 +1,8 @@
+.git
+.gitignore
+Dockerfile*
+README.md
+coverage*
+bin/
+tmp/
+.gocache/

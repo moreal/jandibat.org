@@ -11,9 +11,9 @@
 - [x] 백엔드 테스트 명령이 있다: `make test-api`
 - [x] 프론트엔드 타입검사와 빌드 명령이 있다: `make typecheck build-web`
 - [x] 위 검사를 수행하는 GitHub Actions가 최소 권한과 고정 버전으로 구성돼 있다: `.github/workflows/ci.yml`
-- [ ] 깨끗한 checkout에서 전체 게이트가 통과한다: `make ci`
+- [x] 깨끗한 checkout에서 전체 게이트가 통과한다: `make ci`
 
-현재 작업트리에서는 2026-08-13에 전체 gate를 실행했습니다. 다만 이 저장소의 최초 변경이 아직 커밋되지 않아 `git status --short`가 깨끗한 checkout 증거가 될 수 없으므로 위 항목은 체크하지 않습니다.
+2026-08-13에 최초 구현 commit `97058d1196a7ae64b00767325cc73af4c5ac50ee`의 깨끗한 checkout에서 `make ci`를 실행했고, 실행 전·후 `git status --short`가 비어 있음을 확인했습니다. 이 현지 검증은 외부 GitHub Actions artifact나 사람 보안 검토를 대체하지 않습니다.
 
 Phase 완료를 주장하기 전 공통으로 다음을 실행합니다.
 
@@ -31,7 +31,7 @@ git status --short
 - [x] Go API와 Yarn workspace가 독립 검사된다: `make test-api typecheck`
 - [x] 로컬 CockroachDB 실행·migration 경로가 문서화돼 있다: `docker compose config --quiet && test -f docs/LOCAL_DEV_COCKROACH.ko.md`
 - [x] 인증/연동 보안 검토 기준이 있다: `test -f docs/SECURITY_CHECKLIST.ko.md`
-- [ ] 깨끗한 checkout에서 `make ci`가 통과한다.
+- [x] 깨끗한 checkout에서 `make ci`가 통과한다.
 
 ## Phase 1 — Public Activity MVP
 

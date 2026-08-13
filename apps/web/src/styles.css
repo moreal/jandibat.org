@@ -112,6 +112,9 @@ a {
   z-index: var(--z-skip-link);
   top: 0.75rem;
   left: 0.75rem;
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
   padding: 0.75rem 1rem;
   border-radius: 0.5rem;
   color: white;
@@ -141,6 +144,7 @@ a {
   gap: 0.65rem;
   align-items: center;
   width: max-content;
+  min-height: 44px;
   font-size: 1.12rem;
   font-weight: 780;
   letter-spacing: -0.04em;
@@ -1320,7 +1324,13 @@ button.heatmap-cell {
   font-size: 0.72rem;
 }
 
-.auth-card summary { cursor: pointer; font-weight: 700; }
+.auth-card summary {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  cursor: pointer;
+  font-weight: 700;
+}
 
 .success-state {
   padding: 1.4rem;
@@ -1638,6 +1648,7 @@ button.heatmap-cell {
 }
 
 .code-tabs button {
+  min-width: 44px;
   min-height: 44px;
   padding: 0.7rem 0;
   border: 0;

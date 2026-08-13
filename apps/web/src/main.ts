@@ -370,7 +370,7 @@ async function renderExplore(subject = exploreSubject): Promise<void> {
         <p class="hero-description">GitHub부터 독서, 운동까지. 흩어진 활동을 한곳에 모아 오래 보고 싶은 기록으로 남겨보세요.</p>
         <form class="subject-search" id="subject-search">
           <label for="subject">공개 프로필 찾아보기</label>
-          <div><span aria-hidden="true">@</span><input id="subject" name="subject" autocomplete="off" spellcheck="false" maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9._-]*" required><button class="primary-button" type="submit">잔디밭 보기 ${icon("arrow")}</button></div>
+          <div><span aria-hidden="true">@</span><input id="subject" name="subject" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="github-user" maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9._-]*" required><button class="primary-button" type="submit">잔디밭 보기 ${icon("arrow")}</button></div>
         </form>
         <div class="trust-row" aria-label="지원하는 데이터 소스"><span>GITHUB</span><span>GITLAB</span><span>CODEBERG</span><span>+ YOUR DATA</span></div>
       </div>

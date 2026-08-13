@@ -54,6 +54,8 @@ if (!root) throw new Error("#app element is required");
 let requestController: AbortController | undefined;
 let pendingMagicLinkToken: string | undefined;
 let toastTimer: number | undefined;
+let toastHideTimer: number | undefined;
+let toastFrame: number | undefined;
 const OWNER_SUBJECT_STORAGE_KEY = "jandibat:owner-subject";
 const EXPLORE_SUBJECT_STORAGE_KEY = "jandibat:explore-subject";
 let currentSubject = localStorage.getItem(OWNER_SUBJECT_STORAGE_KEY)?.trim() ?? "";
@@ -89,7 +91,7 @@ function shellMarkup(): string {
       <p><span class="brand-seed small" aria-hidden="true"></span> 기록이 자라는 곳, jandibat.org</p>
       <p>Open source · AGPL-3.0</p>
     </footer>
-    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+    <div id="toast" class="toast" role="status" aria-live="polite" data-state="closed" hidden></div>
   `;
 }
 
@@ -109,16 +111,34 @@ function setActiveNavigation(route: Route): void {
 function toast(message: string, tone: "success" | "error" = "success"): void {
   const element = document.querySelector<HTMLElement>("#toast");
   if (!element) return;
+  if (toastTimer !== undefined) window.clearTimeout(toastTimer);
+  if (toastHideTimer !== undefined) window.clearTimeout(toastHideTimer);
+  if (toastFrame !== undefined) window.cancelAnimationFrame(toastFrame);
+
+  const wasHidden = element.hidden;
   element.textContent = message;
   element.dataset.tone = tone;
   element.setAttribute("role", tone === "error" ? "alert" : "status");
   element.setAttribute("aria-live", tone === "error" ? "assertive" : "polite");
   element.hidden = false;
-  if (toastTimer !== undefined) window.clearTimeout(toastTimer);
+  if (wasHidden) {
+    element.dataset.state = "closed";
+    toastFrame = window.requestAnimationFrame(() => {
+      element.dataset.state = "open";
+      toastFrame = undefined;
+    });
+  } else {
+    element.dataset.state = "open";
+  }
+
   const duration = Math.max(4200, Math.min(8000, message.length * 95));
   toastTimer = window.setTimeout(() => {
-    element.hidden = true;
+    element.dataset.state = "closed";
     toastTimer = undefined;
+    toastHideTimer = window.setTimeout(() => {
+      element.hidden = true;
+      toastHideTimer = undefined;
+    }, 180);
   }, duration);
 }
 

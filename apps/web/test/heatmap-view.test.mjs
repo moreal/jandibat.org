@@ -54,6 +54,9 @@ test("API strings remain text and DOM attributes at the heatmap boundary", () =>
   assert.match(cell.dataset.tooltip, /<img src=x onerror="alert\(1\)">/);
   assert.equal(cell.getAttribute("aria-label"), cell.dataset.tooltip);
   assert.match(root.querySelector(".summary-date").textContent, /2026-08-11<img/);
-  assert.ok(root.querySelector('[role="tooltip"]'));
+  const tooltip = root.querySelector('[role="tooltip"]');
+  assert.ok(tooltip);
+  assert.equal(tooltip.dataset.state, "closed");
+  assert.equal(tooltip.hidden, true);
   assert.equal(root.querySelectorAll(".heatmap-month").length, 53);
 });

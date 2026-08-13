@@ -234,6 +234,7 @@ export function renderHeatmap(
   tooltip.className = "heatmap-tooltip";
   tooltip.id = "heatmap-tooltip";
   tooltip.setAttribute("role", "tooltip");
+  tooltip.dataset.state = "closed";
   tooltip.hidden = true;
   container.append(tooltip);
 
@@ -288,44 +289,80 @@ export function bindHeatmapTooltip(container: HTMLElement): void {
     (left.dataset.date ?? "").localeCompare(right.dataset.date ?? ""),
   );
   cells.at(-1)?.setAttribute("tabindex", "0");
+  let hideTimer: number | undefined;
+  let revealFrame: number | undefined;
 
-  const show = (target: HTMLElement) => {
+  const show = (target: HTMLElement, animate: boolean) => {
     const message = target.dataset.tooltip;
     if (!message) return;
+    if (hideTimer !== undefined) {
+      window.clearTimeout(hideTimer);
+      hideTimer = undefined;
+    }
+    if (revealFrame !== undefined) {
+      window.cancelAnimationFrame(revealFrame);
+      revealFrame = undefined;
+    }
+    const wasHidden = tooltip.hidden;
     tooltip.textContent = message;
+    if (wasHidden) tooltip.dataset.state = animate ? "closed" : "open";
     tooltip.hidden = false;
     const bounds = target.getBoundingClientRect();
     const width = Math.min(360, Math.max(160, tooltip.offsetWidth));
     tooltip.style.width = `${width}px`;
     tooltip.style.left = `${Math.max(8, Math.min(window.innerWidth - width - 8, bounds.left + bounds.width / 2 - width / 2))}px`;
     tooltip.style.top = `${Math.max(8, bounds.top - tooltip.offsetHeight - 10)}px`;
+    if (wasHidden && animate) {
+      revealFrame = window.requestAnimationFrame(() => {
+        tooltip.dataset.state = "open";
+        revealFrame = undefined;
+      });
+    } else {
+      tooltip.dataset.state = "open";
+    }
   };
 
-  const hide = () => {
-    tooltip.hidden = true;
+  const hide = (animate: boolean) => {
+    if (revealFrame !== undefined) {
+      window.cancelAnimationFrame(revealFrame);
+      revealFrame = undefined;
+    }
+    if (hideTimer !== undefined) {
+      window.clearTimeout(hideTimer);
+      hideTimer = undefined;
+    }
+    tooltip.dataset.state = "closed";
+    if (!animate) {
+      tooltip.hidden = true;
+      return;
+    }
+    hideTimer = window.setTimeout(() => {
+      tooltip.hidden = true;
+      hideTimer = undefined;
+    }, 140);
   };
 
   container.addEventListener("pointerover", (event) => {
     const target = (event.target as HTMLElement).closest<HTMLElement>("[data-tooltip]");
-    if (target) show(target);
+    if (target) show(target, true);
   });
   container.addEventListener("pointerout", (event) => {
     const related = event.relatedTarget;
-    if (!(related instanceof Element) || !related.closest("[data-tooltip]")) hide();
+    if (!(related instanceof Element) || !related.closest("[data-tooltip]")) hide(true);
   });
-  container.addEventListener("pointerleave", hide);
+  container.addEventListener("pointerleave", () => hide(true));
   container.addEventListener("click", (event) => {
     const target = (event.target as HTMLElement).closest<HTMLElement>("[data-tooltip]");
-    if (target) show(target);
+    if (target) show(target, true);
   });
   container.addEventListener("focusin", (event) => {
     const target = (event.target as HTMLElement).closest<HTMLElement>("[data-tooltip]");
-    if (target) show(target);
+    if (target) show(target, false);
   });
-  container.addEventListener("focusout", hide);
+  container.addEventListener("focusout", () => hide(false));
   container.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
-      hide();
+      hide(false);
       return;
     }
     const target = (event.target as HTMLElement).closest<HTMLButtonElement>(

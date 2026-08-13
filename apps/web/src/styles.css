@@ -699,6 +699,17 @@ button.heatmap-cell {
   box-shadow: 0 7px 18px rgb(0 0 0 / 16%);
   font-size: 0.68rem;
   pointer-events: none;
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  transform-origin: bottom center;
+  transition:
+    opacity 100ms ease,
+    transform 140ms var(--ease-out-expo);
+}
+
+.heatmap-tooltip[data-state="closed"] {
+  opacity: 0;
+  transform: translateY(4px) scale(0.97);
 }
 
 .stale-callout {
@@ -1761,6 +1772,18 @@ button.heatmap-cell {
   background: #1e3d28;
   box-shadow: 0 12px 30px rgb(13 31 18 / 25%);
   font-size: 0.76rem;
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  transform-origin: bottom right;
+  transition:
+    opacity 160ms ease,
+    transform 240ms var(--ease-out-expo);
+}
+
+.toast[data-state="closed"] {
+  opacity: 0;
+  transform: translateY(calc(100% + 1rem)) scale(0.98);
+  transition-duration: 160ms;
 }
 
 .toast[data-tone="error"] {
@@ -1960,6 +1983,18 @@ button.heatmap-cell {
   .page-intro,
   .auth-card {
     animation: fade-in 180ms ease both;
+  }
+
+  .heatmap-tooltip,
+  .toast {
+    transition: opacity 160ms ease;
+  }
+
+  .heatmap-tooltip,
+  .heatmap-tooltip[data-state="closed"],
+  .toast,
+  .toast[data-state="closed"] {
+    transform: none;
   }
 
   .primary-button:active:not(:disabled),

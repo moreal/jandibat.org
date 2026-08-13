@@ -477,11 +477,6 @@ main {
   box-shadow: var(--shadow);
 }
 
-.heatmap-loading,
-.card-skeleton {
-  animation: pulse 1.5s ease-in-out infinite;
-}
-
 .heatmap-loading {
   display: grid;
   place-content: center;
@@ -495,6 +490,7 @@ main {
   display: flex;
   gap: 0.3rem;
   justify-content: center;
+  animation: pulse 1.5s ease-in-out infinite;
 }
 
 .heatmap-loading span {
@@ -1889,7 +1885,7 @@ button.heatmap-cell {
     scroll-behavior: auto;
   }
 
-  .heatmap-loading,
+  .heatmap-loading > div,
   .card-skeleton {
     animation: none;
   }

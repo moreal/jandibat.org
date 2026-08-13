@@ -338,7 +338,7 @@ async function renderExplore(subject = exploreSubject): Promise<void> {
     <section class="hero">
       <div class="hero-copy">
         <p class="eyebrow">Your work, in full color.</p>
-        <h1>매일의 작은 기록이<br><em>나만의 잔디밭</em>이 됩니다.</h1>
+        <h1>매일의 작은 기록이<br><em>나만의 잔디밭</em>이<span class="hero-ending"> 됩니다.</span></h1>
         <p class="hero-description">GitHub부터 독서, 운동까지. 흩어진 활동을 한곳에 모아 오래 보고 싶은 기록으로 남겨보세요.</p>
         <form class="subject-search" id="subject-search">
           <label for="subject">공개 프로필 찾아보기</label>
@@ -839,7 +839,7 @@ function renderEmbed(): void {
           <label class="check-row"><input name="showLegend" type="checkbox" checked><span>강도 범례 표시</span></label>
         </form>
         <div class="embed-output">
-          <div class="preview-card"><div class="browser-dots"><i></i><i></i><i></i></div><div class="embed-preview"><img id="embed-preview-image" alt="생성된 활동 히트맵 미리보기"><p id="embed-preview-fallback">SVG 미리보기는 API 연결 후 표시됩니다.</p></div></div>
+          <div class="preview-card"><div class="browser-dots" aria-hidden="true"><i></i><i></i><i></i></div><div class="embed-preview"><img id="embed-preview-image" alt="생성된 활동 히트맵 미리보기"><p id="embed-preview-fallback">SVG 미리보기는 API 연결 후 표시됩니다.</p></div></div>
           <div class="code-tabs" role="tablist" aria-label="임베드 코드 형식"><button type="button" role="tab" aria-selected="true" data-code-tab="markdown">Markdown</button><button type="button" role="tab" aria-selected="false" data-code-tab="html">HTML</button><button type="button" role="tab" aria-selected="false" data-code-tab="url">URL</button></div>
           <div class="code-box"><code id="embed-code"></code><button type="button" aria-label="코드 복사" data-action="copy-embed">${icon("copy")}</button></div>
           <p class="code-help">공개 프로필의 렌더 URL에는 인증 정보가 포함되지 않습니다.</p>

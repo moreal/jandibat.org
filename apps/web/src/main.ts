@@ -53,6 +53,7 @@ if (!root) throw new Error("#app element is required");
 
 let requestController: AbortController | undefined;
 let pendingMagicLinkToken: string | undefined;
+let toastTimer: number | undefined;
 const OWNER_SUBJECT_STORAGE_KEY = "jandibat:owner-subject";
 const EXPLORE_SUBJECT_STORAGE_KEY = "jandibat:explore-subject";
 let currentSubject = localStorage.getItem(OWNER_SUBJECT_STORAGE_KEY)?.trim() ?? "";
@@ -113,9 +114,16 @@ function toast(message: string, tone: "success" | "error" = "success"): void {
   element.setAttribute("role", tone === "error" ? "alert" : "status");
   element.setAttribute("aria-live", tone === "error" ? "assertive" : "polite");
   element.hidden = false;
-  window.setTimeout(() => {
+  if (toastTimer !== undefined) window.clearTimeout(toastTimer);
+  const duration = Math.max(4200, Math.min(8000, message.length * 95));
+  toastTimer = window.setTimeout(() => {
     element.hidden = true;
-  }, 4200);
+    toastTimer = undefined;
+  }, duration);
+}
+
+function preferredScrollBehavior(): ScrollBehavior {
+  return matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
 }
 
 function errorMessage(error: unknown): string {
@@ -692,7 +700,7 @@ function showSecret(value: string): void {
   if (!panel || !code) return;
   code.textContent = value;
   panel.hidden = false;
-  panel.scrollIntoView({ behavior: "smooth", block: "center" });
+  panel.scrollIntoView({ behavior: preferredScrollBehavior(), block: "center" });
 }
 
 async function renderCustom(): Promise<void> {
@@ -840,8 +848,8 @@ function renderEmbed(): void {
         </form>
         <div class="embed-output">
           <div class="preview-card"><div class="browser-dots" aria-hidden="true"><i></i><i></i><i></i></div><div class="embed-preview"><img id="embed-preview-image" alt="생성된 활동 히트맵 미리보기"><p id="embed-preview-fallback">SVG 미리보기는 API 연결 후 표시됩니다.</p></div></div>
-          <div class="code-tabs" role="tablist" aria-label="임베드 코드 형식"><button type="button" role="tab" aria-selected="true" data-code-tab="markdown">Markdown</button><button type="button" role="tab" aria-selected="false" data-code-tab="html">HTML</button><button type="button" role="tab" aria-selected="false" data-code-tab="url">URL</button></div>
-          <div class="code-box"><code id="embed-code"></code><button type="button" aria-label="코드 복사" data-action="copy-embed">${icon("copy")}</button></div>
+          <div class="code-tabs" role="tablist" aria-label="임베드 코드 형식"><button id="embed-tab-markdown" type="button" role="tab" aria-controls="embed-code-panel" aria-selected="true" tabindex="0" data-code-tab="markdown">Markdown</button><button id="embed-tab-html" type="button" role="tab" aria-controls="embed-code-panel" aria-selected="false" tabindex="-1" data-code-tab="html">HTML</button><button id="embed-tab-url" type="button" role="tab" aria-controls="embed-code-panel" aria-selected="false" tabindex="-1" data-code-tab="url">URL</button></div>
+          <div class="code-box" id="embed-code-panel" role="tabpanel" aria-labelledby="embed-tab-markdown"><code id="embed-code"></code><button type="button" aria-label="코드 복사" data-action="copy-embed">${icon("copy")}</button></div>
           <p class="code-help">공개 프로필의 렌더 URL에는 인증 정보가 포함되지 않습니다.</p>
         </div>
       </div>
@@ -877,32 +885,82 @@ function renderEmbed(): void {
     preview.hidden = true;
     if (fallback) fallback.hidden = false;
   });
-  content.querySelectorAll<HTMLButtonElement>("[data-code-tab]").forEach((button) => {
-    button.addEventListener("click", () => {
+  const tabs = Array.from(content.querySelectorAll<HTMLButtonElement>("[data-code-tab]"));
+  const selectTab = (button: HTMLButtonElement, focus = false) => {
       format = button.dataset.codeTab as typeof format;
-      content.querySelectorAll<HTMLButtonElement>("[data-code-tab]").forEach((tab) => tab.setAttribute("aria-selected", String(tab === button)));
+      tabs.forEach((tab) => {
+        const selected = tab === button;
+        tab.setAttribute("aria-selected", String(selected));
+        tab.tabIndex = selected ? 0 : -1;
+      });
+      const panel = content.querySelector<HTMLElement>("#embed-code-panel");
+      if (panel) panel.setAttribute("aria-labelledby", button.id);
       update();
+      if (focus) button.focus();
+  };
+  tabs.forEach((button) => {
+    button.addEventListener("click", () => selectTab(button));
+    button.addEventListener("keydown", (event) => {
+      const current = tabs.indexOf(button);
+      const nextIndex = event.key === "ArrowRight"
+        ? (current + 1) % tabs.length
+        : event.key === "ArrowLeft"
+          ? (current - 1 + tabs.length) % tabs.length
+          : event.key === "Home"
+            ? 0
+            : event.key === "End"
+              ? tabs.length - 1
+              : -1;
+      if (nextIndex < 0) return;
+      event.preventDefault();
+      selectTab(tabs[nextIndex]!, true);
     });
   });
   update();
 }
 
-const busyButtonContents = new WeakMap<HTMLButtonElement, DocumentFragment>();
+type BusyButtonState = {
+  contents: DocumentFragment;
+  minWidth: string;
+};
+
+const busyButtonStates = new WeakMap<HTMLButtonElement, BusyButtonState>();
+const copyFeedbackTimers = new WeakMap<HTMLButtonElement, number>();
+
+function showCopyFeedback(button: HTMLButtonElement, label: string): void {
+  const previousTimer = copyFeedbackTimers.get(button);
+  if (previousTimer !== undefined) window.clearTimeout(previousTimer);
+  button.dataset.copied = "true";
+  button.setAttribute("aria-label", label);
+  button.innerHTML = icon("check");
+  const timer = window.setTimeout(() => {
+    delete button.dataset.copied;
+    button.setAttribute("aria-label", button.dataset.action === "copy-secret" ? "Provider key 복사" : "코드 복사");
+    button.innerHTML = icon("copy");
+    copyFeedbackTimers.delete(button);
+  }, 1600);
+  copyFeedbackTimers.set(button, timer);
+}
 
 function setButtonBusy(button: HTMLButtonElement, busy: boolean, label = "처리 중…"): void {
   if (busy) {
-    if (button.disabled || busyButtonContents.has(button)) return;
+    if (button.disabled || busyButtonStates.has(button)) return;
     const contents = document.createDocumentFragment();
     while (button.firstChild) contents.append(button.firstChild);
-    busyButtonContents.set(button, contents);
+    busyButtonStates.set(button, {
+      contents,
+      minWidth: button.style.minWidth,
+    });
+    button.style.minWidth = `${Math.ceil(button.getBoundingClientRect().width)}px`;
     button.textContent = label;
     button.disabled = true;
     button.setAttribute("aria-busy", "true");
   } else {
-    const contents = busyButtonContents.get(button);
-    if (contents) {
-      button.replaceChildren(contents);
-      busyButtonContents.delete(button);
+    const state = busyButtonStates.get(button);
+    if (state) {
+      button.replaceChildren(state.contents);
+      button.style.minWidth = state.minWidth;
+      busyButtonStates.delete(button);
     }
     button.disabled = false;
     button.removeAttribute("aria-busy");
@@ -1018,7 +1076,7 @@ async function handleAction(button: HTMLButtonElement): Promise<void> {
     const actionInput = form?.elements.namedItem("action") as HTMLInputElement | null;
     if (idInput) idInput.value = button.dataset.id ?? "";
     if (actionInput) actionInput.value = button.dataset.customAction ?? "activity";
-    panel?.scrollIntoView({ behavior: "smooth", block: "center" });
+    panel?.scrollIntoView({ behavior: preferredScrollBehavior(), block: "center" });
     return;
   }
 
@@ -1073,6 +1131,7 @@ async function handleAction(button: HTMLButtonElement): Promise<void> {
     const value = content.querySelector<HTMLElement>("#secret-value")?.textContent ?? "";
     try {
       await navigator.clipboard.writeText(value);
+      showCopyFeedback(button, "Provider key 복사 완료");
       toast("Provider key를 복사했습니다.");
     } catch {
       toast("복사하지 못했습니다. 값을 직접 선택해 주세요.", "error");
@@ -1084,6 +1143,7 @@ async function handleAction(button: HTMLButtonElement): Promise<void> {
     const value = content.querySelector<HTMLElement>("#embed-code")?.textContent ?? "";
     try {
       await navigator.clipboard.writeText(value);
+      showCopyFeedback(button, "코드 복사 완료");
       toast("클립보드에 복사했습니다.");
     } catch {
       toast("복사하지 못했습니다. 코드를 직접 선택해 주세요.", "error");

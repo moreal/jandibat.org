@@ -1162,14 +1162,25 @@ button.heatmap-cell {
 }
 
 .card-skeleton {
+  position: relative;
   min-height: 360px;
+  overflow: hidden;
   border-radius: 0.55rem;
-  background: linear-gradient(110deg, #e9eae5 8%, #f5f5f1 18%, #e9eae5 33%);
-  background-size: 200% 100%;
+  background: #e9eae5;
+}
+
+.card-skeleton::after {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(110deg, transparent 25%, #f5f5f1 50%, transparent 75%);
+  content: "";
+  transform: translateX(-100%);
   animation: shimmer 1.6s linear infinite;
 }
 
-@keyframes shimmer { to { background-position-x: -200%; } }
+@keyframes shimmer {
+  to { transform: translateX(100%); }
+}
 
 .callout {
   display: flex;
@@ -1976,7 +1987,7 @@ button.heatmap-cell {
   }
 
   .heatmap-loading > div,
-  .card-skeleton {
+  .card-skeleton::after {
     animation: none;
   }
 

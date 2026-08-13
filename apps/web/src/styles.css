@@ -18,6 +18,10 @@
   --red: #b9403d;
   --focus-ring: #17231a;
   --shadow: 0 18px 50px rgb(32 49 35 / 8%);
+  --ease-out-expo: cubic-bezier(0.19, 1, 0.22, 1);
+  --ease-out-quad: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  --motion-fast: 150ms;
+  --motion-enter: 420ms;
   --z-base: 1;
   --z-elevated: 10;
   --z-overlay: 20;
@@ -208,6 +212,10 @@ a {
   color: var(--muted);
   font-size: 0.84rem;
   font-weight: 650;
+  transition:
+    color var(--motion-fast) ease,
+    background-color var(--motion-fast) ease,
+    box-shadow var(--motion-fast) ease;
 }
 
 .desktop-nav a.is-active {
@@ -227,6 +235,10 @@ a {
   background: var(--ink);
   font-size: 0.84rem;
   font-weight: 700;
+  transition:
+    color var(--motion-fast) ease,
+    background-color var(--motion-fast) ease,
+    transform var(--motion-fast) var(--ease-out-quad);
 }
 
 .mobile-nav {
@@ -246,6 +258,14 @@ main {
   min-height: 630px;
   margin: 0 auto;
   padding: 5rem 0 4rem;
+}
+
+.hero-copy {
+  animation: rise-in 520ms var(--ease-out-expo) both;
+}
+
+.hero-note {
+  animation: note-in 580ms var(--ease-out-expo) 60ms both;
 }
 
 .eyebrow {
@@ -346,11 +366,11 @@ main {
   font-size: 0.84rem;
   font-weight: 750;
   transition:
-    background-color 150ms ease,
-    border-color 150ms ease,
-    color 150ms ease,
-    box-shadow 150ms ease,
-    transform 150ms ease;
+    background-color var(--motion-fast) ease,
+    border-color var(--motion-fast) ease,
+    color var(--motion-fast) ease,
+    box-shadow var(--motion-fast) ease,
+    transform var(--motion-fast) var(--ease-out-quad);
 }
 
 .primary-button {
@@ -392,6 +412,7 @@ main {
 .secondary-button:active:not(:disabled),
 .danger-button:active:not(:disabled),
 .passkey-button:active:not(:disabled),
+.header-cta:active,
 .icon-button:active:not(:disabled),
 .code-box button:active:not(:disabled) {
   transform: scale(0.97);
@@ -848,6 +869,7 @@ button.heatmap-cell {
   gap: 3rem;
   align-items: end;
   margin-bottom: 5rem;
+  animation: rise-in var(--motion-enter) var(--ease-out-expo) both;
 }
 
 .page-intro .eyebrow {
@@ -1115,6 +1137,11 @@ button.heatmap-cell {
   color: var(--muted);
   background: white;
   cursor: pointer;
+  transition:
+    color var(--motion-fast) ease,
+    background-color var(--motion-fast) ease,
+    border-color var(--motion-fast) ease,
+    transform var(--motion-fast) var(--ease-out-quad);
 }
 
 .card-skeleton {
@@ -1201,6 +1228,7 @@ button.heatmap-cell {
 
 .auth-card {
   width: min(100%, 430px);
+  animation: rise-in var(--motion-enter) var(--ease-out-expo) both;
 }
 
 .auth-card > h2 {
@@ -1692,6 +1720,11 @@ button.heatmap-cell {
   color: #dfecdf;
   background: #2b382d;
   cursor: pointer;
+  transition:
+    color var(--motion-fast) ease,
+    background-color var(--motion-fast) ease,
+    border-color var(--motion-fast) ease,
+    transform var(--motion-fast) var(--ease-out-quad);
 }
 
 .code-box button[data-copied="true"] {
@@ -1735,6 +1768,29 @@ button.heatmap-cell {
   background: #6a302c;
 }
 
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+
+@keyframes note-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px) rotate(1.2deg) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) rotate(1.2deg) scale(1);
+  }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+}
+
 @media (hover: hover) and (pointer: fine) {
   .desktop-nav a:hover {
     color: var(--ink);
@@ -1744,7 +1800,6 @@ button.heatmap-cell {
 
   .primary-button:hover:not(:disabled) {
     background: var(--green-dark);
-    transform: translateY(-1px);
   }
 
   .danger-button:hover:not(:disabled) {
@@ -1819,6 +1874,9 @@ button.heatmap-cell {
     text-align: center;
     font-size: 0.68rem;
     font-weight: 700;
+    transition:
+      color var(--motion-fast) ease,
+      background-color var(--motion-fast) ease;
   }
   .mobile-nav a.is-active { color: var(--green-dark); background: var(--mint); }
   .hero { grid-template-columns: 1fr; min-height: auto; }
@@ -1894,13 +1952,21 @@ button.heatmap-cell {
   .secondary-button,
   .danger-button,
   .passkey-button {
-    transition: none;
+    transition-property: background-color, border-color, color, box-shadow;
+  }
+
+  .hero-copy,
+  .hero-note,
+  .page-intro,
+  .auth-card {
+    animation: fade-in 180ms ease both;
   }
 
   .primary-button:active:not(:disabled),
   .secondary-button:active:not(:disabled),
   .danger-button:active:not(:disabled),
   .passkey-button:active:not(:disabled),
+  .header-cta:active,
   .icon-button:active:not(:disabled),
   .code-box button:active:not(:disabled),
   .heatmap-cell:hover,

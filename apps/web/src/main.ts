@@ -549,6 +549,7 @@ async function renderConnections(): Promise<void> {
     if (grid) {
       grid.removeAttribute("aria-busy");
       grid.replaceChildren(createErrorCallout(error, "retry-connections"));
+      grid.dataset.state = "ready";
     }
   }
 }
@@ -764,6 +765,7 @@ async function renderCustom(): Promise<void> {
       if (list) {
         list.removeAttribute("aria-busy");
         list.replaceChildren(createErrorCallout(error, "retry-custom"));
+        list.dataset.state = "ready";
       }
     }
   };

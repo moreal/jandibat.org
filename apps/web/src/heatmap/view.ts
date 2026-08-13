@@ -112,6 +112,9 @@ export function renderHeatmap(
 ): void {
   const document = container.ownerDocument;
   container.replaceChildren();
+  const content = document.createElement("div");
+  content.className = "heatmap-content";
+  container.append(content);
   const calendar = buildHeatmapCalendar(timeline.days, timeline.to);
   const visible = timeline.days.filter(
     (day) => day.date >= timeline.from && day.date <= timeline.to,
@@ -133,7 +136,7 @@ export function renderHeatmap(
   if (timeline.stale) {
     appendCallout(
       document,
-      container,
+      content,
       "stale-callout",
       "일부 데이터가 최신이 아닐 수 있어요.",
       "외부 서비스 갱신에 실패해 마지막으로 저장된 기록을 보여드립니다.",
@@ -142,7 +145,7 @@ export function renderHeatmap(
   if (empty) {
     appendCallout(
       document,
-      container,
+      content,
       "empty-timeline-callout",
       "아직 표시할 활동이 없어요.",
       "Provider를 연결하거나 커스텀 활동을 추가하면 이 기간에 기록이 나타납니다.",
@@ -162,7 +165,7 @@ export function renderHeatmap(
   appendTextElement(document, total, "strong", summary.total.toLocaleString("ko-KR"));
   appendTextElement(document, total, "span", "번의 활동");
   heading.append(headingCopy, total);
-  container.append(heading);
+  content.append(heading);
 
   const scroll = document.createElement("div");
   scroll.className = "heatmap-scroll";
@@ -228,7 +231,7 @@ export function renderHeatmap(
   body.append(weekdays, grid);
   chart.append(months, body);
   scroll.append(chart);
-  container.append(scroll);
+  content.append(scroll);
 
   const tooltip = document.createElement("div");
   tooltip.className = "heatmap-tooltip";
@@ -257,7 +260,7 @@ export function renderHeatmap(
   }
   appendTextElement(document, legend, "span", "많음");
   footer.append(timestamp, legend);
-  container.append(footer);
+  content.append(footer);
 
   const summaries = document.createElement("dl");
   summaries.className = "summary-grid";
@@ -276,8 +279,8 @@ export function renderHeatmap(
   } else {
     appendSummary("가장 활발한 날", "—", undefined, "summary-date");
   }
-  container.append(summaries);
-  appendEnvironmentLegend(document, container, visible, timeline.environments);
+  content.append(summaries);
+  appendEnvironmentLegend(document, content, visible, timeline.environments);
 }
 
 export function bindHeatmapTooltip(container: HTMLElement): void {

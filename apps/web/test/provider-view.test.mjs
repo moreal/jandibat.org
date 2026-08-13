@@ -40,6 +40,7 @@ test("runtime custom-provider fields remain text and DOM attributes", () => {
   assert.equal(select.dataset.customAction, attack);
   const toggle = root.querySelector('[data-action="toggle-custom"]');
   assert.equal(toggle.dataset.status, "disabled");
+  assert.equal(root.dataset.state, "ready");
 });
 
 test("renders an explicit custom-provider empty state", () => {
@@ -47,6 +48,7 @@ test("renders an explicit custom-provider empty state", () => {
   renderCustomProviderCards(root, []);
   assert.ok(root.querySelector(".empty-list"));
   assert.match(root.textContent, /아직 만든 데이터 소스가 없어요/);
+  assert.equal(root.dataset.state, "ready");
 });
 
 function provider(overrides = {}) {
@@ -70,6 +72,7 @@ test("renders explicit unchecked private consent only for eligible providers", (
   assert.equal(consent.required, true);
   assert.equal(consent.hasAttribute("checked"), false);
   assert.equal(consent.getAttribute("aria-required"), "true");
+  assert.equal(root.dataset.state, "ready");
   const help = root.querySelector(`#${consent.getAttribute("aria-describedby")}`);
   assert.match(help.textContent, /비공개 저장소의 활동 날짜와 집계량/);
 

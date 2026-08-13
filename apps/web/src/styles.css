@@ -498,6 +498,12 @@ main {
   box-shadow: var(--shadow);
 }
 
+.heatmap-content,
+.provider-grid[data-state="ready"],
+.custom-list[data-state="ready"] {
+  animation: rise-in 300ms var(--ease-out-expo) both;
+}
+
 .heatmap-loading {
   display: grid;
   place-content: center;
@@ -1373,6 +1379,7 @@ button.heatmap-cell {
   border-radius: 0.4rem;
   background: #eef8ed;
   text-align: center;
+  animation: rise-in 260ms var(--ease-out-expo) both;
 }
 
 .success-state > span {
@@ -1524,6 +1531,7 @@ button.heatmap-cell {
   border: 1px solid #bdd4bd;
   border-radius: 0.55rem;
   background: #ecf5e8;
+  animation: rise-in 280ms var(--ease-out-expo) both;
 }
 
 .ingest-panel[hidden] { display: none; }
@@ -1547,6 +1555,7 @@ button.heatmap-cell {
   border: 1px solid #dfcb91;
   border-radius: 0.55rem;
   background: #fff9e9;
+  animation: rise-in 280ms var(--ease-out-expo) both;
 }
 
 .secret-result[hidden] { display: none; }
@@ -1981,7 +1990,13 @@ button.heatmap-cell {
   .hero-copy,
   .hero-note,
   .page-intro,
-  .auth-card {
+  .auth-card,
+  .heatmap-content,
+  .provider-grid[data-state="ready"],
+  .custom-list[data-state="ready"],
+  .success-state,
+  .ingest-panel,
+  .secret-result {
     animation: fade-in 180ms ease both;
   }
 

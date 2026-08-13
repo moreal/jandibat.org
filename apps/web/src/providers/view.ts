@@ -189,10 +189,12 @@ export function renderProviderCards(
   connections: readonly ProviderConnectionDto[],
 ): void {
   const document = container.ownerDocument;
+  delete container.dataset.state;
   container.replaceChildren();
   const supported = catalog.filter((provider) => provider.category === "git-hosting");
   if (supported.length === 0) {
     appendProviderEmptyState(document, container);
+    container.dataset.state = "ready";
     return;
   }
   const byProvider = new Map(connections.map((connection) => [connection.providerId, connection]));
@@ -286,6 +288,7 @@ export function renderProviderCards(
     article.append(actions);
     container.append(article);
   });
+  container.dataset.state = "ready";
 }
 
 function appendCustomEmptyState(document: Document, container: HTMLElement): void {
@@ -321,9 +324,11 @@ export function renderCustomProviderCards(
   providers: readonly CustomProviderDto[],
 ): void {
   const document = container.ownerDocument;
+  delete container.dataset.state;
   container.replaceChildren();
   if (providers.length === 0) {
     appendCustomEmptyState(document, container);
+    container.dataset.state = "ready";
     return;
   }
   for (const provider of providers) {
@@ -388,4 +393,5 @@ export function renderCustomProviderCards(
     article.append(actions);
     container.append(article);
   }
+  container.dataset.state = "ready";
 }

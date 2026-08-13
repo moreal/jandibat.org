@@ -160,37 +160,48 @@ a {
 }
 
 .brand-seed {
+  --seed-leaf-width: 12px;
+  --seed-leaf-height: 17px;
+  --seed-leaf-inset: 8px;
+
   position: relative;
   display: inline-block;
-  width: 22px;
+  flex: 0 0 auto;
+  width: 38px;
   height: 25px;
 }
 
 .brand-seed::before,
 .brand-seed::after {
   position: absolute;
+  top: 0;
   content: "";
-  width: 12px;
-  height: 17px;
+  width: var(--seed-leaf-width);
+  height: var(--seed-leaf-height);
   border-radius: 100% 10% 100% 10%;
   background: var(--green);
-  transform-origin: bottom right;
 }
 
 .brand-seed::before {
-  left: 0;
+  left: var(--seed-leaf-inset);
+  transform-origin: bottom right;
   transform: rotate(-37deg);
 }
 
 .brand-seed::after {
-  right: 0;
-  transform: scaleX(-1) rotate(-37deg);
+  right: var(--seed-leaf-inset);
+  border-radius: 10% 100% 10% 100%;
+  transform-origin: bottom left;
+  transform: rotate(37deg);
 }
 
 .brand-seed.small {
-  width: 15px;
-  height: 16px;
-  transform: scale(0.72);
+  --seed-leaf-width: 9px;
+  --seed-leaf-height: 12px;
+  --seed-leaf-inset: 5.5px;
+
+  width: 27px;
+  height: 18px;
 }
 
 .desktop-nav {
@@ -457,13 +468,16 @@ main {
   display: block;
   font-family: Georgia, serif;
   font-size: 5.5rem;
-  line-height: 0.8;
+  line-height: 1;
   letter-spacing: -0.08em;
 }
 
 .hero-note > span:not(.note-number) {
+  display: block;
+  margin-top: 0.5rem;
   font-size: 0.64rem;
   font-weight: 900;
+  line-height: 1;
   letter-spacing: 0.28em;
 }
 

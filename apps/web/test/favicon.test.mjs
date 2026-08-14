@@ -4,7 +4,7 @@ import test from "node:test";
 
 const webRoot = new URL("../", import.meta.url);
 const publicRoot = new URL("public/", webRoot);
-const indexHtml = readFileSync(new URL("index.html", webRoot), "utf8");
+const documentSource = readFileSync(new URL("src/Document.tsx", webRoot), "utf8");
 const manifest = JSON.parse(readFileSync(new URL("site.webmanifest", publicRoot), "utf8"));
 
 function publicAsset(path) {
@@ -18,11 +18,11 @@ function pngDimensions(path) {
 }
 
 test("the document advertises standard favicon and install metadata", () => {
-  assert.match(indexHtml, /<meta name="application-name" content="jandibat" \/>/);
-  assert.match(indexHtml, /<link rel="icon" href="\/favicon\.ico" type="image\/vnd\.microsoft\.icon" sizes="16x16 32x32 48x48" \/>/);
-  assert.match(indexHtml, /<link rel="icon" href="\/favicon\.svg" type="image\/svg\+xml" sizes="any" \/>/);
-  assert.match(indexHtml, /<link rel="apple-touch-icon" href="\/apple-touch-icon\.png" sizes="180x180" \/>/);
-  assert.match(indexHtml, /<link rel="manifest" href="\/site\.webmanifest" \/>/);
+  assert.match(documentSource, /<meta name="application-name" content="jandibat" \/>/);
+  assert.match(documentSource, /rel="icon"[\s\S]*?href="\/favicon\.ico"[\s\S]*?type="image\/vnd\.microsoft\.icon"[\s\S]*?sizes="16x16 32x32 48x48"/);
+  assert.match(documentSource, /<link rel="icon" href="\/favicon\.svg" type="image\/svg\+xml" sizes="any" \/>/);
+  assert.match(documentSource, /<link rel="apple-touch-icon" href="\/apple-touch-icon\.png" sizes="180x180" \/>/);
+  assert.match(documentSource, /<link rel="manifest" href="\/site\.webmanifest" \/>/);
 });
 
 test("favicon assets match their declared sizes and manifest purposes", () => {

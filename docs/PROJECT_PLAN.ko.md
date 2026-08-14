@@ -18,6 +18,7 @@ jandibat.org는 GitHub Activity Heatmap(잔디밭) 개념을 확장한 AGPL 오�
 
 - 모노레포: 단일 저장소 (`apps/api`, `apps/web`, `packages/contracts`)
 - 프론트엔드 패키지 매니저: Yarn (`.yarnrc.yml`에서 `nodeLinker: pnpm`)
+- 프론트엔드: Solid 2 + 공식 Vite `start` mode 기반 client-only TypeScript SPA
 - 백엔드: Go + chi
 - 인터페이스 계약: OpenAPI (`openapi/jandibat.yaml`)
 - 데이터베이스: CockroachDB 26.2 계열 + `pgx`의 `database/sql` adapter
@@ -38,7 +39,8 @@ jandibat.org는 GitHub Activity Heatmap(잔디밭) 개념을 확장한 AGPL 오�
 - 테마/기간/색상 등 파라미터화
 
 4. Frontend Layer
-- 사용자 인증, provider 연결, 커스텀 데이터 소스 관리 UI
+- Solid filesystem route 기반 사용자 인증, provider 연결, 커스텀 데이터 소스 관리 UI
+- 상세 결정과 복잡성 통제 기준은 [`FRONTEND_ARCHITECTURE_DECISION.ko.md`](FRONTEND_ARCHITECTURE_DECISION.ko.md)를 따름
 
 ## 4. 데이터 모델(초기)
 

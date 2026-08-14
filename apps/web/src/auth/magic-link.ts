@@ -47,7 +47,8 @@ export function magicLinkLocationHasToken(value: string): boolean {
 export function magicLinkSafeLocation(value: string): string {
   const url = new URL(value);
   for (const key of MAGIC_LINK_TOKEN_KEYS) url.searchParams.delete(key);
-  return `${url.pathname}${url.search}#auth`;
+  const pathRoute = url.pathname.replace(/\/$/, "").endsWith("/auth");
+  return `${url.pathname}${url.search}${pathRoute ? "" : "#auth"}`;
 }
 
 /** Builds the exact callback URL accepted by the backend redirect allowlist. */

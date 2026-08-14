@@ -1,8 +1,11 @@
 # `@jandibat/web`
 
-This package contains the accessible, framework-free TypeScript SPA for
-jandibat.org. It includes the public one-year heatmap, authentication,
-provider connections, custom activity ingestion, and embed-code generator.
+This package contains the accessible Solid 2 TypeScript SPA for jandibat.org.
+It uses the official Solid Vite plugin in client-only `start` mode, filesystem
+routing, and domain-scoped Solid components. It includes the public one-year
+heatmap, authentication, provider connections, custom activity ingestion, and
+embed-code generator. The architecture decision and complexity controls are
+recorded in [`../../docs/FRONTEND_ARCHITECTURE_DECISION.ko.md`](../../docs/FRONTEND_ARCHITECTURE_DECISION.ko.md).
 
 ## Local development
 
@@ -24,8 +27,9 @@ docker run --rm -p 8081:8080 \
 curl --fail http://localhost:8081/healthz
 ```
 
-The container runs as UID/GID `101`, serves `/healthz` directly, and falls back
-to `index.html` for client-side routes. Its startup hook validates
+The build emits the static client application under `dist/client`. The
+container runs as UID/GID `101`, serves `/healthz` directly, and falls back to
+the generated `index.html` for client-side routes. Its startup hook validates
 `JANDIBAT_API_BASE_URL` as HTTPS, JSON-escapes it into non-executable
 `/config.json`, and serves that file with `no-store`. The browser validates the
 URL again before loading the application. Production responses include a CSP

@@ -26,6 +26,12 @@ test("accepts only the backend OAuth completion marker on the connections route"
     ),
     undefined,
   );
+  assert.equal(
+    providerCallbackResultFromUrl(
+      "https://app.example.test/connections?status=connected",
+    ),
+    "connected",
+  );
 });
 
 test("removes the one-shot marker without retaining provider error text", () => {
@@ -46,5 +52,11 @@ test("removes the one-shot marker without retaining provider error text", () => 
       "https://app.example.test/base?status=connected#connections",
     ).includes("connected"),
     false,
+  );
+  assert.equal(
+    providerCallbackSafeLocation(
+      "https://app.example.test/connections?campaign=kept&status=connected",
+    ),
+    "/connections?campaign=kept",
   );
 });

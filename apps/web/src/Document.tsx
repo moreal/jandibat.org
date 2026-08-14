@@ -1,0 +1,30 @@
+import type { ParentProps } from "solid-js";
+
+export default function Document(props: ParentProps) {
+  return (
+    <html lang="ko">
+      <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <meta
+          name="description"
+          content="GitHub부터 나만의 활동까지, 매일의 기록을 하나의 잔디밭으로 모으세요."
+        />
+        <meta name="application-name" content="jandibat" />
+        <meta name="apple-mobile-web-app-title" content="jandibat" />
+        <meta name="theme-color" content="#f6f5ee" />
+        <link
+          rel="icon"
+          href="/favicon.ico"
+          type="image/vnd.microsoft.icon"
+          sizes="16x16 32x32 48x48"
+        />
+        <link rel="icon" href="/favicon.svg" type="image/svg+xml" sizes="any" />
+        <link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180" />
+        <link rel="manifest" href="/site.webmanifest" />
+        <title>jandibat.org · 기록이 자라는 곳</title>
+      </head>
+      <body>{props.children}</body>
+    </html>
+  );
+}

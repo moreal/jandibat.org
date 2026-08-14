@@ -12,7 +12,7 @@ AGPL 기반의 오픈소스 Activity Heatmap 플랫폼입니다.
 ## 저장소 구조
 
 - `apps/api`: Go(chi) 기반 API/SSR 서버
-- `apps/web`: 프론트엔드 애플리케이션 (Yarn, `nodeLinker: pnpm`)
+- `apps/web`: Solid 2 start mode 기반 TypeScript SPA (Yarn, `nodeLinker: pnpm`)
 - `packages/contracts`: 프론트엔드 공유 타입 및 계약 문서 보조 패키지
 - `openapi`: 백엔드-프론트엔드 계약(OpenAPI)
 - `docs`: 기획/의사결정/협업 문서
@@ -69,6 +69,7 @@ PR 전에는 `make ci`가 통과하는지 확인합니다. 인증, provider 연�
 - ERD(개념 + Cockroach 물리 초안): `docs/ERD_CONCEPTUAL_AND_PHYSICAL.ko.md`
 - 로컬 Cockroach 실행 가이드: `docs/LOCAL_DEV_COCKROACH.ko.md`
 - 프로젝트 계획 문서: `docs/PROJECT_PLAN.ko.md`
+- 프론트엔드 아키텍처 결정: `docs/FRONTEND_ARCHITECTURE_DECISION.ko.md`
 - 단계별 완료/검증 체크리스트: `docs/DELIVERY_CHECKLIST.ko.md`
 - 런타임 환경 변수와 secret 형식: `docs/CONFIGURATION.ko.md`
 - 인증·연동 보안 체크리스트: `docs/SECURITY_CHECKLIST.ko.md`

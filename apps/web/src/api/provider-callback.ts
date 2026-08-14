@@ -2,7 +2,10 @@ export type ProviderCallbackResult = "connected";
 const CALLBACK_PARAMETERS = ["status", "error", "error_description", "code", "state"] as const;
 
 function isConnectionsRoute(url: URL): boolean {
-  return url.hash.slice(1).split(/[/?]/)[0] === "connections";
+  return (
+    url.hash.slice(1).split(/[/?]/)[0] === "connections" ||
+    url.pathname.replace(/\/$/, "").endsWith("/connections")
+  );
 }
 
 /**
@@ -28,5 +31,6 @@ export function providerCallbackSafeLocation(value: string): string {
   for (const parameter of CALLBACK_PARAMETERS) {
     url.searchParams.delete(parameter);
   }
-  return `${url.pathname}${url.search}${url.hash || "#connections"}`;
+  const pathRoute = url.pathname.replace(/\/$/, "").endsWith("/connections");
+  return `${url.pathname}${url.search}${pathRoute ? "" : url.hash || "#connections"}`;
 }

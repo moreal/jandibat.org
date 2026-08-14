@@ -47,6 +47,14 @@ test("the sanitized location cannot retain fragment or query token material", ()
   assert.equal(safe.includes(fragmentToken), false);
 });
 
+test("sanitizes a browser-route callback without restoring the legacy fragment", () => {
+  const safe = magicLinkSafeLocation(
+    `https://app.example.test/auth?campaign=welcome#?token=${fragmentToken}`,
+  );
+  assert.equal(safe, "/auth?campaign=welcome");
+  assert.equal(safe.includes(fragmentToken), false);
+});
+
 test("unrelated fragments do not produce a token", () => {
   assert.equal(
     magicLinkTokenFromUrl("https://app.example.test/#explore"),

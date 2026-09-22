@@ -47,29 +47,7 @@
         };
       };
 
-      mkPkgs = system:
-        import nixpkgs {
-          inherit system;
-          overlays = [
-            (final: prev:
-              let
-                yarnBerry = prev.yarn-berry_4.overrideAttrs (_old: {
-                  version = "4.18.0";
-                  src = prev.fetchFromGitHub {
-                    owner = "yarnpkg";
-                    repo = "berry";
-                    tag = "@yarnpkg/cli/4.18.0";
-                    hash = "sha256-pO89wh17cW9/RGKjo70yiefr+9nlJAQs4ZEdUnzdgQM=";
-                  };
-                });
-              in
-              {
-                yarn-berry_4 = yarnBerry;
-                fetchYarnBerryDeps = yarnBerry.fetchYarnBerryDeps;
-                yarnBerryConfigHook = yarnBerry.yarnBerryConfigHook;
-              })
-          ];
-        };
+      mkPkgs = system: import nixpkgs { inherit system; };
 
       mkToolchain = system:
         let
@@ -113,6 +91,16 @@
             '';
           };
 
+          yarnBerry = (pkgs.yarn-berry_4.override { inherit nodejs; }).overrideAttrs (_old: {
+            version = "4.18.0";
+            src = pkgs.fetchFromGitHub {
+              owner = "yarnpkg";
+              repo = "berry";
+              tag = "@yarnpkg/cli/4.18.0";
+              hash = "sha256-pO89wh17cW9/RGKjo70yiefr+9nlJAQs4ZEdUnzdgQM=";
+            };
+          });
+
           buildGoModule = pkgs.buildGoModule.override { inherit go; };
 
           goCheckSumtype = buildGoModule {
@@ -147,14 +135,14 @@
           };
 
           yarnDeps = import ./nix/yarn-deps.nix {
-            inherit pkgs nodejs;
-            yarn = pkgs.yarn-berry_4;
+            inherit nodejs pkgs;
+            yarn = yarnBerry;
           };
 
           shellPackages = [
             go
             nodejs
-            pkgs.yarn-berry_4
+            yarnBerry
             scythe
             pkgs.go-tools
             pkgs.exhaustive
@@ -169,6 +157,7 @@
             pkgs
             scythe
             shellPackages
+            yarnBerry
             yarnDeps
             ;
         };

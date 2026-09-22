@@ -23,6 +23,14 @@ fi
 assert_version node 'v24.21.0' --version
 assert_version yarn '4.18.0' --version
 
+yarn_path=$(command -v yarn)
+yarn_node=$(sed -n '1s/^#!//p' "$yarn_path")
+yarn_node_version=$("$yarn_node" --version)
+if [ "$yarn_node_version" != 'v24.21.0' ]; then
+	echo "expected Yarn subprocess Node version 'v24.21.0', got '$yarn_node_version'" >&2
+	exit 1
+fi
+
 for command_name in scythe staticcheck exhaustive go-check-sumtype; do
 	command -v "$command_name" >/dev/null 2>&1 || {
 		echo "missing required command: $command_name" >&2

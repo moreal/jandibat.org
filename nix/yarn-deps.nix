@@ -9,9 +9,9 @@ let
   # current lockfile so the Nix cache can still include every supported target.
   missingHashes = ./yarn-missing-hashes.json;
 
-  yarnOfflineCache = pkgs.fetchYarnBerryDeps {
+  yarnOfflineCache = yarn.fetchYarnBerryDeps {
     yarnLock = ../yarn.lock;
-    hash = "sha256-TXY0YZ9aCKOnLemy7CnNg+v4xd2wa/DNNu+vYkMLs1w=";
+    hash = "sha256-1LcmKG9dDMiHplpLAqRusixbdoV9Rv9txcN3D6uo6dI=";
     inherit missingHashes;
   };
 in
@@ -28,6 +28,7 @@ in
         ../yarn.lock
         ../.yarnrc.yml
         ../apps/web/package.json
+        ../apps/web/tools/openapi-typescript-cli
         ../packages/contracts/package.json
         ../packages/custom-provider-sdk/package.json
       ];
@@ -40,7 +41,7 @@ in
     nativeBuildInputs = [
       nodejs
       yarn
-      pkgs.yarnBerryConfigHook
+      yarn.yarnBerryConfigHook
     ];
     dontYarnBerryPatchShebangs = true;
     dontBuild = true;

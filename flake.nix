@@ -103,6 +103,13 @@
 
           buildGoModule = pkgs.buildGoModule.override { inherit go; };
 
+          staticcheck = pkgs.go-tools.override { inherit buildGoModule; };
+
+          exhaustive = (pkgs.exhaustive.override { inherit buildGoModule; }).overrideAttrs (old: {
+            patches = old.patches ++ [ ./nix/exhaustive-go127.patch ];
+            vendorHash = "sha256-rJB0xI6ZUwHd1Tk62+1jI0ymUYnExGPoND7h7cN7Vsg=";
+          });
+
           goCheckSumtype = buildGoModule {
             pname = "go-check-sumtype";
             version = "0.5.0";
@@ -144,8 +151,8 @@
             nodejs
             yarnBerry
             scythe
-            pkgs.go-tools
-            pkgs.exhaustive
+            staticcheck
+            exhaustive
             goCheckSumtype
           ];
         in
@@ -153,10 +160,12 @@
           inherit
             go
             goCheckSumtype
+            exhaustive
             nodejs
             pkgs
             scythe
             shellPackages
+            staticcheck
             yarnBerry
             yarnDeps
             ;

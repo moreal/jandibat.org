@@ -1,9 +1,7 @@
 package apihttp
 
 import (
-	"bytes"
 	"encoding/json"
-	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,15 +9,14 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5/middleware"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestRecoverProblemsUsesSanitizedRFC9457Response(t *testing.T) {
-	var logs bytes.Buffer
-	previousLogOutput := log.Writer()
-	log.SetOutput(&logs)
-	t.Cleanup(func() { log.SetOutput(previousLogOutput) })
+	core, logs := observer.New(zap.InfoLevel)
 	const panicSecret = "provider password=do-not-leak"
-	handler := middleware.RequestID(recoverProblems(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := middleware.RequestID(recoverProblems(zap.New(core))(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Length", "999")
 		w.Header().Set("Content-Encoding", "gzip")
 		w.Header().Set("ETag", `"stale"`)
@@ -32,8 +29,15 @@ func TestRecoverProblemsUsesSanitizedRFC9457Response(t *testing.T) {
 	if strings.Contains(recorder.Body.String(), panicSecret) {
 		t.Fatalf("panic detail leaked in response: %s", recorder.Body.String())
 	}
-	if strings.Contains(logs.String(), panicSecret) || strings.Contains(logs.String(), "password") {
-		t.Fatalf("panic detail leaked in logs: %s", logs.String())
+	entries := logs.All()
+	if len(entries) != 1 || entries[0].ContextMap()["event"] != "http.panic_recovered" {
+		t.Fatalf("panic log entries = %#v", entries)
+	}
+	for _, field := range entries[0].ContextMap() {
+		value, _ := field.(string)
+		if strings.Contains(value, panicSecret) || strings.Contains(value, "password") {
+			t.Fatalf("panic detail leaked in logs: %#v", entries)
+		}
 	}
 	for _, name := range []string{"Content-Length", "Content-Encoding", "ETag"} {
 		if got := recorder.Header().Get(name); got != "" {

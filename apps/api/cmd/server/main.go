@@ -15,6 +15,7 @@ import (
 	"github.com/moreal/jandibat.org/apps/api/internal/observability"
 	"github.com/moreal/jandibat.org/apps/api/internal/operations"
 	"github.com/moreal/jandibat.org/apps/api/internal/processruntime"
+	"go.uber.org/zap"
 )
 
 const (
@@ -26,13 +27,25 @@ const (
 )
 
 func main() {
-	if err := run(); err != nil {
-		observability.Logf("api.process_stopped", "%v", err)
+	if run() != nil {
 		os.Exit(1)
 	}
 }
 
 func run() (resultErr error) {
+	resource := observability.ResourceFromEnvironment("")
+	logger, syncLogger, err := observability.NewLogger(observability.Config{
+		Service: "api", Resource: resource, Development: resource.Environment != config.EnvironmentProduction,
+	})
+	if err != nil {
+		return fmt.Errorf("construct logger: %w", err)
+	}
+	defer func() {
+		if resultErr != nil {
+			observability.Log(logger, "api.process_stopped", observability.SafeError(resultErr))
+		}
+		resultErr = errors.Join(resultErr, syncLogger())
+	}()
 	settings, err := config.Load(os.LookupEnv)
 	if err != nil {
 		return fmt.Errorf("configuration error: %w", err)
@@ -40,7 +53,7 @@ func run() (resultErr error) {
 	observability.Default().SetResource(observability.ResourceFromEnvironment(settings.Environment))
 
 	startupContext, startupCancel := context.WithTimeout(context.Background(), 15*time.Second)
-	app, err := buildApplication(startupContext, settings)
+	app, err := buildApplication(startupContext, settings, logger)
 	startupCancel()
 	if err != nil {
 		return fmt.Errorf("startup error: %w", err)
@@ -57,7 +70,7 @@ func run() (resultErr error) {
 
 	serverErrors := make(chan error, 1)
 	go func() {
-		observability.Logf("api.listening", "address=%s", settings.APIAddress)
+		observability.Log(logger, "api.listening", zap.String("address", settings.APIAddress))
 		serverErrors <- server.ListenAndServe()
 	}()
 	backgroundErrors := make(chan error, 1)
@@ -83,12 +96,12 @@ func run() (resultErr error) {
 				processErr = errors.New("background workers stopped unexpectedly")
 			}
 		} else if err != nil {
-			observability.Logf("api.background_stop_failed", "%v", err)
+			observability.Log(logger, "api.background_stop_failed", observability.SafeError(err))
 		}
 		backgroundStopped = true
 		stop()
 	case <-ctx.Done():
-		observability.Logf("api.shutdown_started", "signal received")
+		observability.Log(logger, "api.shutdown_started", zap.String("reason", "signal"))
 	}
 
 	shutdownContext, cancel := context.WithTimeout(context.Background(), settings.ShutdownTimeout)
@@ -101,7 +114,7 @@ func run() (resultErr error) {
 		select {
 		case err := <-backgroundErrors:
 			if err != nil {
-				observability.Logf("api.background_stop_failed", "%v", err)
+				observability.Log(logger, "api.background_stop_failed", observability.SafeError(err))
 			}
 		case <-shutdownContext.Done():
 			processErr = errors.Join(processErr, errors.New("background workers did not stop before the shutdown deadline"))

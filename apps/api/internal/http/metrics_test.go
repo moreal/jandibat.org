@@ -94,6 +94,24 @@ func TestMetricsRejectsForwardedLoopbackRequestAndIgnoresSpoofedXFF(t *testing.T
 	}
 }
 
+func TestTrustedProxyHeadersRejectsDuplicatePhysicalFieldLines(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.RemoteAddr = "198.51.100.2:12345"
+	request.Header.Add("X-Real-IP", "127.0.0.1")
+	request.Header.Add("X-Real-IP", "198.51.100.3")
+	recorder := httptest.NewRecorder()
+	var remoteAddress string
+
+	trustedProxyHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		remoteAddress = r.RemoteAddr
+		w.WriteHeader(http.StatusNoContent)
+	})).ServeHTTP(recorder, request)
+
+	if remoteAddress != "198.51.100.2:12345" {
+		t.Fatalf("duplicate X-Real-IP changed remote address to %q", remoteAddress)
+	}
+}
+
 func TestObservedCustomIngestCountsEveryEventOutcome(t *testing.T) {
 	registry := observability.NewRegistry(observability.Resource{Environment: "test"})
 	service := observedCustomProviders{

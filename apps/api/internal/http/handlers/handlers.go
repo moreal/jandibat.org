@@ -32,6 +32,7 @@ import (
 	"github.com/moreal/jandibat.org/apps/api/internal/operations"
 	"github.com/moreal/jandibat.org/apps/api/internal/render"
 	"github.com/moreal/jandibat.org/apps/api/internal/subjects"
+	"go.uber.org/zap"
 )
 
 const maxRequestBytes int64 = 1 << 20
@@ -143,6 +144,7 @@ type SubjectDeletionWorkflow interface {
 }
 
 type Dependencies struct {
+	Logger            *zap.Logger
 	Timeline          TimelineService
 	Readiness         ReadinessChecker
 	Audit             AuditRecorder
@@ -508,7 +510,8 @@ func (s *Server) RequestMagicLink(w http.ResponseWriter, r *http.Request) {
 		// A provider can reject individual recipients synchronously. Exposing
 		// that distinction would turn this endpoint into a mailbox oracle. Keep
 		// an internal, correlation-only signal and return the same public result.
-		observability.Logf("auth.magic_link_delivery_failed", "request_id=%s", middleware.GetReqID(r.Context()))
+		observability.Log(s.deps.Logger, "auth.magic_link_delivery_failed",
+			observability.SafeString("request_id", middleware.GetReqID(r.Context())))
 	}
 	writeJSON(w, http.StatusAccepted, map[string]bool{"accepted": true})
 }

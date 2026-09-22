@@ -20,6 +20,7 @@ import (
 	"github.com/moreal/jandibat.org/apps/api/internal/http/handlers"
 	"github.com/moreal/jandibat.org/apps/api/internal/observability"
 	"github.com/moreal/jandibat.org/apps/api/internal/operations"
+	"go.uber.org/zap"
 )
 
 // Dependencies is the HTTP composition root.  Keeping it here makes the
@@ -33,6 +34,11 @@ func NewRouter(dependencies ...Dependencies) stdhttp.Handler {
 	var deps Dependencies
 	if len(dependencies) > 0 {
 		deps = dependencies[0]
+	}
+	logger := deps.Logger
+	if logger == nil {
+		logger = zap.NewNop()
+		deps.Logger = logger
 	}
 	if deps.CustomProviders != nil {
 		deps.CustomProviders = observedCustomProviders{next: deps.CustomProviders, metrics: observability.Default()}
@@ -53,9 +59,9 @@ func NewRouter(dependencies ...Dependencies) stdhttp.Handler {
 	// canceled only after auditRequests has enqueued the outcome and committed.
 	router.Use(timeoutProblems(30 * time.Second))
 	if deps.Audit != nil {
-		router.Use(auditRequests(deps.Audit, deps.AuditSourceKey, deps.RateLimiter, deps.MutationAudits))
+		router.Use(auditRequests(deps.Audit, deps.AuditSourceKey, deps.RateLimiter, deps.MutationAudits, logger))
 	}
-	router.Use(recoverProblems)
+	router.Use(recoverProblems(logger))
 	router.Use(securityHeaders)
 	router.Use(cors(deps.AllowedOrigins))
 	router.Use(csrf(deps.AllowedOrigins))
@@ -119,7 +125,15 @@ func trustedProxyHeaders(next stdhttp.Handler) stdhttp.Handler {
 	return stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 		var candidate string
 		for _, name := range []string{"True-Client-IP", "X-Real-IP", "X-Forwarded-For"} {
-			value := strings.TrimSpace(r.Header.Get(name))
+			values := r.Header.Values(name)
+			if len(values) > 1 {
+				candidate = ""
+				break
+			}
+			value := ""
+			if len(values) == 1 {
+				value = strings.TrimSpace(values[0])
+			}
 			if value == "" {
 				continue
 			}
@@ -139,27 +153,30 @@ func trustedProxyHeaders(next stdhttp.Handler) stdhttp.Handler {
 // recoverProblems preserves the router's RFC 9457 error contract for panics.
 // Once an application handler has committed a response it is too late to
 // replace it, so the middleware only writes a problem before the first byte.
-func recoverProblems(next stdhttp.Handler) stdhttp.Handler {
-	return stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
-		wrapped := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
-		defer func() {
-			recovered := recover()
-			if recovered == nil {
-				return
-			}
-			if recovered == stdhttp.ErrAbortHandler {
-				panic(recovered)
-			}
-			// Panic values may contain upstream bodies, tokens, or database error
-			// text. Keep the operational signal and correlation ID without
-			// serializing the recovered value into process logs.
-			observability.Logf("http.panic_recovered", "request_id=%s", middleware.GetReqID(r.Context()))
-			if r.Header.Get("Connection") != "Upgrade" && wrapped.Status() == 0 {
-				writeFrameworkProblem(wrapped, r, stdhttp.StatusInternalServerError, "Internal Server Error", "internal_error", "The service could not complete the request.")
-			}
-		}()
-		next.ServeHTTP(wrapped, r)
-	})
+func recoverProblems(logger *zap.Logger) func(stdhttp.Handler) stdhttp.Handler {
+	return func(next stdhttp.Handler) stdhttp.Handler {
+		return stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+			wrapped := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
+			defer func() {
+				recovered := recover()
+				if recovered == nil {
+					return
+				}
+				if recovered == stdhttp.ErrAbortHandler {
+					panic(recovered)
+				}
+				// Panic values may contain upstream bodies, tokens, or database error
+				// text. Keep the operational signal and correlation ID without
+				// serializing the recovered value into process logs.
+				observability.Log(logger, "http.panic_recovered",
+					observability.SafeString("request_id", middleware.GetReqID(r.Context())))
+				if r.Header.Get("Connection") != "Upgrade" && wrapped.Status() == 0 {
+					writeFrameworkProblem(wrapped, r, stdhttp.StatusInternalServerError, "Internal Server Error", "internal_error", "The service could not complete the request.")
+				}
+			}()
+			next.ServeHTTP(wrapped, r)
+		})
+	}
 }
 
 // timeoutProblems follows chi's cooperative timeout behavior while ensuring
@@ -245,12 +262,17 @@ func auditRequests(recorder handlers.AuditRecorder, sourceKey []byte, dependenci
 	sourceKey = append([]byte(nil), sourceKey...)
 	var limiter handlers.RateLimiter
 	var coordinator operations.MutationAuditCoordinator
+	logger := zap.NewNop()
 	for _, dependency := range dependencies {
 		switch typed := dependency.(type) {
 		case handlers.RateLimiter:
 			limiter = typed
 		case operations.MutationAuditCoordinator:
 			coordinator = typed
+		case *zap.Logger:
+			if typed != nil {
+				logger = typed
+			}
 		}
 	}
 	return func(next stdhttp.Handler) stdhttp.Handler {
@@ -285,7 +307,9 @@ func auditRequests(recorder handlers.AuditRecorder, sourceKey []byte, dependenci
 				err = recordHTTPMutationIntent(auditCtx, recorder, sourceKey, targetType, r)
 				cancel()
 				if err != nil {
-					observability.Logf("http.audit_intent_failed", "request_id=%s method=%s", middleware.GetReqID(r.Context()), r.Method)
+					observability.Log(logger, "http.audit_intent_failed",
+						observability.SafeString("request_id", middleware.GetReqID(r.Context())),
+						zap.String("method", r.Method))
 					writeAuditUnavailable(w, r)
 					return
 				}
@@ -326,7 +350,9 @@ func auditRequests(recorder handlers.AuditRecorder, sourceKey []byte, dependenci
 					}
 					cancel()
 					if eventErr != nil {
-						observability.Logf("http.audit_persist_failed", "request_id=%s action=%s", middleware.GetReqID(r.Context()), auditAction(r.Method, chi.RouteContext(r.Context()).RoutePattern()))
+						observability.Log(logger, "http.audit_persist_failed",
+							observability.SafeString("request_id", middleware.GetReqID(r.Context())),
+							observability.SafeString("action", auditAction(r.Method, chi.RouteContext(r.Context()).RoutePattern())))
 					}
 				}
 				setSecurityHeaders(w.Header())
@@ -366,7 +392,9 @@ func auditRequests(recorder handlers.AuditRecorder, sourceKey []byte, dependenci
 				if err != nil {
 					// The durable intent remains available for reconciliation when an
 					// outcome cannot be appended after the response was committed.
-					observability.Logf("http.audit_persist_failed", "request_id=%s action=%s", middleware.GetReqID(r.Context()), auditAction(r.Method, chi.RouteContext(r.Context()).RoutePattern()))
+					observability.Log(logger, "http.audit_persist_failed",
+						observability.SafeString("request_id", middleware.GetReqID(r.Context())),
+						observability.SafeString("action", auditAction(r.Method, chi.RouteContext(r.Context()).RoutePattern())))
 				}
 			}
 			if buffered != nil {

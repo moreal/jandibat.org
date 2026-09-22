@@ -10,6 +10,7 @@ import (
 	"github.com/moreal/jandibat.org/apps/api/internal/observability"
 	"github.com/moreal/jandibat.org/apps/api/internal/operations"
 	"github.com/moreal/jandibat.org/apps/api/internal/processruntime"
+	"go.uber.org/zap"
 )
 
 const (
@@ -73,18 +74,12 @@ type periodicWorker struct {
 	interval time.Duration
 	timeout  time.Duration
 	execute  func(context.Context) error
-	logf     func(string, ...any)
+	logger   *zap.Logger
 }
 
 func (worker *periodicWorker) Run(ctx context.Context) error {
 	if worker == nil || worker.interval <= 0 || worker.timeout <= 0 || worker.execute == nil {
 		return errors.New("runtime: invalid periodic worker")
-	}
-	logf := worker.logf
-	if logf == nil {
-		logf = func(format string, args ...any) {
-			observability.Logf("maintenance.periodic_failed", format, args...)
-		}
 	}
 	timer := time.NewTimer(0)
 	defer timer.Stop()
@@ -97,7 +92,8 @@ func (worker *periodicWorker) Run(ctx context.Context) error {
 			err := worker.execute(runCtx)
 			cancel()
 			if err != nil && ctx.Err() == nil {
-				logf("%s maintenance run failed: %v", worker.name, err)
+				observability.Log(worker.logger, "maintenance.periodic_failed",
+					zap.String("worker", worker.name), observability.SafeError(err))
 			}
 			timer.Reset(worker.interval)
 		}
@@ -108,7 +104,7 @@ func buildCredentialKeyring(settings config.Config) (operations.RotatingSecretCi
 	return processruntime.BuildCredentialKeyring(settings)
 }
 
-func buildOperationalRuntime(settings config.Config, stores databaseStores, keyring operations.RotatingSecretCipher) (operationalRuntime, error) {
+func buildOperationalRuntime(settings config.Config, stores databaseStores, keyring operations.RotatingSecretCipher, logger *zap.Logger) (operationalRuntime, error) {
 	metrics := observability.Default()
 	metrics.SetResource(observability.ResourceFromEnvironment(settings.Environment))
 	metrics.RegisterDBPool(stores.db)
@@ -145,6 +141,7 @@ func buildOperationalRuntime(settings config.Config, stores databaseStores, keyr
 	runtime.background = []namedBackgroundRunner{
 		{name: "credential re-encryption", runner: &periodicWorker{
 			name: "credential re-encryption", interval: defaultDuration(settings.ReencryptionInterval, time.Hour), timeout: timeout,
+			logger: logger,
 			execute: func(ctx context.Context) error {
 				result, runErr := reencryption.Run(ctx)
 				auditErr := recordMaintenance(ctx, recorder, "credential.reencrypt", runErr, map[string]any{
@@ -156,6 +153,7 @@ func buildOperationalRuntime(settings config.Config, stores databaseStores, keyr
 		}},
 		{name: "data retention", runner: &periodicWorker{
 			name: "data retention", interval: defaultDuration(settings.RetentionInterval, 24*time.Hour), timeout: timeout,
+			logger: logger,
 			execute: func(ctx context.Context) error {
 				result, runErr := retention.Run(ctx)
 				deleted := make(map[string]any, len(result.Deleted))

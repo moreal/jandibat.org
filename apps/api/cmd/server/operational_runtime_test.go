@@ -67,7 +67,6 @@ func TestPeriodicWorkerRunsImmediatelyAndStopsWithContext(t *testing.T) {
 			cancel()
 			return nil
 		},
-		logf: func(string, ...any) {},
 	}
 	if err := worker.Run(ctx); err != nil {
 		t.Fatal(err)

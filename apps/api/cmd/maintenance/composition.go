@@ -12,9 +12,11 @@ import (
 	"github.com/moreal/jandibat.org/apps/api/internal/observability"
 	"github.com/moreal/jandibat.org/apps/api/internal/operations"
 	"github.com/moreal/jandibat.org/apps/api/internal/processruntime"
+	"go.uber.org/zap"
 )
 
 type maintenanceApplication struct {
+	logger               *zap.Logger
 	runner               processruntime.Runner
 	readiness            *operations.ReadinessChecker
 	metrics              *observability.Registry
@@ -52,7 +54,10 @@ type maintenanceClock struct{}
 
 func (maintenanceClock) Now() time.Time { return time.Now() }
 
-func buildMaintenance(ctx context.Context, settings config.Config) (*maintenanceApplication, error) {
+func buildMaintenance(ctx context.Context, settings config.Config, logger *zap.Logger) (*maintenanceApplication, error) {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
 	databaseURL, err := processruntime.DatabaseURL(settings, config.ProcessMaintenance)
 	if err != nil {
 		return nil, err
@@ -118,6 +123,7 @@ func buildMaintenance(ctx context.Context, settings config.Config) (*maintenance
 	runners := maintenanceRunnerGroup{
 		{Name: "account and subject deletion", Runner: &processruntime.PeriodicRunner{
 			Name: "account and subject deletion", Interval: time.Minute, Timeout: timeout,
+			Logger: logger,
 			Execute: func(runCtx context.Context) error {
 				result, runErr := deletions.Run(runCtx)
 				auditStarted := time.Now()
@@ -130,6 +136,7 @@ func buildMaintenance(ctx context.Context, settings config.Config) (*maintenance
 		}},
 		{Name: "credential re-encryption", Runner: &processruntime.PeriodicRunner{
 			Name: "credential re-encryption", Interval: durationOr(settings.ReencryptionInterval, time.Hour), Timeout: timeout,
+			Logger: logger,
 			Execute: func(runCtx context.Context) error {
 				result, runErr := reencryption.Run(runCtx)
 				auditStarted := time.Now()
@@ -143,6 +150,7 @@ func buildMaintenance(ctx context.Context, settings config.Config) (*maintenance
 		}},
 		{Name: "data retention", Runner: &processruntime.PeriodicRunner{
 			Name: "data retention", Interval: durationOr(settings.RetentionInterval, 24*time.Hour), Timeout: timeout,
+			Logger: logger,
 			Execute: func(runCtx context.Context) error {
 				result, runErr := retention.Run(runCtx)
 				deleted := make(map[string]any, len(result.Deleted))
@@ -174,7 +182,7 @@ func buildMaintenance(ctx context.Context, settings config.Config) (*maintenance
 	}
 
 	app := &maintenanceApplication{
-		runner: runners, readiness: readiness, metrics: metrics, store: store,
+		logger: logger, runner: runners, readiness: readiness, metrics: metrics, store: store,
 		retention: retention, reencrypt: reencryption, deletions: deletions, audit: audit, clock: maintenanceClock{}, close: database.Close,
 		deletionPseudonymKey: append([]byte(nil), settings.DeletionPseudonymKey...),
 	}

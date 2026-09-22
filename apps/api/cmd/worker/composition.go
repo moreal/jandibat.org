@@ -18,9 +18,11 @@ import (
 	"github.com/moreal/jandibat.org/apps/api/internal/observability"
 	"github.com/moreal/jandibat.org/apps/api/internal/operations"
 	"github.com/moreal/jandibat.org/apps/api/internal/processruntime"
+	"go.uber.org/zap"
 )
 
 type workerApplication struct {
+	logger    *zap.Logger
 	runner    processruntime.Runner
 	readiness *operations.ReadinessChecker
 	client    *http.Client
@@ -41,7 +43,10 @@ func (app *workerApplication) Close() error {
 	return nil
 }
 
-func buildWorker(ctx context.Context, settings config.Config) (*workerApplication, error) {
+func buildWorker(ctx context.Context, settings config.Config, logger *zap.Logger) (*workerApplication, error) {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
 	databaseURL, err := processruntime.DatabaseURL(settings, config.ProcessWorker)
 	if err != nil {
 		return nil, err
@@ -159,7 +164,7 @@ func buildWorker(ctx context.Context, settings config.Config) (*workerApplicatio
 		client.CloseIdleConnections()
 		return nil, fmt.Errorf("worker: construct readiness: %w", err)
 	}
-	app := &workerApplication{runner: runner, readiness: readiness, client: client, metrics: metrics, close: database.Close}
+	app := &workerApplication{logger: logger, runner: runner, readiness: readiness, client: client, metrics: metrics, close: database.Close}
 	success = true
 	return app, nil
 }

@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"time"
+
+	"github.com/moreal/jandibat.org/apps/api/internal/observability"
+	"go.uber.org/zap"
 )
 
 type Runner interface {
@@ -59,16 +61,12 @@ type PeriodicRunner struct {
 	Interval time.Duration
 	Timeout  time.Duration
 	Execute  func(context.Context) error
-	Logf     func(string, ...any)
+	Logger   *zap.Logger
 }
 
 func (runner *PeriodicRunner) Run(ctx context.Context) error {
 	if runner == nil || runner.Name == "" || runner.Interval <= 0 || runner.Timeout <= 0 || runner.Execute == nil {
 		return errors.New("runtime: invalid periodic runner")
-	}
-	logf := runner.Logf
-	if logf == nil {
-		logf = log.Printf
 	}
 	timer := time.NewTimer(0)
 	defer timer.Stop()
@@ -81,7 +79,8 @@ func (runner *PeriodicRunner) Run(ctx context.Context) error {
 			err := runner.Execute(runCtx)
 			cancel()
 			if err != nil && ctx.Err() == nil {
-				logf("%s run failed: %v", runner.Name, err)
+				observability.Log(runner.Logger, "runtime.periodic_failed",
+					zap.String("runner", runner.Name), observability.SafeError(err))
 			}
 			timer.Reset(runner.Interval)
 		}

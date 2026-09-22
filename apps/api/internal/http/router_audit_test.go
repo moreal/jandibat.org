@@ -1,11 +1,9 @@
 package apihttp
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -18,6 +16,8 @@ import (
 	"github.com/moreal/jandibat.org/apps/api/internal/http/handlers"
 	"github.com/moreal/jandibat.org/apps/api/internal/operations"
 	"github.com/moreal/jandibat.org/apps/api/internal/subjects"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 const auditTestSourceKey = "audit-pseudonym-test-key"
@@ -449,18 +449,14 @@ func TestAuditMiddlewareFailsClosedBeforeMutationWhenIntentSinkFails(t *testing.
 		t.Fatal(err)
 	}
 	handlerCalled := false
+	core, logs := observer.New(zap.InfoLevel)
 	router := chi.NewRouter()
 	router.Use(middleware.RequestID)
-	router.Use(auditRequests(recorder, []byte(auditTestSourceKey)))
+	router.Use(auditRequests(recorder, []byte(auditTestSourceKey), zap.New(core)))
 	router.Delete("/v1/subjects/{subject}", func(w http.ResponseWriter, _ *http.Request) {
 		handlerCalled = true
 		w.WriteHeader(http.StatusNoContent)
 	})
-
-	var logs bytes.Buffer
-	previousLogOutput := log.Writer()
-	log.SetOutput(&logs)
-	t.Cleanup(func() { log.SetOutput(previousLogOutput) })
 
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodDelete, "/v1/subjects/access_token=do-not-leak", nil))
@@ -496,9 +492,16 @@ func TestAuditMiddlewareFailsClosedBeforeMutationWhenIntentSinkFails(t *testing.
 	if _, exists := intent.Metadata["path"]; exists {
 		t.Fatalf("intent metadata includes raw path: %#v", intent.Metadata)
 	}
-	for _, secret := range []string{"password", "do-not-leak", "access_token", "provider body"} {
-		if strings.Contains(logs.String(), secret) {
-			t.Fatalf("audit failure log leaked %q: %s", secret, logs.String())
+	entries := logs.All()
+	if len(entries) != 1 || entries[0].ContextMap()["event"] != "http.audit_intent_failed" {
+		t.Fatalf("audit failure log entries = %#v", entries)
+	}
+	for _, value := range entries[0].ContextMap() {
+		text, _ := value.(string)
+		for _, secret := range []string{"password", "do-not-leak", "access_token", "provider body"} {
+			if strings.Contains(text, secret) {
+				t.Fatalf("audit failure log leaked %q: %#v", secret, entries)
+			}
 		}
 	}
 }

@@ -17,13 +17,14 @@ import (
 	"github.com/moreal/jandibat.org/apps/api/internal/integrations"
 	"github.com/moreal/jandibat.org/apps/api/internal/observability"
 	"github.com/moreal/jandibat.org/apps/api/internal/operations"
+	"go.uber.org/zap"
 )
 
 func TestBuildApplicationDevelopmentUsesExplicitDependencies(t *testing.T) {
 	settings := developmentConfig(t)
 	settings.DevelopmentAllInOne = true
 	settings.TrustProxyHeaders = true
-	app, err := buildApplication(context.Background(), settings)
+	app, err := buildApplication(context.Background(), settings, zap.NewNop())
 	if err != nil {
 		t.Fatalf("build application: %v", err)
 	}
@@ -130,7 +131,7 @@ func TestAPIProcessExposesSeparateLiveAndReadyEndpoints(t *testing.T) {
 
 func TestBuildApplicationDefaultsToAPIOnlyProcess(t *testing.T) {
 	settings := developmentConfig(t)
-	app, err := buildApplication(context.Background(), settings)
+	app, err := buildApplication(context.Background(), settings, zap.NewNop())
 	if err != nil {
 		t.Fatalf("build application: %v", err)
 	}

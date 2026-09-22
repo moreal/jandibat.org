@@ -34,6 +34,7 @@ import (
 	"github.com/moreal/jandibat.org/apps/api/internal/operations"
 	"github.com/moreal/jandibat.org/apps/api/internal/processruntime"
 	"github.com/moreal/jandibat.org/apps/api/internal/subjects"
+	"go.uber.org/zap"
 )
 
 var (
@@ -113,7 +114,10 @@ type databaseStores struct {
 	close        func() error
 }
 
-func buildApplication(ctx context.Context, settings config.Config) (*application, error) {
+func buildApplication(ctx context.Context, settings config.Config, logger *zap.Logger) (*application, error) {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
 	if err := validateRuntimeConfig(settings); err != nil {
 		return nil, err
 	}
@@ -173,7 +177,7 @@ func buildApplication(ctx context.Context, settings config.Config) (*application
 		return nil, err
 	}
 	cipher = observability.InstrumentCredentialCipher(cipher, observability.Default())
-	operational, err := buildOperationalRuntime(settings, stores, cipher)
+	operational, err := buildOperationalRuntime(settings, stores, cipher, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -276,6 +280,7 @@ func buildApplication(ctx context.Context, settings config.Config) (*application
 	}
 	app := &application{
 		dependencies: apihttp.Dependencies{
+			Logger:            logger,
 			Timeline:          timeline,
 			Readiness:         readiness,
 			Audit:             operational.audit,

@@ -127,6 +127,9 @@ func TestReencryptionSQLCoversEverySecretWithCAS(t *testing.T) {
 
 func TestRetentionQueriesAreBoundedAndAllowlisted(t *testing.T) {
 	wantFilters := map[operations.RetentionDataset][]string{
+		operations.RetentionAuditEvents:             nil,
+		operations.RetentionActivityFacts:           nil,
+		operations.RetentionCustomActivities:        nil,
 		operations.RetentionRevokedProviderMetadata: {"DELETE FROM provider_connections", "updated_at < $1", "status = 'revoked'"},
 		operations.RetentionOrphanedProviderEnvironments: {
 			"DELETE FROM environments", "updated_at < $1", "candidate.scope = 'subject'", "candidate.owner_subject_id IS NOT NULL",
@@ -135,8 +138,21 @@ func TestRetentionQueriesAreBoundedAndAllowlisted(t *testing.T) {
 			"provider_sync_jobs.environment_id = candidate.id", "custom_activity_events.environment_id = candidate.id",
 			"activity_facts.environment_id = candidate.id", "activity_refresh_cache.environment_id = candidate.id",
 		},
-		operations.RetentionSuccessfulSyncJobs: {"DELETE FROM provider_sync_jobs", "finished_at < $1", "status = 'succeeded'"},
-		operations.RetentionFailedSyncJobs:     {"DELETE FROM provider_sync_jobs", "finished_at < $1", "status IN ('failed', 'cancelled')"},
+		operations.RetentionSuccessfulSyncJobs:          {"DELETE FROM provider_sync_jobs", "finished_at < $1", "status = 'succeeded'"},
+		operations.RetentionFailedSyncJobs:              {"DELETE FROM provider_sync_jobs", "finished_at < $1", "status IN ('failed', 'cancelled')"},
+		operations.RetentionSessions:                    nil,
+		operations.RetentionMagicLinks:                  nil,
+		operations.RetentionMagicLinkMailOutbox:         nil,
+		operations.RetentionMutationAuditOutbox:         nil,
+		operations.RetentionAuthChallenges:              nil,
+		operations.RetentionIdempotencyKeys:             nil,
+		operations.RetentionTimelineCache:               nil,
+		operations.RetentionActivityRefresh:             nil,
+		operations.RetentionRateLimitBuckets:            nil,
+		operations.RetentionDeletedIdentityTombstones:   nil,
+		operations.RetentionDeletedIdentityTombstonesV2: nil,
+		operations.RetentionDeletionRequests:            nil,
+		operations.RetentionDeletionRequestInbox:        nil,
 	}
 	for dataset := range retentionSQLSpecs {
 		query, err := buildRetentionPurgeQuery(dataset)

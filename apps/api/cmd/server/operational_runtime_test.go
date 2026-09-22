@@ -88,15 +88,15 @@ func TestDefaultRetentionRulesMatchProviderMetadataAndSyncJobPolicy(t *testing.T
 	}
 
 	day := 24 * time.Hour
-	want := map[operations.RetentionDataset]time.Duration{
-		operations.RetentionRevokedProviderMetadata:      30 * day,
-		operations.RetentionOrphanedProviderEnvironments: 0,
-		operations.RetentionSuccessfulSyncJobs:           30 * day,
-		operations.RetentionFailedSyncJobs:               90 * day,
+	want := []operations.RetentionRule{
+		{Dataset: operations.RetentionRevokedProviderMetadata, RetainFor: 30 * day},
+		{Dataset: operations.RetentionOrphanedProviderEnvironments, RetainFor: 0},
+		{Dataset: operations.RetentionSuccessfulSyncJobs, RetainFor: 30 * day},
+		{Dataset: operations.RetentionFailedSyncJobs, RetainFor: 90 * day},
 	}
-	for dataset, duration := range want {
-		if got, ok := retention[dataset]; !ok || got != duration {
-			t.Errorf("retention[%q] = %s, %t; want %s", dataset, got, ok, duration)
+	for _, rule := range want {
+		if got, ok := retention[rule.Dataset]; !ok || got != rule.RetainFor {
+			t.Errorf("retention[%q] = %s, %t; want %s", rule.Dataset, got, ok, rule.RetainFor)
 		}
 	}
 }

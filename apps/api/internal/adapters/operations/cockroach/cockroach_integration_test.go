@@ -509,15 +509,14 @@ func TestCockroachAccountDeletionFailsClosedWithoutIdentityHMAC(t *testing.T) {
 		_, _ = db.ExecContext(context.Background(), `DELETE FROM deletion_requests WHERE request_id = $1`, requestID)
 		_, _ = db.ExecContext(context.Background(), `DELETE FROM users WHERE id = $1`, userID)
 	})
-	request, err := store.CreateOrLoadDeletion(ctx, operations.DeletionRequest{
+	if _, err := store.CreateOrLoadDeletion(ctx, operations.DeletionRequest{
 		RequestID: requestID, TargetType: operations.DeletionTargetAccount, TargetID: userID,
 		Status: operations.DeletionRequested, LastCompletedStage: operations.DeletionStageRequested,
 		RequestedAt: now, UpdatedAt: now,
-	})
-	if err != nil {
+	}); err != nil {
 		t.Fatal(err)
 	}
-	request, err = store.ClaimDeletion(ctx, requestID, now, now.Add(time.Minute))
+	request, err := store.ClaimDeletion(ctx, requestID, now, now.Add(time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}

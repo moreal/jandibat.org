@@ -38,7 +38,6 @@ import (
 
 var (
 	errDatabaseRequired   = errors.New("runtime: DATABASE_URL is required in production")
-	errSMTPRequired       = errors.New("runtime: complete SMTP configuration is required in production")
 	errOAuthRequired      = errors.New("runtime: complete OAuth configuration is required in production")
 	errHTTPSRequired      = errors.New("runtime: production public and web URLs must use HTTPS")
 	errAllInOneProduction = errors.New("runtime: development all-in-one mode is forbidden in production")

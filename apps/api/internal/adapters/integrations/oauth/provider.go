@@ -134,7 +134,7 @@ func (adapter *Adapter) RevokeToken(ctx context.Context, token []byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if len(token) == 0 || adapter.definition.revocationStyle == revocationLocalOnly {
+	if len(token) == 0 {
 		return nil
 	}
 
@@ -145,6 +145,8 @@ func (adapter *Adapter) RevokeToken(ctx context.Context, token []byte) error {
 		err     error
 	)
 	switch adapter.definition.revocationStyle {
+	case revocationLocalOnly:
+		return nil
 	case revocationGitHub:
 		endpoint := strings.TrimRight(adapter.endpoints.RevocationURL, "/") + "/" + url.PathEscape(adapter.clientID) + "/token"
 		body, marshalErr := json.Marshal(struct {

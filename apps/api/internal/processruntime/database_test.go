@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/moreal/jandibat.org/apps/api/internal/config"
 	"github.com/moreal/jandibat.org/apps/api/internal/observability"
@@ -39,7 +38,7 @@ func TestDatabasePoolConfigHasOneBoundedTracedCheckoutQueue(t *testing.T) {
 	if poolConfig.MaxConns != databaseMaxOpen || poolConfig.MaxConnIdleTime != 5*time.Minute || poolConfig.MaxConnLifetime != 30*time.Minute {
 		t.Fatalf("pool bounds = max %d, idle %s, lifetime %s", poolConfig.MaxConns, poolConfig.MaxConnIdleTime, poolConfig.MaxConnLifetime)
 	}
-	if _, ok := poolConfig.ConnConfig.Tracer.(pgx.QueryTracer); !ok {
+	if poolConfig.ConnConfig.Tracer == nil {
 		t.Fatal("database tracer does not observe SQL errors")
 	}
 	if _, ok := poolConfig.ConnConfig.Tracer.(pgxpool.AcquireTracer); !ok {

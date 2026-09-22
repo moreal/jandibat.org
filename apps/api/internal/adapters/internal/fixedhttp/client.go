@@ -170,9 +170,8 @@ func secureTransport(base http.RoundTripper, targets map[string]target, network 
 	}
 	clone := transport.Clone()
 	clone.Proxy = nil
-	clone.DialTLS = nil
-	clone.DialTLSContext = nil
-	clone.DialContext = newDialer(targets, network).DialContext
+	pinnedDialer := newDialer(targets, network)
+	clone.DialContext = pinnedDialer.DialContext
 	if clone.TLSClientConfig == nil {
 		clone.TLSClientConfig = &tls.Config{}
 	} else {
@@ -182,6 +181,25 @@ func secureTransport(base http.RoundTripper, targets map[string]target, network 
 	// Leave ServerName empty so crypto/tls derives and verifies the exact host
 	// from each request in a client that permits more than one fixed origin.
 	clone.TLSClientConfig.ServerName = ""
+	clone.DialTLSContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		connection, err := pinnedDialer.DialContext(ctx, network, address)
+		if err != nil {
+			return nil, err
+		}
+		host, _, err := net.SplitHostPort(address)
+		if err != nil {
+			_ = connection.Close()
+			return nil, ErrDialTargetNotAllowed
+		}
+		config := clone.TLSClientConfig.Clone()
+		config.ServerName = host
+		secured := tls.Client(connection, config)
+		if err := secured.HandshakeContext(ctx); err != nil {
+			_ = connection.Close()
+			return nil, err
+		}
+		return secured, nil
+	}
 	return clone, nil
 }
 

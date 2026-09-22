@@ -159,13 +159,17 @@ func (store staticConnections) CompleteOAuthConnection(_ context.Context, _ stri
 
 type recordedOAuthCompletion struct{ externalID, login string }
 
-type referenceResolver struct{ id, handle string }
+type referenceResolver struct {
+	id     string
+	handle string
+	err    error
+}
 
 func (resolver referenceResolver) ResolveSubjectID(context.Context, string) (string, error) {
-	return resolver.id, nil
+	return resolver.id, resolver.err
 }
 func (resolver referenceResolver) ResolveSubjectReference(context.Context, string) (string, string, error) {
-	return resolver.id, resolver.handle, nil
+	return resolver.id, resolver.handle, resolver.err
 }
 
 type recordingOAuthFlow struct {
@@ -277,6 +281,18 @@ func TestManagedPublicActivitySeparatesLocalSubjectFromProviderHandle(t *testing
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/v1/activities/octocat", nil))
 	if response.Code != http.StatusOK || timeline.input.Subject != "sub_018f" || timeline.input.ProviderSubject != "octocat" {
 		t.Fatalf("status=%d timeline input=%#v body=%s", response.Code, timeline.input, response.Body.String())
+	}
+}
+
+func TestManagedPublicActivityStopsWhenSubjectReferenceResolutionFails(t *testing.T) {
+	timeline := &recordingTimeline{}
+	router := apihttp.NewRouter(apihttp.Dependencies{
+		Timeline: timeline, SubjectResolver: referenceResolver{err: errors.New("resolver unavailable")},
+	})
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/v1/activities/octocat", nil))
+	if response.Code != http.StatusInternalServerError || timeline.calls != 0 {
+		t.Fatalf("status=%d timeline calls=%d body=%s", response.Code, timeline.calls, response.Body.String())
 	}
 }
 

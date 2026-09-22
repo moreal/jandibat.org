@@ -111,6 +111,38 @@ func TestAuthenticationCeremoniesEnforceRateLimitContract(t *testing.T) {
 	}
 }
 
+func TestTrustedProxyHeadersRequireOneCanonicalClientAddress(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		xForwarded string
+		xRealIP    string
+		want       string
+	}{
+		{name: "single rewritten address", xForwarded: "198.51.100.20", want: "198.51.100.20"},
+		{name: "ambiguous forwarding chain", xForwarded: "198.51.100.20, 127.0.0.1", want: "192.0.2.44"},
+		{name: "conflicting header families", xForwarded: "198.51.100.20", xRealIP: "203.0.113.8", want: "192.0.2.44"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			limiter := &denyingRateLimiter{}
+			router := apihttp.NewRouter(apihttp.Dependencies{
+				Auth: fakeAuth{}, RateLimiter: limiter, TrustProxyHeaders: true,
+			})
+			request := httptest.NewRequest(http.MethodPost, "/v1/auth/passkey/sign-in/options", strings.NewReader(`{"email":"person@example.com"}`))
+			request.RemoteAddr = "192.0.2.44:12345"
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("X-Forwarded-For", test.xForwarded)
+			request.Header.Set("X-Real-IP", test.xRealIP)
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+
+			assertContractProblem(t, response, http.StatusTooManyRequests, "rate_limited")
+			if len(limiter.keys) == 0 || limiter.keys[0] != test.want {
+				t.Fatalf("IP limiter keys = %v, want %q", limiter.keys, test.want)
+			}
+		})
+	}
+}
+
 type denyOwner struct{}
 
 func (denyOwner) OwnsSubject(context.Context, string, string) (bool, error) { return false, nil }

@@ -89,7 +89,7 @@ func New(config Config) (*Verifier, error) {
 	switch residentKey {
 	case protocol.ResidentKeyRequirementRequired:
 		selection.RequireResidentKey = protocol.ResidentKeyRequired()
-	default:
+	case protocol.ResidentKeyRequirementDiscouraged, protocol.ResidentKeyRequirementPreferred:
 		selection.RequireResidentKey = protocol.ResidentKeyNotRequired()
 	}
 

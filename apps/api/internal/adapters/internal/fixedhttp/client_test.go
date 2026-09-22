@@ -197,8 +197,14 @@ func TestNewClientPinsOriginsTLSAndTimeout(t *testing.T) {
 	if transport == baseTransport || transport.TLSClientConfig == baseTransport.TLSClientConfig {
 		t.Fatal("transport or TLS config was not cloned")
 	}
-	if transport.Proxy != nil || transport.DialContext == nil || transport.DialTLS != nil || transport.DialTLSContext != nil {
+	if transport.Proxy != nil || transport.DialContext == nil || transport.DialTLSContext == nil {
 		t.Fatal("transport can bypass pinned direct dialing")
+	}
+	if connection, err := transport.DialTLSContext(context.Background(), "tcp", "attacker.example:443"); !errors.Is(err, ErrDialTargetNotAllowed) {
+		if connection != nil {
+			_ = connection.Close()
+		}
+		t.Fatalf("TLS dial to foreign origin error=%v", err)
 	}
 	if transport.TLSClientConfig.InsecureSkipVerify || transport.TLSClientConfig.ServerName != "" {
 		t.Fatalf("TLS config insecure=%v serverName=%q", transport.TLSClientConfig.InsecureSkipVerify, transport.TLSClientConfig.ServerName)

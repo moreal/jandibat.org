@@ -464,6 +464,7 @@ func TestVerifyRegistrationRejectsUnboundAndInvalidResponses(t *testing.T) {
 		}, wantErr: ErrVerification},
 	}
 
+	//lint:ignore SA1012 The contract deliberately rejects a nil caller context.
 	if _, err := verifier.VerifyRegistration(nil, auth.RegistrationVerificationInput{}); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("VerifyRegistration(nil context) error = %v, want ErrInvalidInput", err)
 	}
@@ -584,6 +585,7 @@ func TestVerifyAuthenticationRejectsInvalidSecurityBindings(t *testing.T) {
 		}, response: validResponse, wantErr: ErrVerification, wantAlso: auth.ErrInvalidSignCount},
 	}
 
+	//lint:ignore SA1012 The contract deliberately rejects a nil caller context.
 	if _, err := verifier.VerifyAuthentication(nil, auth.AuthenticationVerificationInput{}); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("VerifyAuthentication(nil context) error = %v, want ErrInvalidInput", err)
 	}
@@ -899,14 +901,19 @@ func (a *virtualAuthenticator) authenticationResponse(t *testing.T, config authe
 
 func (a *virtualAuthenticator) cosePublicKey(t *testing.T) []byte {
 	t.Helper()
-	x := a.privateKey.PublicKey.X.FillBytes(make([]byte, 32))
-	y := a.privateKey.PublicKey.Y.FillBytes(make([]byte, 32))
+	publicKey, err := a.privateKey.PublicKey.Bytes()
+	if err != nil {
+		t.Fatalf("encode uncompressed public key: %v", err)
+	}
+	if len(publicKey) != 65 || publicKey[0] != 4 {
+		t.Fatalf("unexpected uncompressed public key encoding: %x", publicKey)
+	}
 	encoded, err := cbor.Marshal(map[int]any{
 		1:  int64(2),
 		3:  int64(-7),
 		-1: int64(1),
-		-2: x,
-		-3: y,
+		-2: publicKey[1:33],
+		-3: publicKey[33:],
 	})
 	if err != nil {
 		t.Fatalf("cbor.Marshal(COSE public key) error = %v", err)

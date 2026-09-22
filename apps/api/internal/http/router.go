@@ -47,7 +47,7 @@ func NewRouter(dependencies ...Dependencies) stdhttp.Handler {
 	router.Use(capturePeerAddress)
 	router.Use(observeHTTP(observability.Default()))
 	if deps.TrustProxyHeaders {
-		router.Use(middleware.RealIP)
+		router.Use(trustedProxyHeaders)
 	}
 	// The timeout must own the audit transaction lifetime. Its context is
 	// canceled only after auditRequests has enqueued the outcome and committed.
@@ -109,6 +109,31 @@ func NewRouter(dependencies ...Dependencies) stdhttp.Handler {
 	})
 
 	return router
+}
+
+// trustedProxyHeaders accepts exactly one canonical client address from a
+// deployment proxy that removes inbound forwarding headers before rewriting
+// them. Ambiguous chains or conflicting header families leave the direct peer
+// unchanged so attacker-controlled entries cannot become rate-limit keys.
+func trustedProxyHeaders(next stdhttp.Handler) stdhttp.Handler {
+	return stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+		var candidate string
+		for _, name := range []string{"True-Client-IP", "X-Real-IP", "X-Forwarded-For"} {
+			value := strings.TrimSpace(r.Header.Get(name))
+			if value == "" {
+				continue
+			}
+			if candidate != "" || strings.Contains(value, ",") {
+				candidate = ""
+				break
+			}
+			candidate = value
+		}
+		if address := net.ParseIP(candidate); address != nil {
+			r.RemoteAddr = address.String()
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // recoverProblems preserves the router's RFC 9457 error contract for panics.
@@ -558,14 +583,6 @@ func shouldAuditRequest(method, pattern string, _ int) bool {
 	// and the OAuth callback are included in mutationRoutePatterns.
 	_, knownMutation := mutationRequestTarget(method, pattern)
 	return knownMutation
-}
-
-func recordHTTPRequest(ctx context.Context, recorder handlers.AuditRecorder, sourceKey []byte, r *stdhttp.Request, status int) error {
-	event, err := httpRequestAuditEvent(sourceKey, r, status)
-	if err != nil {
-		return err
-	}
-	return recorder.Record(ctx, event)
 }
 
 func httpRequestAuditEvent(sourceKey []byte, r *stdhttp.Request, status int) (operations.AuditEvent, error) {

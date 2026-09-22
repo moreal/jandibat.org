@@ -11,8 +11,26 @@ import (
 func TestRetentionWorkerBatchesAndUsesSingleCutoff(t *testing.T) {
 	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.FixedZone("KST", 9*60*60))
 	store := &retentionStoreStub{responses: map[RetentionDataset][]purgeResponse{
-		RetentionAuditEvents: {{deleted: 2}, {deleted: 1}},
-		RetentionSessions:    {{deleted: 0}},
+		RetentionAuditEvents:                  {{deleted: 2}, {deleted: 1}},
+		RetentionActivityFacts:                nil,
+		RetentionCustomActivities:             nil,
+		RetentionRevokedProviderMetadata:      nil,
+		RetentionOrphanedProviderEnvironments: nil,
+		RetentionSuccessfulSyncJobs:           nil,
+		RetentionFailedSyncJobs:               nil,
+		RetentionSessions:                     {{deleted: 0}},
+		RetentionMagicLinks:                   nil,
+		RetentionMagicLinkMailOutbox:          nil,
+		RetentionMutationAuditOutbox:          nil,
+		RetentionAuthChallenges:               nil,
+		RetentionIdempotencyKeys:              nil,
+		RetentionTimelineCache:                nil,
+		RetentionActivityRefresh:              nil,
+		RetentionRateLimitBuckets:             nil,
+		RetentionDeletedIdentityTombstones:    nil,
+		RetentionDeletedIdentityTombstonesV2:  nil,
+		RetentionDeletionRequests:             nil,
+		RetentionDeletionRequestInbox:         nil,
 	}}
 	worker, err := NewRetentionWorker(store, retentionClock{now}, RetentionConfig{
 		Rules: []RetentionRule{
@@ -39,9 +57,26 @@ func TestRetentionWorkerBatchesAndUsesSingleCutoff(t *testing.T) {
 
 func TestRetentionWorkerIsolatesDatasetFailureAndBoundsWork(t *testing.T) {
 	store := &retentionStoreStub{responses: map[RetentionDataset][]purgeResponse{
-		RetentionAuditEvents: {{err: errors.New("audit unavailable")}},
-		RetentionSessions:    {{deleted: 2}, {deleted: 2}},
-		RetentionMagicLinks:  {{deleted: 1}},
+		RetentionAuditEvents:                  {{err: errors.New("audit unavailable")}},
+		RetentionActivityFacts:                nil,
+		RetentionCustomActivities:             nil,
+		RetentionRevokedProviderMetadata:      nil,
+		RetentionOrphanedProviderEnvironments: nil,
+		RetentionSuccessfulSyncJobs:           nil,
+		RetentionFailedSyncJobs:               nil,
+		RetentionSessions:                     {{deleted: 2}, {deleted: 2}},
+		RetentionMagicLinks:                   {{deleted: 1}},
+		RetentionMagicLinkMailOutbox:          nil,
+		RetentionMutationAuditOutbox:          nil,
+		RetentionAuthChallenges:               nil,
+		RetentionIdempotencyKeys:              nil,
+		RetentionTimelineCache:                nil,
+		RetentionActivityRefresh:              nil,
+		RetentionRateLimitBuckets:             nil,
+		RetentionDeletedIdentityTombstones:    nil,
+		RetentionDeletedIdentityTombstonesV2:  nil,
+		RetentionDeletionRequests:             nil,
+		RetentionDeletionRequestInbox:         nil,
 	}}
 	worker, _ := NewRetentionWorker(store, retentionClock{time.Now()}, RetentionConfig{
 		Rules: []RetentionRule{
@@ -76,7 +111,28 @@ func TestRetentionWorkerRejectsUnsafeConfig(t *testing.T) {
 
 func TestRetentionOperatorDryRunDoesNotDeleteOrCheckpoint(t *testing.T) {
 	now := time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC)
-	store := &retentionStoreStub{counts: map[RetentionDataset]int64{RetentionAuditEvents: 7}}
+	store := &retentionStoreStub{counts: map[RetentionDataset]int64{
+		RetentionAuditEvents:                  7,
+		RetentionActivityFacts:                0,
+		RetentionCustomActivities:             0,
+		RetentionRevokedProviderMetadata:      0,
+		RetentionOrphanedProviderEnvironments: 0,
+		RetentionSuccessfulSyncJobs:           0,
+		RetentionFailedSyncJobs:               0,
+		RetentionSessions:                     0,
+		RetentionMagicLinks:                   0,
+		RetentionMagicLinkMailOutbox:          0,
+		RetentionMutationAuditOutbox:          0,
+		RetentionAuthChallenges:               0,
+		RetentionIdempotencyKeys:              0,
+		RetentionTimelineCache:                0,
+		RetentionActivityRefresh:              0,
+		RetentionRateLimitBuckets:             0,
+		RetentionDeletedIdentityTombstones:    0,
+		RetentionDeletedIdentityTombstonesV2:  0,
+		RetentionDeletionRequests:             0,
+		RetentionDeletionRequestInbox:         0,
+	}}
 	worker, _ := NewRetentionWorker(store, retentionClock{now}, RetentionConfig{
 		Rules: []RetentionRule{{Dataset: RetentionAuditEvents, RetainFor: 400 * 24 * time.Hour}}, BatchSize: 2, MaxBatchesPerDataset: 2,
 	})
@@ -97,8 +153,26 @@ func TestRetentionOperatorDryRunDoesNotDeleteOrCheckpoint(t *testing.T) {
 func TestRetentionOperatorResumesFromDurableRuleCheckpoint(t *testing.T) {
 	now := time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC)
 	store := &retentionStoreStub{responses: map[RetentionDataset][]purgeResponse{
-		RetentionAuditEvents: {{deleted: 2}, {err: errors.New("stopped")}, {deleted: 1}},
-		RetentionSessions:    {{deleted: 0}},
+		RetentionAuditEvents:                  {{deleted: 2}, {err: errors.New("stopped")}, {deleted: 1}},
+		RetentionActivityFacts:                nil,
+		RetentionCustomActivities:             nil,
+		RetentionRevokedProviderMetadata:      nil,
+		RetentionOrphanedProviderEnvironments: nil,
+		RetentionSuccessfulSyncJobs:           nil,
+		RetentionFailedSyncJobs:               nil,
+		RetentionSessions:                     {{deleted: 0}},
+		RetentionMagicLinks:                   nil,
+		RetentionMagicLinkMailOutbox:          nil,
+		RetentionMutationAuditOutbox:          nil,
+		RetentionAuthChallenges:               nil,
+		RetentionIdempotencyKeys:              nil,
+		RetentionTimelineCache:                nil,
+		RetentionActivityRefresh:              nil,
+		RetentionRateLimitBuckets:             nil,
+		RetentionDeletedIdentityTombstones:    nil,
+		RetentionDeletedIdentityTombstonesV2:  nil,
+		RetentionDeletionRequests:             nil,
+		RetentionDeletionRequestInbox:         nil,
 	}}
 	worker, _ := NewRetentionWorker(store, retentionClock{now}, RetentionConfig{
 		Rules: []RetentionRule{{Dataset: RetentionAuditEvents}, {Dataset: RetentionSessions}}, BatchSize: 2, MaxBatchesPerDataset: 4,

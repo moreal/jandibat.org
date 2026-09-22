@@ -354,6 +354,9 @@ func (s *Server) timeline(r *http.Request) (appactivity.GetTimelineOutput, bool,
 	subjectID, providerSubject := requestedSubject, requestedSubject
 	if resolver, ok := s.deps.SubjectResolver.(SubjectReferenceResolver); ok {
 		subjectID, providerSubject, err = resolver.ResolveSubjectReference(r.Context(), requestedSubject)
+		if err != nil {
+			return appactivity.GetTimelineOutput{}, isPublic, err
+		}
 	} else if s.deps.SubjectResolver != nil {
 		subjectID, err = s.deps.SubjectResolver.ResolveSubjectID(r.Context(), requestedSubject)
 		if err != nil {
@@ -2166,10 +2169,6 @@ func isInvalidRequestError(err error) bool {
 		}
 	}
 	return false
-}
-
-func (s *Server) allowRequest(w http.ResponseWriter, r *http.Request, scope, key string) bool {
-	return s.allowRequests(w, r, rateLimitBucket{scope: scope, key: key})
 }
 
 type rateLimitBucket struct {

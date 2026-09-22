@@ -381,7 +381,7 @@ func cloneTLSConfig(source *tls.Config, host string) *tls.Config {
 }
 
 func validMagicLinkURL(candidate *url.URL) bool {
-	if candidate == nil || candidate.IsAbs() == false || candidate.Host == "" || candidate.User != nil {
+	if candidate == nil || !candidate.IsAbs() || candidate.Host == "" || candidate.User != nil {
 		return false
 	}
 	if candidate.Scheme == "https" {

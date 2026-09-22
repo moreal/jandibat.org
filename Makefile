@@ -95,6 +95,7 @@ contract-change-check:
 	sh scripts/check-contract-change.sh
 
 ci-version-authority-check:
+	sh scripts/check-ci-version-authority.test.sh
 	sh scripts/check-ci-version-authority.sh
 
 secret-scan:

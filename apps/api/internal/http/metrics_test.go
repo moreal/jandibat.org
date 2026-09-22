@@ -1,21 +1,25 @@
 package apihttp
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/moreal/jandibat.org/apps/api/internal/integrations"
 	"github.com/moreal/jandibat.org/apps/api/internal/observability"
+	"go.uber.org/zap/zapcore"
 )
 
 func TestObserveHTTPUsesRoutePatternAndBoundsUnknownMethod(t *testing.T) {
 	registry := observability.NewRegistry(observability.Resource{Environment: "test"})
 	router := chi.NewRouter()
-	router.Use(observeHTTP(registry))
+	router.Use(observeHTTP(registry, nil))
 	router.Get("/v1/subjects/{subject}", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
 
 	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/v1/subjects/private-user-id", nil))
@@ -34,6 +38,59 @@ func TestObserveHTTPUsesRoutePatternAndBoundsUnknownMethod(t *testing.T) {
 	}
 	if strings.Contains(body, "private-user-id") || strings.Contains(body, "/not-found/") {
 		t.Fatalf("raw request path or method leaked into labels:\n%s", body)
+	}
+}
+
+func TestRouterLogsCompletedRequestsWithoutRequestVariables(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		path          string
+		requestID     string
+		wantStatus    int
+		wantOperation string
+	}{
+		{name: "success", path: "/healthz", requestID: "request-success", wantStatus: http.StatusOK, wantOperation: "GET /healthz"},
+		{name: "failure", path: "/missing/private-id?access_token=query-secret", requestID: "request-failure", wantStatus: http.StatusNotFound, wantOperation: "GET unmatched"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var output bytes.Buffer
+			logger, _, err := observability.NewLogger(observability.Config{
+				Service: "api", Resource: observability.Resource{Environment: "production"}, Output: zapcore.AddSync(&output),
+			})
+			if err != nil {
+				t.Fatalf("NewLogger: %v", err)
+			}
+			request := httptest.NewRequest(http.MethodGet, test.path, nil)
+			request.Header.Set("X-Request-ID", test.requestID)
+			response := httptest.NewRecorder()
+
+			NewRouter(Dependencies{Logger: logger}).ServeHTTP(response, request)
+
+			if response.Code != test.wantStatus {
+				t.Fatalf("status = %d, want %d", response.Code, test.wantStatus)
+			}
+			var record map[string]any
+			if err := json.Unmarshal(bytes.TrimSpace(output.Bytes()), &record); err != nil {
+				t.Fatalf("decode request log: %v: %q", err, output.String())
+			}
+			if record["event"] != "http.request_completed" || record["request_id"] != test.requestID ||
+				record["method"] != http.MethodGet || record["operation"] != test.wantOperation ||
+				record["status"] != float64(test.wantStatus) {
+				t.Fatalf("request log = %#v", record)
+			}
+			duration, ok := record["duration"].(string)
+			if !ok {
+				t.Fatalf("duration = %#v, want encoded duration string", record["duration"])
+			}
+			if _, err := time.ParseDuration(duration); err != nil {
+				t.Fatalf("duration = %q: %v", duration, err)
+			}
+			for _, forbidden := range []string{"private-id", "access_token", "query-secret"} {
+				if strings.Contains(output.String(), forbidden) {
+					t.Errorf("request log leaked %q: %s", forbidden, output.String())
+				}
+			}
+		})
 	}
 }
 

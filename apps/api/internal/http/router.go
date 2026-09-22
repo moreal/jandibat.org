@@ -51,7 +51,7 @@ func NewRouter(dependencies ...Dependencies) stdhttp.Handler {
 	router.Use(requestIDHeader)
 	router.Use(cachePrivateByDefault)
 	router.Use(capturePeerAddress)
-	router.Use(observeHTTP(observability.Default()))
+	router.Use(observeHTTP(observability.Default(), logger))
 	if deps.TrustProxyHeaders {
 		router.Use(trustedProxyHeaders)
 	}

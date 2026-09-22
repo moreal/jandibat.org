@@ -31,11 +31,12 @@ type Resource struct {
 
 // ResourceFromEnvironment obtains resource identity from conventional
 // deployment variables. The configured application environment wins over
-// APP_ENV, while absent values remain explicitly visible as "unknown".
+// APP_ENV; an absent application environment follows Config's development
+// default while absent build and region values remain explicitly unknown.
 func ResourceFromEnvironment(environment string) Resource {
 	return Resource{
 		BuildSHA:    firstValue(os.Getenv("BUILD_SHA"), os.Getenv("GIT_SHA"), "unknown"),
-		Environment: firstValue(environment, os.Getenv("APP_ENV"), "unknown"),
+		Environment: firstValue(environment, os.Getenv("APP_ENV"), "development"),
 		Region:      firstValue(os.Getenv("REGION"), os.Getenv("FLY_REGION"), os.Getenv("AWS_REGION"), "unknown"),
 	}
 }

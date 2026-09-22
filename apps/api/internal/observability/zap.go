@@ -45,12 +45,13 @@ func NewLogger(config Config) (*zap.Logger, func() error, error) {
 	} else {
 		encoder = zapcore.NewJSONEncoder(encoderConfig)
 	}
-	logger := zap.New(zapcore.NewCore(encoder, output, zap.InfoLevel)).With(
+	core := newSafeCore(zapcore.NewCore(encoder, output, zap.InfoLevel),
 		zap.String("service", service),
 		zap.String("build_sha", resource.BuildSHA),
 		zap.String("environment", resource.Environment),
 		zap.String("region", resource.Region),
 	)
+	logger := zap.New(core)
 	return logger, func() error {
 		err := logger.Sync()
 		if errors.Is(err, syscall.EINVAL) || errors.Is(err, syscall.ENOTTY) {
@@ -66,29 +67,26 @@ func Log(logger *zap.Logger, event string, fields ...zap.Field) {
 	if logger == nil {
 		return
 	}
-	filtered := make([]zap.Field, 0, len(fields)+1)
-	for _, field := range fields {
-		switch field.Key {
-		case "service", "build_sha", "environment", "region", "event":
-			continue
-		default:
-			filtered = append(filtered, field)
-		}
-	}
 	event = boundedLogEvent(event)
-	filtered = append(filtered, zap.String("event", event))
-	logger.Info(event, filtered...)
+	safe := sanitizeLogFields(fields)
+	safe = append(safe, zap.String("event", event))
+	logger.Info(event, safe...)
 }
 
 // SafeString redacts credential-shaped content before Zap encodes the field.
 func SafeString(key, value string) zap.Field {
-	return zap.String(key, redactLogMessage(value))
+	field, ok := sanitizeLogField(zap.String(key, value))
+	if !ok {
+		return zap.Skip()
+	}
+	return field
 }
 
-// SafeError redacts credential-shaped error text before Zap encodes the field.
+// SafeError records only the bounded concrete error type. Opaque error text is
+// intentionally excluded because it can contain credentials without labels.
 func SafeError(err error) zap.Field {
 	if err == nil {
 		return zap.Skip()
 	}
-	return SafeString("error", err.Error())
+	return zap.String("failure_type", boundedLogType(err))
 }

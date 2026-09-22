@@ -83,8 +83,95 @@ func TestSafeFieldsRedactBeforeEncodingAndPreventLineInjection(t *testing.T) {
 			t.Errorf("JSON log leaked %q: %s", secret, output.String())
 		}
 	}
-	if got := strings.Count(output.String(), "[REDACTED]"); got != 6 {
-		t.Fatalf("redaction count = %d, want 6: %s", got, output.String())
+	if got := strings.Count(output.String(), "[REDACTED]"); got != 4 {
+		t.Fatalf("redaction count = %d, want 4: %s", got, output.String())
+	}
+	if !strings.Contains(output.String(), `"failure_type":"*errors.errorString"`) {
+		t.Fatalf("bounded error classification missing: %s", output.String())
+	}
+}
+
+func TestLoggerCoreRejectsUnsafeFieldsAndProtectsFixedSchema(t *testing.T) {
+	var output bytes.Buffer
+	logger, _, err := NewLogger(Config{
+		Service:  "api",
+		Resource: Resource{BuildSHA: "abc123", Environment: "production", Region: "icn"},
+		Output:   zapcore.AddSync(&output),
+	})
+	if err != nil {
+		t.Fatalf("NewLogger: %v", err)
+	}
+
+	logger.With(
+		zap.String("service", "derived-service-secret"),
+		zap.String("authorization", "derived-opaque-secret"),
+		zap.Error(errors.New("derived-unlabelled-error-secret")),
+		zap.Any("credentials", map[string]any{"secret": "opaque-sensitive-any-secret"}),
+		zap.Any("derived_payload", map[string]any{"password": "derived-nested-secret"}),
+		zap.Inline(hostileInlineFields{}),
+		zap.Namespace("derived_namespace"),
+		zap.String("region", "derived-region-secret"),
+	).Info("http.request_completed",
+		zap.String("event", "forged.event"),
+		zap.String("message", "message-field-secret"),
+		zap.String("token_value", "call-opaque-secret"),
+		zap.String("error", "string-error-secret"),
+		zap.String("error_type", "type-field-secret"),
+		zap.Error(errors.New("call-unlabelled-error-secret")),
+		zap.Any("payload", map[string]any{"secret": "call-nested-secret"}),
+		zap.Inline(hostileInlineFields{}),
+		zap.Namespace("call_namespace"),
+		zap.String("request_id", "request-123"),
+	)
+
+	encoded := output.String()
+	for _, secret := range []string{
+		"derived-service-secret", "derived-opaque-secret", "derived-unlabelled-error-secret", "opaque-sensitive-any-secret",
+		"derived-nested-secret", "inline-secret", "derived-region-secret", "forged.event",
+		"message-field-secret", "call-opaque-secret", "string-error-secret", "type-field-secret",
+		"call-unlabelled-error-secret", "call-nested-secret",
+	} {
+		if strings.Contains(encoded, secret) {
+			t.Errorf("logger leaked %q: %s", secret, encoded)
+		}
+	}
+	for _, key := range []string{"message", "service", "build_sha", "environment", "region", "event"} {
+		if got := strings.Count(encoded, `"`+key+`":`); got != 1 {
+			t.Errorf("JSON key %q count = %d, want 1: %s", key, got, encoded)
+		}
+	}
+	var record map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(output.Bytes()), &record); err != nil {
+		t.Fatalf("decode JSON log: %v: %s", err, encoded)
+	}
+	for key, want := range map[string]string{
+		"service": "api", "build_sha": "abc123", "environment": "production", "region": "icn",
+		"event": "http.request_completed", "request_id": "request-123",
+		"authorization": "[REDACTED]", "credentials": "[REDACTED]", "token_value": "[REDACTED]",
+	} {
+		if got := record[key]; got != want {
+			t.Errorf("record[%q] = %#v, want %q", key, got, want)
+		}
+	}
+	if _, exists := record["payload"]; exists {
+		t.Fatalf("unsafe nested payload was encoded: %#v", record)
+	}
+	if _, exists := record["derived_namespace"]; exists {
+		t.Fatalf("namespace was encoded: %#v", record)
+	}
+	if _, exists := record["call_namespace"]; exists {
+		t.Fatalf("namespace was encoded: %#v", record)
+	}
+	if _, exists := record["error_type"]; !exists {
+		t.Fatalf("bounded error classification missing: %#v", record)
+	}
+}
+
+func TestResourceFromEnvironmentDefaultsToDevelopment(t *testing.T) {
+	t.Setenv("APP_ENV", "")
+	resource := ResourceFromEnvironment("")
+	if resource.Environment != "development" {
+		t.Fatalf("environment = %q, want development", resource.Environment)
 	}
 }
 
@@ -118,3 +205,11 @@ type syncErrorWriter struct {
 }
 
 func (writer *syncErrorWriter) Sync() error { return writer.syncErr }
+
+type hostileInlineFields struct{}
+
+func (hostileInlineFields) MarshalLogObject(encoder zapcore.ObjectEncoder) error {
+	encoder.AddString("service", "inline-service-secret")
+	encoder.AddString("inline_value", "inline-secret")
+	return nil
+}

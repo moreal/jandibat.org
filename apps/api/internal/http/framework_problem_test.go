@@ -30,7 +30,7 @@ func TestRecoverProblemsUsesSanitizedRFC9457Response(t *testing.T) {
 		t.Fatalf("panic detail leaked in response: %s", recorder.Body.String())
 	}
 	entries := logs.All()
-	if len(entries) != 1 || entries[0].ContextMap()["event"] != "http.panic_recovered" {
+	if len(entries) != 1 || entries[0].Message != "http.panic_recovered" {
 		t.Fatalf("panic log entries = %#v", entries)
 	}
 	for _, field := range entries[0].ContextMap() {

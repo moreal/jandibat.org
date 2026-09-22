@@ -67,19 +67,13 @@ func Log(logger *zap.Logger, event string, fields ...zap.Field) {
 	if logger == nil {
 		return
 	}
-	event = boundedLogEvent(event)
-	safe := sanitizeLogFields(fields)
-	safe = append(safe, zap.String("event", event))
-	logger.Info(event, safe...)
+	logger.Info(event, fields...)
 }
 
-// SafeString redacts credential-shaped content before Zap encodes the field.
+// SafeString identifies a string field for the process logger's safe core.
+// Redaction happens exactly once at that final encoding boundary.
 func SafeString(key, value string) zap.Field {
-	field, ok := sanitizeLogField(zap.String(key, value))
-	if !ok {
-		return zap.Skip()
-	}
-	return field
+	return zap.String(key, value)
 }
 
 // SafeError records only the bounded concrete error type. Opaque error text is
@@ -88,5 +82,8 @@ func SafeError(err error) zap.Field {
 	if err == nil {
 		return zap.Skip()
 	}
-	return zap.String("failure_type", boundedLogType(err))
+	return zap.Field{
+		Key: failureTypeKey, Type: zapcore.ReflectType,
+		Interface: safeErrorValue{typeName: boundedLogType(err)},
+	}
 }

@@ -48,7 +48,11 @@ func TestNewLoggerProductionWritesOneJSONRecordWithFixedFields(t *testing.T) {
 
 func TestLogBoundsEventAndAddsTypedRequestFields(t *testing.T) {
 	core, observed := observer.New(zap.InfoLevel)
-	Log(zap.New(core), "ATTACK event", SafeString("request_id", "request-123"), zap.String("method", "POST"))
+	logger := zap.New(newSafeCore(core,
+		zap.String("service", "api"), zap.String("build_sha", "unknown"),
+		zap.String("environment", "test"), zap.String("region", "unknown"),
+	))
+	Log(logger, "ATTACK event", SafeString("request_id", "request-123"), zap.String("method", "POST"))
 
 	entries := observed.All()
 	if len(entries) != 1 {
@@ -104,6 +108,7 @@ func TestLoggerCoreRejectsUnsafeFieldsAndProtectsFixedSchema(t *testing.T) {
 
 	logger.With(
 		zap.String("service", "derived-service-secret"),
+		zap.String("failure_type", "derived-failure-type-secret"),
 		zap.String("authorization", "derived-opaque-secret"),
 		zap.Error(errors.New("derived-unlabelled-error-secret")),
 		zap.Any("credentials", map[string]any{"secret": "opaque-sensitive-any-secret"}),
@@ -117,6 +122,7 @@ func TestLoggerCoreRejectsUnsafeFieldsAndProtectsFixedSchema(t *testing.T) {
 		zap.String("token_value", "call-opaque-secret"),
 		zap.String("error", "string-error-secret"),
 		zap.String("error_type", "type-field-secret"),
+		zap.String("failure_type", "failure-field-secret"),
 		zap.Error(errors.New("call-unlabelled-error-secret")),
 		zap.Any("payload", map[string]any{"secret": "call-nested-secret"}),
 		zap.Inline(hostileInlineFields{}),
@@ -126,9 +132,9 @@ func TestLoggerCoreRejectsUnsafeFieldsAndProtectsFixedSchema(t *testing.T) {
 
 	encoded := output.String()
 	for _, secret := range []string{
-		"derived-service-secret", "derived-opaque-secret", "derived-unlabelled-error-secret", "opaque-sensitive-any-secret",
+		"derived-service-secret", "derived-failure-type-secret", "derived-opaque-secret", "derived-unlabelled-error-secret", "opaque-sensitive-any-secret",
 		"derived-nested-secret", "inline-secret", "derived-region-secret", "forged.event",
-		"message-field-secret", "call-opaque-secret", "string-error-secret", "type-field-secret",
+		"message-field-secret", "call-opaque-secret", "string-error-secret", "type-field-secret", "failure-field-secret",
 		"call-unlabelled-error-secret", "call-nested-secret",
 	} {
 		if strings.Contains(encoded, secret) {
@@ -162,8 +168,84 @@ func TestLoggerCoreRejectsUnsafeFieldsAndProtectsFixedSchema(t *testing.T) {
 	if _, exists := record["call_namespace"]; exists {
 		t.Fatalf("namespace was encoded: %#v", record)
 	}
-	if _, exists := record["error_type"]; !exists {
-		t.Fatalf("bounded error classification missing: %#v", record)
+	for _, key := range []string{"error_type", "failure_type"} {
+		if got := strings.Count(encoded, `"`+key+`":`); got != 0 {
+			t.Errorf("raw classification key %q count = %d, want 0: %s", key, got, encoded)
+		}
+	}
+}
+
+func TestRawZapErrorsAreDroppedAcrossLoggingPaths(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		emit func(*zap.Logger)
+	}{
+		{name: "direct info", emit: func(logger *zap.Logger) {
+			logger.Info("test.direct", zap.Error(errors.New("direct-error-secret")))
+		}},
+		{name: "Log helper", emit: func(logger *zap.Logger) {
+			Log(logger, "test.log", zap.Error(errors.New("helper-error-secret")))
+		}},
+		{name: "derived With", emit: func(logger *zap.Logger) {
+			logger.With(zap.Error(errors.New("derived-error-secret"))).Info("test.derived")
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			logger, output := newProductionTestLogger(t)
+			test.emit(logger)
+			encoded := output.String()
+			for _, secret := range []string{"direct-error-secret", "helper-error-secret", "derived-error-secret"} {
+				if strings.Contains(encoded, secret) {
+					t.Errorf("raw Zap error leaked %q: %s", secret, encoded)
+				}
+			}
+			for _, key := range []string{"error_type", "failure_type"} {
+				if got := strings.Count(encoded, `"`+key+`":`); got != 0 {
+					t.Errorf("raw Zap error emitted %q %d times, want 0: %s", key, got, encoded)
+				}
+			}
+		})
+	}
+}
+
+func TestSafeErrorProducesOneCanonicalClassificationAcrossLoggingPaths(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		emit func(*zap.Logger, error)
+	}{
+		{name: "direct info", emit: func(logger *zap.Logger, err error) {
+			logger.Info("test.direct", zap.String("failure_type", "direct-spoof-secret"), SafeError(err))
+		}},
+		{name: "Log helper", emit: func(logger *zap.Logger, err error) {
+			Log(logger, "test.log", zap.String("failure_type", "helper-spoof-secret"), SafeError(err))
+		}},
+		{name: "derived With", emit: func(logger *zap.Logger, err error) {
+			logger.With(zap.String("failure_type", "derived-spoof-secret"), SafeError(err)).Info("test.derived", SafeError(err))
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			logger, output := newProductionTestLogger(t)
+			test.emit(logger, classifiedTestError{})
+			encoded := output.String()
+			for _, secret := range []string{"direct-spoof-secret", "helper-spoof-secret", "derived-spoof-secret", classifiedErrorSecret} {
+				if strings.Contains(encoded, secret) {
+					t.Errorf("SafeError log leaked %q: %s", secret, encoded)
+				}
+			}
+			if got := strings.Count(encoded, `"failure_type":`); got != 1 {
+				t.Fatalf("failure_type count = %d, want 1: %s", got, encoded)
+			}
+			if got := strings.Count(encoded, `"error_type":`); got != 0 {
+				t.Fatalf("error_type count = %d, want 0: %s", got, encoded)
+			}
+			var record map[string]any
+			if err := json.Unmarshal(bytes.TrimSpace(output.Bytes()), &record); err != nil {
+				t.Fatalf("decode JSON log: %v: %s", err, encoded)
+			}
+			if record["failure_type"] != "observability.classifiedTestError" {
+				t.Fatalf("failure_type = %#v", record["failure_type"])
+			}
+		})
 	}
 }
 
@@ -205,6 +287,24 @@ type syncErrorWriter struct {
 }
 
 func (writer *syncErrorWriter) Sync() error { return writer.syncErr }
+
+func newProductionTestLogger(t *testing.T) (*zap.Logger, *bytes.Buffer) {
+	t.Helper()
+	var output bytes.Buffer
+	logger, _, err := NewLogger(Config{
+		Service: "api", Resource: Resource{Environment: "production"}, Output: zapcore.AddSync(&output),
+	})
+	if err != nil {
+		t.Fatalf("NewLogger: %v", err)
+	}
+	return logger, &output
+}
+
+const classifiedErrorSecret = "classified-error-secret"
+
+type classifiedTestError struct{}
+
+func (classifiedTestError) Error() string { return classifiedErrorSecret }
 
 type hostileInlineFields struct{}
 

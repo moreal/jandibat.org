@@ -493,7 +493,7 @@ func TestAuditMiddlewareFailsClosedBeforeMutationWhenIntentSinkFails(t *testing.
 		t.Fatalf("intent metadata includes raw path: %#v", intent.Metadata)
 	}
 	entries := logs.All()
-	if len(entries) != 1 || entries[0].ContextMap()["event"] != "http.audit_intent_failed" {
+	if len(entries) != 1 || entries[0].Message != "http.audit_intent_failed" {
 		t.Fatalf("audit failure log entries = %#v", entries)
 	}
 	for _, value := range entries[0].ContextMap() {

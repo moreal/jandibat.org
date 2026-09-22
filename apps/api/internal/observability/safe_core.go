@@ -11,6 +11,7 @@ import (
 
 const (
 	redactedLogValue = "[REDACTED]"
+	failureTypeKey   = "failure_type"
 	maxLogFieldKey   = 64
 	maxLogType       = 96
 )
@@ -18,7 +19,12 @@ const (
 var reservedLogFields = map[string]struct{}{
 	"timestamp": {}, "level": {}, "message": {}, "logger": {}, "caller": {}, "stacktrace": {},
 	"service": {}, "build_sha": {}, "environment": {}, "region": {}, "event": {},
+	"error_type": {}, failureTypeKey: {},
 }
+
+// safeErrorValue is package-private so callers cannot forge a field that the
+// core accepts as a diagnostic classification.
+type safeErrorValue struct{ typeName string }
 
 // safeCore owns the fixed record schema and sanitizes both fields attached by
 // Logger.With and fields supplied at a call site. The underlying encoder never
@@ -57,8 +63,23 @@ func (core *safeCore) Write(entry zapcore.Entry, fields []zap.Field) error {
 	entry.Message = event
 	safe := make([]zap.Field, 0, len(core.fixed)+len(core.context)+len(fields)+1)
 	safe = append(safe, core.fixed...)
-	safe = append(safe, core.context...)
-	safe = append(safe, sanitizeLogFields(fields)...)
+	var classification zap.Field
+	hasClassification := false
+	appendFields := func(fields []zap.Field) {
+		for _, field := range fields {
+			if field.Key == failureTypeKey {
+				classification = field
+				hasClassification = true
+				continue
+			}
+			safe = append(safe, field)
+		}
+	}
+	appendFields(core.context)
+	appendFields(sanitizeLogFields(fields))
+	if hasClassification {
+		safe = append(safe, classification)
+	}
 	safe = append(safe, zap.String("event", event))
 	return core.core.Write(entry, safe)
 }
@@ -82,11 +103,18 @@ func sanitizeLogField(field zap.Field) (zap.Field, bool) {
 	if !validLogFieldKey(field.Key) {
 		return zap.Field{}, false
 	}
+	if field.Key == failureTypeKey {
+		value, ok := field.Interface.(safeErrorValue)
+		if field.Type != zapcore.ReflectType || !ok {
+			return zap.Field{}, false
+		}
+		return zap.String(failureTypeKey, value.typeName), true
+	}
 	if _, reserved := reservedLogFields[field.Key]; reserved {
 		return zap.Field{}, false
 	}
 	if field.Type == zapcore.ErrorType {
-		return zap.String(field.Key+"_type", boundedLogType(field.Interface)), true
+		return zap.Field{}, false
 	}
 	if sensitiveLogKey(field.Key) {
 		return zap.String(field.Key, redactedLogValue), true

@@ -5,6 +5,7 @@ RUN corepack enable
 
 COPY package.json yarn.lock .yarnrc.yml ./
 COPY apps/web/package.json ./apps/web/package.json
+COPY apps/web/tools/openapi-typescript-cli/ ./apps/web/tools/openapi-typescript-cli/
 COPY packages/contracts/package.json ./packages/contracts/package.json
 COPY packages/custom-provider-sdk/package.json ./packages/custom-provider-sdk/package.json
 RUN yarn install --immutable

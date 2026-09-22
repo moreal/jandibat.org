@@ -1,0 +1,13 @@
+{
+  "name": "@jandibat/openapi-typescript-cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "openapi-typescript": "./cli.mjs"
+  },
+  "dependencies": {
+    "openapi-typescript": "7.13.0",
+    "typescript": "5.9.3"
+  }
+}

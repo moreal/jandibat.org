@@ -59,7 +59,7 @@ func run() (resultErr error) {
 	defer stop()
 	server := newHealthServer(settings.MaintenanceHealthAddress, newMaintenanceProcessHandler(
 		processruntime.NewHealthHandler(operations.NewLiveness(ctx.Done()), app.readiness), app.metrics.Handler(),
-	))
+	), logger)
 	observability.Log(logger, "maintenance.listening", zap.String("address", settings.MaintenanceHealthAddress))
 	return processruntime.ServeAndRun(ctx, server, app.runner, settings.ShutdownTimeout)
 }

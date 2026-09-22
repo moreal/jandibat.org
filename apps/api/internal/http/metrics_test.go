@@ -75,7 +75,7 @@ func TestRouterLogsCompletedRequestsWithoutRequestVariables(t *testing.T) {
 			}
 			if record["event"] != "http.request_completed" || record["request_id"] != test.requestID ||
 				record["method"] != http.MethodGet || record["operation"] != test.wantOperation ||
-				record["status"] != float64(test.wantStatus) {
+				record["status"] != float64(test.wantStatus) || record["outcome"] != "completed" {
 				t.Fatalf("request log = %#v", record)
 			}
 			duration, ok := record["duration"].(string)
@@ -92,6 +92,56 @@ func TestRouterLogsCompletedRequestsWithoutRequestVariables(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestObserveHTTPRecordsAbortedPanicsWithoutSuccessfulStatus(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		panicValue any
+	}{
+		{name: "abort handler", panicValue: http.ErrAbortHandler},
+		{name: "outer middleware panic", panicValue: "opaque-panic-secret"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			registry := observability.NewRegistry(observability.Resource{Environment: "test"})
+			var output bytes.Buffer
+			logger, _, err := observability.NewLogger(observability.Config{
+				Service: "api", Resource: observability.Resource{Environment: "production"}, Output: zapcore.AddSync(&output),
+			})
+			if err != nil {
+				t.Fatalf("NewLogger: %v", err)
+			}
+			router := chi.NewRouter()
+			router.Use(observeHTTP(registry, logger))
+			router.Get("/panic", func(http.ResponseWriter, *http.Request) { panic(test.panicValue) })
+
+			recovered := serveAndRecover(router, httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/panic", nil))
+			if recovered != test.panicValue {
+				t.Fatalf("recovered panic = %#v, want %#v", recovered, test.panicValue)
+			}
+			var record map[string]any
+			if err := json.Unmarshal(bytes.TrimSpace(output.Bytes()), &record); err != nil {
+				t.Fatalf("decode aborted request log: %v: %q", err, output.String())
+			}
+			if record["event"] != "http.request_completed" || record["outcome"] != "aborted" || record["status"] != float64(0) {
+				t.Fatalf("aborted request log = %#v", record)
+			}
+			if strings.Contains(output.String(), "opaque-panic-secret") {
+				t.Fatalf("aborted request log exposed panic value: %s", output.String())
+			}
+			metrics := httptest.NewRecorder()
+			registry.Handler().ServeHTTP(metrics, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+			if !strings.Contains(metrics.Body.String(), `http_server_requests_total{route="/panic",method="GET",status_class="unknown"`) {
+				t.Fatalf("aborted request metric missing unknown status:\n%s", metrics.Body.String())
+			}
+		})
+	}
+}
+
+func serveAndRecover(handler http.Handler, writer http.ResponseWriter, request *http.Request) (recovered any) {
+	defer func() { recovered = recover() }()
+	handler.ServeHTTP(writer, request)
+	return nil
 }
 
 func TestRouterExposesPrometheusMetrics(t *testing.T) {

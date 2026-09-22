@@ -49,32 +49,39 @@ func observeHTTP(registry *observability.Registry, logger *zap.Logger) func(stdh
 		return stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 			started := time.Now()
 			wrapped := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
+			completed := false
+			defer func() {
+				route := chi.RouteContext(r.Context()).RoutePattern()
+				if route == "" {
+					route = "unmatched"
+				}
+				method := boundedRequestMethod(r.Method)
+				status := wrapped.Status()
+				outcome := "aborted"
+				if completed {
+					outcome = "completed"
+					if status == 0 {
+						status = stdhttp.StatusOK
+					}
+				}
+				elapsed := time.Since(started)
+				observability.Log(logger, "http.request_completed",
+					observability.SafeString("request_id", middleware.GetReqID(r.Context())),
+					zap.String("method", method),
+					zap.String("operation", method+" "+route),
+					zap.String("outcome", outcome),
+					zap.Int("status", status),
+					zap.Duration("duration", elapsed),
+				)
+				// A scrape is operator instrumentation traffic, not an eligible user
+				// request. Excluding it also prevents each scrape from changing the
+				// family currently being collected.
+				if route != "/metrics" {
+					registry.ObserveHTTP(route, method, status, elapsed)
+				}
+			}()
 			next.ServeHTTP(wrapped, r)
-
-			route := chi.RouteContext(r.Context()).RoutePattern()
-			if route == "" {
-				route = "unmatched"
-			}
-			method := boundedRequestMethod(r.Method)
-			status := wrapped.Status()
-			if status == 0 {
-				status = stdhttp.StatusOK
-			}
-			elapsed := time.Since(started)
-			observability.Log(logger, "http.request_completed",
-				observability.SafeString("request_id", middleware.GetReqID(r.Context())),
-				zap.String("method", method),
-				zap.String("operation", method+" "+route),
-				zap.Int("status", status),
-				zap.Duration("duration", elapsed),
-			)
-			// A scrape is operator instrumentation traffic, not an eligible user
-			// request. Excluding it also prevents each scrape from changing the
-			// family currently being collected.
-			if route == "/metrics" {
-				return
-			}
-			registry.ObserveHTTP(route, method, status, elapsed)
+			completed = true
 		})
 	}
 }

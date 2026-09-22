@@ -46,6 +46,28 @@ func TestNewLoggerProductionWritesOneJSONRecordWithFixedFields(t *testing.T) {
 	}
 }
 
+func TestHTTPServerErrorLogDropsRawDiagnosticText(t *testing.T) {
+	logger, output := newProductionTestLogger(t)
+	serverLog := NewHTTPServerErrorLog(logger)
+	serverLog.Print("http: panic serving 127.0.0.1: opaque-server-secret\ngoroutine 42 [running]")
+
+	if strings.Count(output.String(), "\n") != 1 {
+		t.Fatalf("server diagnostic emitted multiple records: %q", output.String())
+	}
+	for _, forbidden := range []string{"opaque-server-secret", "panic serving", "goroutine 42"} {
+		if strings.Contains(output.String(), forbidden) {
+			t.Fatalf("server diagnostic exposed %q: %s", forbidden, output.String())
+		}
+	}
+	var record map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(output.Bytes()), &record); err != nil {
+		t.Fatalf("decode server diagnostic: %v: %s", err, output.String())
+	}
+	if record["event"] != "http.server_error" {
+		t.Fatalf("server diagnostic = %#v", record)
+	}
+}
+
 func TestLogBoundsEventAndAddsTypedRequestFields(t *testing.T) {
 	core, observed := observer.New(zap.InfoLevel)
 	logger := zap.New(newSafeCore(core,

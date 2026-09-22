@@ -3,6 +3,7 @@ package observability
 import (
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"syscall"
@@ -10,6 +11,19 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
+
+type httpServerErrorWriter struct{ logger *zap.Logger }
+
+func (writer httpServerErrorWriter) Write(diagnostic []byte) (int, error) {
+	Log(writer.logger, "http.server_error")
+	return len(diagnostic), nil
+}
+
+// NewHTTPServerErrorLog routes net/http diagnostics through the process logger
+// without forwarding panic values, peer addresses, or multiline stack text.
+func NewHTTPServerErrorLog(logger *zap.Logger) *log.Logger {
+	return log.New(httpServerErrorWriter{logger: logger}, "", 0)
+}
 
 // Config defines one process logger. Output is primarily an injection seam for
 // tests; processes write to stderr when it is omitted.

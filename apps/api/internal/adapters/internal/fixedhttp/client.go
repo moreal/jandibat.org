@@ -103,7 +103,7 @@ func NewClient(base *http.Client, endpoints []string, network Network, maximumTi
 		origins[originKey(parsed.Scheme, host, port)] = struct{}{}
 	}
 
-	transport, err := secureTransport(clone.Transport, targets, network, 0)
+	transport, err := secureTransport(clone.Transport, targets, network, maximumTimeout, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -150,7 +150,7 @@ func (transport *originTransport) RoundTrip(request *http.Request) (*http.Respon
 	return transport.next.RoundTrip(request)
 }
 
-func secureTransport(base http.RoundTripper, targets map[string]target, network Network, depth int) (http.RoundTripper, error) {
+func secureTransport(base http.RoundTripper, targets map[string]target, network Network, maximumTimeout time.Duration, depth int) (http.RoundTripper, error) {
 	if base == nil {
 		base = http.DefaultTransport
 	}
@@ -158,7 +158,7 @@ func secureTransport(base http.RoundTripper, targets map[string]target, network 
 		if depth >= 8 {
 			return nil, fmt.Errorf("%w: too many wrappers", ErrUnsupportedTransport)
 		}
-		secured, err := secureTransport(wrapper.ProviderBaseTransport(), targets, network, depth+1)
+		secured, err := secureTransport(wrapper.ProviderBaseTransport(), targets, network, maximumTimeout, depth+1)
 		if err != nil {
 			return nil, err
 		}
@@ -181,6 +181,10 @@ func secureTransport(base http.RoundTripper, targets map[string]target, network 
 	// Leave ServerName empty so crypto/tls derives and verifies the exact host
 	// from each request in a client that permits more than one fixed origin.
 	clone.TLSClientConfig.ServerName = ""
+	handshakeTimeout := clone.TLSHandshakeTimeout
+	if handshakeTimeout <= 0 || handshakeTimeout > maximumTimeout {
+		handshakeTimeout = maximumTimeout
+	}
 	clone.DialTLSContext = func(ctx context.Context, network, address string) (net.Conn, error) {
 		connection, err := pinnedDialer.DialContext(ctx, network, address)
 		if err != nil {
@@ -194,7 +198,19 @@ func secureTransport(base http.RoundTripper, targets map[string]target, network 
 		config := clone.TLSClientConfig.Clone()
 		config.ServerName = host
 		secured := tls.Client(connection, config)
+		deadline := time.Now().Add(handshakeTimeout)
+		if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
+			deadline = contextDeadline
+		}
+		if err := connection.SetDeadline(deadline); err != nil {
+			_ = connection.Close()
+			return nil, err
+		}
 		if err := secured.HandshakeContext(ctx); err != nil {
+			_ = connection.Close()
+			return nil, err
+		}
+		if err := connection.SetDeadline(time.Time{}); err != nil {
 			_ = connection.Close()
 			return nil, err
 		}

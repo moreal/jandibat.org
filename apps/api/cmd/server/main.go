@@ -66,7 +66,7 @@ func run() (resultErr error) {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	server := newHTTPServer(settings.APIAddress, newProcessHandler(app.dependencies, operations.NewLiveness(ctx.Done())))
+	server := newHTTPServer(settings.APIAddress, newProcessHandler(app.dependencies, operations.NewLiveness(ctx.Done())), logger)
 
 	serverErrors := make(chan error, 1)
 	go func() {
@@ -132,10 +132,11 @@ func newProcessHandler(dependencies apihttp.Dependencies, liveness operations.Li
 	return mux
 }
 
-func newHTTPServer(address string, handler http.Handler) *http.Server {
+func newHTTPServer(address string, handler http.Handler, logger *zap.Logger) *http.Server {
 	return &http.Server{
 		Addr:              address,
 		Handler:           handler,
+		ErrorLog:          observability.NewHTTPServerErrorLog(logger),
 		ReadHeaderTimeout: serverReadHeaderTimeout,
 		ReadTimeout:       serverReadTimeout,
 		WriteTimeout:      serverWriteTimeout,

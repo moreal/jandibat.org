@@ -1,9 +1,16 @@
 package fixedhttp
 
 import (
+	"bufio"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"errors"
+	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/netip"
@@ -215,6 +222,128 @@ func TestNewClientPinsOriginsTLSAndTimeout(t *testing.T) {
 	}
 	if _, err := client.Transport.RoundTrip(request); !errors.Is(err, ErrDialTargetNotAllowed) {
 		t.Fatalf("foreign origin error=%v", err)
+	}
+}
+
+func TestNewClientBoundsStalledTLSHandshake(t *testing.T) {
+	clientSide, serverSide := net.Pipe()
+	t.Cleanup(func() { _ = serverSide.Close() })
+	client, err := NewClient(&http.Client{Transport: &http.Transport{
+		TLSHandshakeTimeout: 40 * time.Millisecond,
+	}}, []string{"https://provider.example"}, Network{
+		Resolver: resolverFunc(func(context.Context, string, string) ([]netip.Addr, error) {
+			return []netip.Addr{netip.MustParseAddr("8.8.8.8")}, nil
+		}),
+		Dialer: dialerFunc(func(context.Context, string, string) (net.Conn, error) {
+			return clientSide, nil
+		}),
+	}, time.Second, nil)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	guard := client.Transport.(*originTransport)
+	transport := guard.next.(*http.Transport)
+
+	result := make(chan error, 1)
+	started := time.Now()
+	go func() {
+		connection, dialErr := transport.DialTLSContext(context.Background(), "tcp", "provider.example:443")
+		if connection != nil {
+			_ = connection.Close()
+		}
+		result <- dialErr
+	}()
+	select {
+	case dialErr := <-result:
+		if dialErr == nil {
+			t.Fatal("stalled TLS handshake unexpectedly succeeded")
+		}
+		if elapsed := time.Since(started); elapsed > 250*time.Millisecond {
+			t.Fatalf("TLS handshake returned after %s, want configured timeout", elapsed)
+		}
+	case <-time.After(250 * time.Millisecond):
+		_ = serverSide.Close()
+		t.Fatal("stalled TLS handshake ignored TLSHandshakeTimeout")
+	}
+}
+
+func TestNewClientClearsTLSHandshakeDeadlineAfterSuccess(t *testing.T) {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "example.com"}, DNSNames: []string{"example.com"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, publicKey, privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificate, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientSide, serverSide := net.Pipe()
+	t.Cleanup(func() { _ = serverSide.Close() })
+	serverResult := make(chan error, 1)
+	go func() {
+		defer serverSide.Close()
+		secured := tls.Server(serverSide, &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: privateKey}}})
+		if handshakeErr := secured.Handshake(); handshakeErr != nil {
+			serverResult <- handshakeErr
+			return
+		}
+		if _, readErr := http.ReadRequest(bufio.NewReader(secured)); readErr != nil {
+			serverResult <- readErr
+			return
+		}
+		_, writeErr := io.WriteString(secured, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+		serverResult <- writeErr
+	}()
+	roots := x509.NewCertPool()
+	roots.AddCert(certificate)
+	client, err := NewClient(&http.Client{Transport: &http.Transport{
+		TLSClientConfig:     &tls.Config{RootCAs: roots},
+		TLSHandshakeTimeout: 40 * time.Millisecond,
+	}}, []string{"https://example.com"}, Network{
+		Resolver: resolverFunc(func(context.Context, string, string) ([]netip.Addr, error) {
+			return []netip.Addr{netip.MustParseAddr("8.8.8.8")}, nil
+		}),
+		Dialer: dialerFunc(func(context.Context, string, string) (net.Conn, error) {
+			return clientSide, nil
+		}),
+	}, time.Second, nil)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	transport := client.Transport.(*originTransport).next.(*http.Transport)
+	connection, err := transport.DialTLSContext(context.Background(), "tcp", "example.com:443")
+	if err != nil {
+		t.Fatalf("DialTLSContext: %v", err)
+	}
+	defer connection.Close()
+
+	time.Sleep(60 * time.Millisecond)
+	request, err := http.NewRequest(http.MethodGet, "https://example.com/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := request.Write(connection); err != nil {
+		t.Fatalf("write after handshake timeout elapsed: %v", err)
+	}
+	response, err := http.ReadResponse(bufio.NewReader(connection), request)
+	if err != nil {
+		t.Fatalf("read after handshake timeout elapsed: %v", err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil || string(body) != "ok" {
+		t.Fatalf("response body = %q, %v", body, err)
+	}
+	if err := <-serverResult; err != nil {
+		t.Fatalf("TLS server: %v", err)
 	}
 }
 

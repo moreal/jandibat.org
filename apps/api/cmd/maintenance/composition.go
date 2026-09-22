@@ -283,9 +283,10 @@ func positiveOr(value, fallback int) int {
 	return value
 }
 
-func newHealthServer(address string, handler http.Handler) *http.Server {
+func newHealthServer(address string, handler http.Handler, logger *zap.Logger) *http.Server {
 	return &http.Server{
 		Addr: address, Handler: handler,
+		ErrorLog:          observability.NewHTTPServerErrorLog(logger),
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second,
 		WriteTimeout: 35 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10,
 	}

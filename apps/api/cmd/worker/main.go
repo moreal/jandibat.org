@@ -54,7 +54,7 @@ func run() (resultErr error) {
 	defer stop()
 	server := newHealthServer(settings.WorkerHealthAddress, newWorkerProcessHandler(
 		processruntime.NewHealthHandler(operations.NewLiveness(ctx.Done()), app.readiness), app.metrics.Handler(),
-	))
+	), logger)
 	observability.Log(logger, "worker.listening", zap.String("address", settings.WorkerHealthAddress))
 	return processruntime.ServeAndRun(ctx, server, app.runner, settings.ShutdownTimeout)
 }
@@ -68,9 +68,10 @@ func newWorkerProcessHandler(health, metrics http.Handler) http.Handler {
 	return mux
 }
 
-func newHealthServer(address string, handler http.Handler) *http.Server {
+func newHealthServer(address string, handler http.Handler, logger *zap.Logger) *http.Server {
 	return &http.Server{
 		Addr: address, Handler: handler,
+		ErrorLog:          observability.NewHTTPServerErrorLog(logger),
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second,
 		WriteTimeout: 35 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10,
 	}

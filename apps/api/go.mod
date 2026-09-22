@@ -1,8 +1,9 @@
 module github.com/moreal/jandibat.org/apps/api
 
-go 1.26.5
+go 1.27.1
 
 require (
+	github.com/fxamacker/cbor/v2 v2.6.0
 	github.com/go-chi/chi/v5 v5.3.0
 	github.com/go-webauthn/webauthn v0.10.2
 	github.com/jackc/pgx/v5 v5.9.2
@@ -10,7 +11,6 @@ require (
 )
 
 require (
-	github.com/fxamacker/cbor/v2 v2.6.0 // indirect
 	github.com/go-webauthn/x v0.1.9 // indirect
 	github.com/golang-jwt/jwt/v5 v5.2.2 // indirect
 	github.com/google/go-tpm v0.9.0 // indirect

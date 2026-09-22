@@ -25,9 +25,7 @@ Phase 0~3의 애플리케이션 코드와 로컬 운영 경로는 구현됐으�
 
 ## 로컬 요구 사항
 
-- Go 1.26.5(`go.work`/`apps/api/go.mod`와 CI에서 고정)
-- Node.js 24.18.0 LTS
-- Corepack과 Yarn 4.6.0(`package.json#packageManager` 기준)
+- Nix(flakes 활성화): Go, Node.js, Yarn, Scythe 및 Go 분석 도구 버전의 단일 진실 원천은 `flake.nix`입니다.
 - Docker Compose(CockroachDB를 사용하는 통합 개발 시)
 
 환경 변수의 기본값, 형식, production 필수값은 [`docs/CONFIGURATION.ko.md`](docs/CONFIGURATION.ko.md)에 정리돼 있습니다. 로컬 시작점은 추적 가능한 `.env.example`이며 실제 `.env`와 모든 `.env.*` 파일은 커밋하지 않습니다.
@@ -38,11 +36,16 @@ Nix를 사용하면 저장소에 고정된 Go, Node.js, Yarn 및 분석 도구�
 
 ```sh
 nix develop
-yarn install --immutable --immutable-cache
-make check
+yarn install --immutable
+make ci
 ```
 
-셸에 들어가지 않고 전체 검사를 실행하려면 `nix develop --command make check`를 사용합니다.
+첫 `yarn install --immutable`은 네트워크에서 패키지를 받아 추적하지 않는 로컬 `.yarn/cache`를
+채웁니다. 그 뒤에는 `yarn install --immutable --immutable-cache`로 네트워크 없는 재설치를
+검증할 수 있습니다. `make nix-check`는 모든 선언 시스템의 flake를 평가한 뒤 현재 호스트의
+고정 Yarn offline cache와 toolchain interface check를 빌드하는 저장소 무결성 게이트입니다.
+
+셸에 들어가지 않고 전체 검사를 실행하려면 `nix develop --command make ci`를 사용합니다.
 direnv 사용자는 선택적으로 `direnv allow`를 실행하면 추적된 `.envrc`가 같은 flake 개발 셸을
 자동으로 활성화합니다.
 
@@ -64,7 +67,7 @@ make check
 - Retention/re-encryption: `make dev-maintenance`
 - CockroachDB: `make db-up && make db-migrate`
 
-`make check`는 OpenAPI lint 및 생성 타입 drift 검사, secret/shell 검사, Go·프론트엔드 테스트, 프론트엔드 타입검사와 프로덕션 빌드를 실행합니다. 의존성 설치까지 포함해 CI와 같은 검사를 고정된 도구 버전으로 재현하려면 `mise exec -- make ci`를 사용합니다.
+`make check`는 OpenAPI lint 및 생성 타입 drift 검사, secret/shell 검사, Go·프론트엔드 테스트, 프론트엔드 타입검사와 프로덕션 빌드를 실행합니다. Nix flake 검사와 의존성 설치까지 포함해 CI와 같은 검사를 고정된 도구 버전으로 재현하려면 `nix develop --command make ci`를 사용합니다.
 
 OpenAPI 계약을 변경했다면 다음 세 파일을 한 변경 단위로 다룹니다.
 

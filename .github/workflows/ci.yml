@@ -28,6 +28,8 @@ jobs:
         uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
       - name: Cache the Nix store
         uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
+      - name: Evaluate all systems and build host flake checks
+        run: nix develop --command make nix-check
       - name: Install dependencies
         run: nix develop --command make install
       - name: Lint OpenAPI and detect generated type drift

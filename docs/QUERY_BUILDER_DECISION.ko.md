@@ -1,5 +1,9 @@
 # Go SQL 접근 방식 의사결정
 
+> 상태: 2026-09-22에 [`PLATFORM_MODERNIZATION_DESIGN.ko.md`](PLATFORM_MODERNIZATION_DESIGN.ko.md)로
+> 대체됨. 아래 내용은 과거 의사결정 기록이다. 새 구현은 공식 원본 Scythe의 CockroachDB +
+> Go pgx 지원을 먼저 검증하고, 확인된 결함에만 저장소 로컬 Nix patch를 적용한다.
+
 최종 갱신일: 2026-08-12
 
 ## 배경

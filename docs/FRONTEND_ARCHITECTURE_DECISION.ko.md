@@ -1,5 +1,9 @@
 # 프론트엔드 아키텍처 결정: Solid 2 공식 start mode
 
+> 상태: Solid 2 및 start mode 결정은 유지한다. 서버 상태를 지역 signal로만 관리한다는 결정은
+> 2026-09-22의 [`PLATFORM_MODERNIZATION_DESIGN.ko.md`](PLATFORM_MODERNIZATION_DESIGN.ko.md)로
+> 대체되었으며, 구현 후 `solid-relay`/Relay normalized store가 그 역할을 맡는다.
+
 - 상태: 채택
 - 결정일: 2026-08-14
 - 범위: `apps/web/**`

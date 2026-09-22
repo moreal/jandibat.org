@@ -11,7 +11,7 @@ let
 
   yarnOfflineCache = pkgs.fetchYarnBerryDeps {
     yarnLock = ../yarn.lock;
-    hash = "sha256-TK/WQeiWx/mO71skdRtmz8QZm9hMaKKfq+r/5bdzQZE=";
+    hash = "sha256-TXY0YZ9aCKOnLemy7CnNg+v4xd2wa/DNNu+vYkMLs1w=";
     inherit missingHashes;
   };
 in
@@ -36,7 +36,6 @@ in
     inherit missingHashes;
     YARN_APPROVED_GIT_REPOSITORIES = "**";
     YARN_ENABLE_SCRIPTS = "true";
-    YARN_LOCKFILE_VERSION_OVERRIDE = "8";
     YARN_NPM_MINIMAL_AGE_GATE = "0";
     nativeBuildInputs = [
       nodejs

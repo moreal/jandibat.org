@@ -186,9 +186,6 @@
               export GOTOOLCHAIN=local
               unset GOBIN
 
-              # The current lockfile is format 8; keep Yarn 4.18 from rewriting
-              # its format during immutable installs.
-              export YARN_LOCKFILE_VERSION_OVERRIDE=8
               export YARN_APPROVED_GIT_REPOSITORIES='**'
               export YARN_ENABLE_SCRIPTS=true
               export YARN_NPM_MINIMAL_AGE_GATE=0

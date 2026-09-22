@@ -12,6 +12,16 @@ make dev-api
 
 `.env`와 `.env.*`는 ignore되고 `.env.example`만 추적합니다. 실제 secret, access token, 개인 이메일은 예제 파일이나 저장소에 넣지 않습니다.
 
+## 개발과 CI 도구 버전
+
+Go, Node.js, Yarn과 `lint-api`가 사용하는 Go 정적 분석기의 버전은 루트 `flake.nix`와 `flake.lock`에서만 관리합니다. 로컬과 CI의 전체 검증 명령은 다음과 같습니다.
+
+```sh
+nix develop --command make ci
+```
+
+GitHub Actions는 commit SHA로 고정한 Nix 설치 및 캐시 action을 사용하고, 언어 도구를 쓰는 Make 대상을 `nix develop --command`로 실행합니다. Workflow에 `setup-go`, `setup-node`, Corepack 활성화 명령, 또는 별도의 `GO_VERSION`, `NODE_VERSION`, `YARN_VERSION` 환경 변수를 추가하지 않습니다. `make ci-version-authority-check`가 모든 GitHub workflow YAML에서 이 규칙을 검증합니다.
+
 ## 변수 목록
 
 | 변수 | 개발 기본값 | 형식과 용도 |

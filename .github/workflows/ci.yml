@@ -14,12 +14,6 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  NODE_VERSION: 24.18.0
-  YARN_VERSION: 4.6.0
-  GO_VERSION: 1.26.5
-  GO_SECURITY_VERSION: 1.26.5
-
 jobs:
   contract:
     name: OpenAPI contract
@@ -30,20 +24,20 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Set up Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-      - name: Activate pinned Yarn
-        run: corepack prepare yarn@${YARN_VERSION} --activate
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+      - name: Cache the Nix store
+        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
       - name: Install dependencies
-        run: yarn install --immutable
+        run: nix develop --command make install
       - name: Lint OpenAPI and detect generated type drift
-        run: yarn openapi:check
+        run: nix develop --command make openapi-check
+      - name: Enforce the single CI toolchain authority
+        run: nix develop --command make ci-version-authority-check
       - name: Require contract artifacts to move together
         env:
           CONTRACT_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: make contract-change-check
+        run: nix develop --command make contract-change-check
 
   backend:
     name: Go tests
@@ -53,13 +47,12 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
-      - name: Set up Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache-dependency-path: apps/api/go.sum
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+      - name: Cache the Nix store
+        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
       - name: Run tests, race detector, and static analysis
-        run: make test-api test-api-race vet-api
+        run: nix develop --command make test-api test-api-race lint-api
 
   migrations:
     name: CockroachDB migrations
@@ -69,33 +62,32 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
-      - name: Set up Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache-dependency-path: apps/api/go.sum
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+      - name: Cache the Nix store
+        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
       - name: Start CockroachDB
-        run: make db-up
+        run: nix develop --command make db-up
       - name: Apply migrations twice and verify checksums
         run: |
-          make db-migrate
-          make db-migrate
+          nix develop --command make db-migrate
+          nix develop --command make db-migrate
       - name: Prove failed DDL and migration ledger roll back together
-        run: make migration-atomicity-test
+        run: nix develop --command make migration-atomicity-test
       - name: Configure and verify least-privilege runtime roles
-        run: make db-runtime-roles-test
+        run: nix develop --command make db-runtime-roles-test
       - name: Exercise every Cockroach opt-in integration package
         env:
           JANDIBAT_TEST_DATABASE_URL: postgresql://root@127.0.0.1:26257/jandibat?sslmode=disable
           JANDIBAT_TEST_API_DATABASE_URL: postgresql://jandibat_api@127.0.0.1:26257/jandibat?sslmode=disable
           JANDIBAT_TEST_WORKER_DATABASE_URL: postgresql://jandibat_worker@127.0.0.1:26257/jandibat?sslmode=disable
           JANDIBAT_TEST_MAINTENANCE_DATABASE_URL: postgresql://jandibat_maintenance@127.0.0.1:26257/jandibat?sslmode=disable
-        run: make test-api-integration
+        run: nix develop --command make test-api-integration
       - name: Validate staging Compose configuration
-        run: make staging-compose-check monitoring-check
+        run: nix develop --command make staging-compose-check monitoring-check
       - name: Stop CockroachDB
         if: always()
-        run: make db-down
+        run: nix develop --command make db-down
 
   security:
     name: Dependency and static security
@@ -106,41 +98,32 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+      - name: Cache the Nix store
+        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
       - name: Scan commit history with Gitleaks
         uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GITLEAKS_ENABLE_COMMENTS: "false"
       - name: Scan repository for secret patterns
-        run: make secret-scan
-      - name: Set up security scanner Go toolchain
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
-        with:
-          go-version: ${{ env.GO_SECURITY_VERSION }}
-          cache-dependency-path: apps/api/go.sum
+        run: nix develop --command make secret-scan
       - name: Scan reachable Go vulnerabilities
-        working-directory: apps/api
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+        run: nix develop --command sh -c 'cd apps/api && go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...'
       - name: Run Go static security analysis
-        working-directory: apps/api
-        run: go run github.com/securego/gosec/v2/cmd/gosec@v2.28.0 -severity high -confidence medium -nosec-require-rules -nosec-require-justification ./...
-      - name: Set up Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-      - name: Activate pinned Yarn
-        run: corepack prepare yarn@${YARN_VERSION} --activate
+        run: nix develop --command sh -c 'cd apps/api && go run github.com/securego/gosec/v2/cmd/gosec@v2.28.0 -severity high -confidence medium -nosec-require-rules -nosec-require-justification ./...'
       - name: Install dependencies
-        run: yarn install --immutable
+        run: nix develop --command make install
       - name: Audit all JavaScript workspaces
-        run: yarn npm audit --all --recursive --severity high
+        run: nix develop --command yarn npm audit --all --recursive --severity high
       - name: Test security and recovery evidence validators
-        run: make security-review-validator-test audit-verifier-test restore-verifier-test
+        run: nix develop --command make security-review-validator-test audit-verifier-test restore-verifier-test
       - name: Require human review evidence for security-sensitive PRs
         if: github.event_name == 'pull_request'
         env:
           SECURITY_REVIEW_BASE: ${{ github.event.pull_request.base.sha }}
-        run: make security-review-gate
+        run: nix develop --command make security-review-gate
 
   frontend:
     name: Frontend typecheck and build
@@ -150,20 +133,18 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
-      - name: Set up Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-      - name: Activate pinned Yarn
-        run: corepack prepare yarn@${YARN_VERSION} --activate
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+      - name: Cache the Nix store
+        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
       - name: Install dependencies
-        run: yarn install --immutable
+        run: nix develop --command make install
       - name: Typecheck
-        run: make typecheck
+        run: nix develop --command make typecheck
       - name: Test
-        run: make test-web test-sdk
+        run: nix develop --command make test-web test-sdk
       - name: Build
-        run: make build-web
+        run: nix develop --command make build-web
 
   images:
     name: Production container builds

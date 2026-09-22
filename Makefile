@@ -1,12 +1,12 @@
 YARN ?= corepack yarn
 COCKROACH_DATABASE ?= jandibat
 
-.PHONY: install check ci nix-check tool-versions dev-web build-web test-web test-sdk typecheck typecheck-web typecheck-sdk dev-api dev-worker dev-maintenance test-api test-api-race test-api-integration vet-api lint-api openapi-lint openapi-types openapi-check contract-change-check secret-scan shell-check security-review-check security-review-gate security-review-validator-test audit-verifier-test restore-verifier-test migration-atomicity-test load-check security-smoke monitoring-check staging-compose-check deploy-staging rollback-rehearsal retention-dry-run retention-execute credential-reencrypt-dry-run credential-reencrypt-execute verify-deletion verify-audit-log db-up db-down db-logs db-shell db-wait db-migrate db-migrate-url db-configure-runtime-roles db-runtime-roles-test db-backup db-backup-schedule db-restore-verify
+.PHONY: install check ci nix-check tool-versions dev-web build-web test-web test-sdk typecheck typecheck-web typecheck-sdk dev-api dev-worker dev-maintenance test-api test-api-race test-api-integration vet-api lint-api openapi-lint openapi-types openapi-check contract-change-check ci-version-authority-check secret-scan shell-check security-review-check security-review-gate security-review-validator-test audit-verifier-test restore-verifier-test migration-atomicity-test load-check security-smoke monitoring-check staging-compose-check deploy-staging rollback-rehearsal retention-dry-run retention-execute credential-reencrypt-dry-run credential-reencrypt-execute verify-deletion verify-audit-log db-up db-down db-logs db-shell db-wait db-migrate db-migrate-url db-configure-runtime-roles db-runtime-roles-test db-backup db-backup-schedule db-restore-verify
 
 install:
 	$(YARN) install --immutable
 
-check: openapi-check secret-scan shell-check monitoring-check security-review-validator-test audit-verifier-test restore-verifier-test test-api test-api-race vet-api test-sdk test-web typecheck build-web
+check: openapi-check ci-version-authority-check secret-scan shell-check monitoring-check security-review-validator-test audit-verifier-test restore-verifier-test test-api test-api-race lint-api test-sdk test-web typecheck build-web
 
 ci: install check
 
@@ -93,6 +93,9 @@ openapi-check:
 
 contract-change-check:
 	sh scripts/check-contract-change.sh
+
+ci-version-authority-check:
+	sh scripts/check-ci-version-authority.sh
 
 secret-scan:
 	sh scripts/check-secrets.sh

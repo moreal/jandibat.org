@@ -41,6 +41,10 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+      - name: Cache the Nix store
+        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
       - name: Validate review evidence and reviewed code binding
         env:
           SECURITY_REVIEW: ${{ inputs.security_review_path }}
@@ -48,7 +52,7 @@ jobs:
           case "$SECURITY_REVIEW" in docs/evidence/security/*.md) ;; *) echo "invalid security review path" >&2; exit 2;; esac
           test -f "$SECURITY_REVIEW"
           reviewed_sha=$(awk -F '|' '$2 ~ /^[[:space:]]*Commit SHA[[:space:]]*$/ { gsub(/[[:space:]]/, "", $3); print $3; exit }' "$SECURITY_REVIEW")
-          node scripts/validate-security-review.mjs "$SECURITY_REVIEW" "$reviewed_sha"
+          SECURITY_REVIEW_SHA="$reviewed_sha" nix develop --command make security-review-check
           git merge-base --is-ancestor "$reviewed_sha" "$GITHUB_SHA"
           test -z "$(git diff --name-only "$reviewed_sha".."$GITHUB_SHA" | awk -v review="$SECURITY_REVIEW" '$0 != review { print }')"
 
@@ -126,10 +130,10 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
-      - name: Set up Node.js for evidence gates
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: 24.18.0
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+      - name: Cache the Nix store
+        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
       - name: Configure pinned SSH host identity
         env:
           SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
@@ -204,7 +208,7 @@ jobs:
           SECURITY_PRIVATE_SUBJECT: ${{ secrets.STAGING_PRIVATE_SUBJECT }}
           SECURITY_REQUIRE_EXTENDED: "true"
           SECURITY_SUBJECT: ${{ secrets.STAGING_PUBLIC_SUBJECT }}
-        run: node scripts/security-smoke.mjs
+        run: nix develop --command make security-smoke
       - name: Reconcile durable audit intent/outcome and deletion completion
         env:
           DEPLOY_DIR: ${{ secrets.STAGING_DEPLOY_DIR }}
@@ -228,7 +232,7 @@ jobs:
           LOAD_INGEST_PROVIDER_ID: ${{ secrets.STAGING_CUSTOM_PROVIDER_ID }}
           LOAD_INGEST_PROVIDER_KEY: ${{ secrets.STAGING_CUSTOM_PROVIDER_KEY }}
           LOAD_REQUIRE_INGEST: "true"
-        run: node scripts/load-check.mjs
+        run: nix develop --command make load-check
       - name: Record skipped load gate explicitly
         if: ${{ ! inputs.run_load_check }}
         run: printf '{"result":"not-run","reason":"workflow input run_load_check=false"}\n' >"$RUNNER_TEMP/staging-evidence/load.json"

@@ -34,6 +34,20 @@ Phase 0~3의 애플리케이션 코드와 로컬 운영 경로는 구현됐으�
 
 ## 빠른 시작
 
+Nix를 사용하면 저장소에 고정된 Go, Node.js, Yarn 및 분석 도구를 한 번에 사용할 수 있습니다.
+
+```sh
+nix develop
+yarn install --immutable --immutable-cache
+make check
+```
+
+셸에 들어가지 않고 전체 검사를 실행하려면 `nix develop --command make check`를 사용합니다.
+direnv 사용자는 선택적으로 `direnv allow`를 실행하면 추적된 `.envrc`가 같은 flake 개발 셸을
+자동으로 활성화합니다.
+
+Nix를 사용하지 않는 경우에는 다음과 같이 로컬 도구를 준비합니다.
+
 ```sh
 mise install # 선택 사항: 저장소에 고정된 Go/Node 버전 설치
 corepack enable

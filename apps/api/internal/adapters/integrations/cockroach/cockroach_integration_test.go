@@ -309,6 +309,56 @@ FROM provider_connections WHERE id = $1`, connectionID).Scan(&credentialColumnsN
 	if err != nil || committedRevoke.Connection.Status != integrations.ConnectionRevoked || len(committedRevoke.Credentials.AccessToken) != 0 {
 		t.Fatalf("connection after OAuth revoke = (%+v, %v)", committedRevoke.Connection, err)
 	}
+	err = appdb.InTx(ctx, workerPool, appdb.RetryOptions{}, func(txctx context.Context, _ pgx.Tx) error {
+		jobs, err := workerStore.ClaimOAuthTokenRevocations(txctx, syncedAt.Add(5*time.Second), syncedAt.Add(time.Minute), 1)
+		if err != nil || len(jobs) != 1 || jobs[0].ConnectionID != connectionID {
+			return fmt.Errorf("transactional worker claim = (%+v, %v)", jobs, err)
+		}
+		return rollbackProbe
+	})
+	if !errors.Is(err, rollbackProbe) {
+		t.Fatalf("rollback revocation claim = %v", err)
+	}
+	var claimStatus string
+	var claimAttempts int
+	if err := db.QueryRowContext(ctx, `SELECT status, attempts FROM provider_token_revocation_jobs WHERE connection_id=$1`, connectionID).Scan(&claimStatus, &claimAttempts); err != nil || claimStatus != "pending" || claimAttempts != 0 {
+		t.Fatalf("revocation claim after rollback = (%q, %d, %v)", claimStatus, claimAttempts, err)
+	}
+	claimed, err := workerStore.ClaimOAuthTokenRevocations(ctx, syncedAt.Add(5*time.Second), syncedAt.Add(time.Minute), 1)
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("claim revocation = (%+v, %v)", claimed, err)
+	}
+	if err := workerStore.CompleteOAuthTokenRevocation(ctx, claimed[0].ID, "00000000-0000-4000-8000-000000000000"); !errors.Is(err, integrations.ErrConflict) {
+		t.Fatalf("wrong completion claim = %v", err)
+	}
+	if err := workerStore.RetryOAuthTokenRevocation(ctx, claimed[0].ID, claimed[0].ClaimToken, syncedAt.Add(7*time.Second)); err != nil {
+		t.Fatalf("retry revocation = %v", err)
+	}
+	claimed, err = workerStore.ClaimOAuthTokenRevocations(ctx, syncedAt.Add(8*time.Second), syncedAt.Add(time.Minute), 1)
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("reclaim revocation = (%+v, %v)", claimed, err)
+	}
+	if err := workerStore.DeadLetterOAuthTokenRevocation(ctx, claimed[0].ID, claimed[0].ClaimToken, syncedAt.Add(9*time.Second)); err != nil {
+		t.Fatalf("dead-letter revocation = %v", err)
+	}
+	var deadStatus, terminalReason string
+	if err := db.QueryRowContext(ctx, `SELECT status, terminal_reason FROM provider_token_revocation_jobs WHERE connection_id=$1`, connectionID).Scan(&deadStatus, &terminalReason); err != nil || deadStatus != "dead" || terminalReason != "max_attempts_exhausted" {
+		t.Fatalf("dead revocation = (%q, %q, %v)", deadStatus, terminalReason, err)
+	}
+	completionJobID := "ef12d033-5086-4923-9d6a-" + suffix
+	if _, err := db.ExecContext(ctx, `INSERT INTO provider_token_revocation_jobs (id, provider_id, token_ciphertext, available_at) VALUES ($1, 'gitlab', $2, $3)`, completionJobID, []byte("opaque-completion-fixture"), syncedAt); err != nil {
+		t.Fatalf("prepare completion job: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), `DELETE FROM provider_token_revocation_jobs WHERE id=$1`, completionJobID)
+	})
+	completionJobs, err := workerStore.ClaimOAuthTokenRevocations(ctx, syncedAt.Add(10*time.Second), syncedAt.Add(time.Minute), 1)
+	if err != nil || len(completionJobs) != 1 || completionJobs[0].ID != completionJobID {
+		t.Fatalf("claim completion job = (%+v, %v)", completionJobs, err)
+	}
+	if err := workerStore.CompleteOAuthTokenRevocation(ctx, completionJobs[0].ID, completionJobs[0].ClaimToken); err != nil {
+		t.Fatalf("complete revocation = %v", err)
+	}
 	jobID := "9f12d033-5086-4923-9d6a-" + suffix
 	if _, err := db.ExecContext(ctx, `INSERT INTO provider_sync_jobs (id, provider_connection_id, subject_id, environment_id, status) VALUES ($1, $2, $3, $4, 'queued')`, jobID, connectionID, subjectID, environmentID); err != nil {
 		t.Fatalf("prepare sync purge: %v", err)

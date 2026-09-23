@@ -330,3 +330,42 @@ DELETE FROM activity_facts WHERE subject_id = $1::STRING AND environment_id = $2
 -- @name PurgeConnectionSyncJobs
 -- @returns :exec
 DELETE FROM provider_sync_jobs WHERE provider_connection_id = $1::UUID;
+
+-- @name ClaimOAuthTokenRevocations
+-- @returns :many
+UPDATE provider_token_revocation_jobs
+SET status = 'processing', attempts = attempts + 1,
+  lease_until = $2::TIMESTAMPTZ, claim_token = gen_random_uuid(), updated_at = $1::TIMESTAMPTZ
+WHERE id IN (
+  SELECT id FROM provider_token_revocation_jobs
+  WHERE (status = 'pending' AND available_at <= $1::TIMESTAMPTZ)
+     OR (status = 'processing' AND lease_until <= $1::TIMESTAMPTZ)
+  ORDER BY available_at, id
+  LIMIT $3::INT8
+  FOR UPDATE SKIP LOCKED
+)
+RETURNING id::STRING AS id, COALESCE(connection_id::STRING, '') AS connection_id,
+  provider_id, token_ciphertext, COALESCE(token_key_id, '') AS token_key_id,
+  claim_token::STRING AS claim_token, attempts, available_at,
+  lease_until, created_at, updated_at;
+
+-- @name CompleteOAuthTokenRevocation
+-- @returns :exec_result
+DELETE FROM provider_token_revocation_jobs
+WHERE id = $1::UUID AND status = 'processing' AND claim_token = $2::UUID;
+
+-- @name RetryOAuthTokenRevocation
+-- @returns :exec_result
+UPDATE provider_token_revocation_jobs
+SET status = 'pending', available_at = $3::TIMESTAMPTZ,
+  lease_until = NULL, claim_token = NULL, updated_at = now()
+WHERE id = $1::UUID AND status = 'processing' AND claim_token = $2::UUID;
+
+-- @name DeadLetterOAuthTokenRevocation
+-- @returns :exec_result
+UPDATE provider_token_revocation_jobs
+SET status = 'dead', available_at = $3::TIMESTAMPTZ,
+  lease_until = NULL, claim_token = NULL,
+  terminal_at = $3::TIMESTAMPTZ, terminal_reason = 'max_attempts_exhausted',
+  updated_at = $3::TIMESTAMPTZ
+WHERE id = $1::UUID AND status = 'processing' AND claim_token = $2::UUID;

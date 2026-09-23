@@ -172,6 +172,30 @@ func (s *Store) ClaimOAuthTokenRevocations(ctx context.Context, now, leaseUntil 
 	if limit <= 0 || !leaseUntil.After(now) {
 		return nil, integrations.ErrInvalidRevocationConfig
 	}
+	if s.pool != nil {
+		rows, err := generated.ClaimOAuthTokenRevocations(ctx, appdb.PGXExecutorFor(ctx, s.pool), now, leaseUntil, int64(limit))
+		if err != nil {
+			return nil, fmt.Errorf("claim OAuth token revocations: %w", err)
+		}
+		jobs := make([]integrations.OAuthTokenRevocationJob, 0, len(rows))
+		for _, row := range rows {
+			if row.ClaimToken == nil || row.Attempts < 0 || int64(int(row.Attempts)) != row.Attempts {
+				return nil, integrations.ErrInvalidRevocationConfig
+			}
+			job := integrations.OAuthTokenRevocationJob{
+				ID: row.Id, ConnectionID: row.ConnectionId, ProviderID: row.ProviderId,
+				TokenCiphertext: append([]byte(nil), row.TokenCiphertext...), TokenKeyID: row.TokenKeyId,
+				ClaimToken: *row.ClaimToken, Attempts: int(row.Attempts), AvailableAt: row.AvailableAt,
+				CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
+			}
+			if row.LeaseUntil != nil {
+				value := *row.LeaseUntil
+				job.LeaseUntil = &value
+			}
+			jobs = append(jobs, job)
+		}
+		return jobs, nil
+	}
 	rows, err := s.db.QueryContext(ctx, `
 WITH candidates AS (
   SELECT id
@@ -216,6 +240,24 @@ func (s *Store) CompleteOAuthTokenRevocation(ctx context.Context, id, claimToken
 	if id == "" || claimToken == "" {
 		return integrations.ErrInvalidRevocationConfig
 	}
+	if s.pool != nil {
+		parsedID, err := uuid.Parse(id)
+		if err != nil {
+			return integrations.ErrInvalidRevocationConfig
+		}
+		parsedClaim, err := uuid.Parse(claimToken)
+		if err != nil {
+			return integrations.ErrInvalidRevocationConfig
+		}
+		count, err := generated.CompleteOAuthTokenRevocation(ctx, appdb.PGXExecutorFor(ctx, s.pool), parsedID, parsedClaim)
+		if err != nil {
+			return fmt.Errorf("complete OAuth token revocation: %w", err)
+		}
+		if count != 1 {
+			return integrations.ErrConflict
+		}
+		return nil
+	}
 	result, err := s.db.ExecContext(ctx, `DELETE FROM provider_token_revocation_jobs WHERE id = $1::UUID AND status = 'processing' AND claim_token = $2::UUID`, id, claimToken)
 	if err != nil {
 		return fmt.Errorf("complete OAuth token revocation: %w", err)
@@ -233,6 +275,24 @@ func (s *Store) CompleteOAuthTokenRevocation(ctx context.Context, id, claimToken
 func (s *Store) RetryOAuthTokenRevocation(ctx context.Context, id, claimToken string, availableAt time.Time) error {
 	if id == "" || claimToken == "" || availableAt.IsZero() {
 		return integrations.ErrInvalidRevocationConfig
+	}
+	if s.pool != nil {
+		parsedID, err := uuid.Parse(id)
+		if err != nil {
+			return integrations.ErrInvalidRevocationConfig
+		}
+		parsedClaim, err := uuid.Parse(claimToken)
+		if err != nil {
+			return integrations.ErrInvalidRevocationConfig
+		}
+		count, err := generated.RetryOAuthTokenRevocation(ctx, appdb.PGXExecutorFor(ctx, s.pool), parsedID, parsedClaim, availableAt)
+		if err != nil {
+			return fmt.Errorf("retry OAuth token revocation: %w", err)
+		}
+		if count != 1 {
+			return integrations.ErrConflict
+		}
+		return nil
 	}
 	result, err := s.db.ExecContext(ctx, `
 UPDATE provider_token_revocation_jobs
@@ -254,6 +314,24 @@ WHERE id = $1::UUID AND status = 'processing' AND claim_token = $2::UUID`, id, c
 func (s *Store) DeadLetterOAuthTokenRevocation(ctx context.Context, id, claimToken string, terminalAt time.Time) error {
 	if id == "" || claimToken == "" || terminalAt.IsZero() {
 		return integrations.ErrInvalidRevocationConfig
+	}
+	if s.pool != nil {
+		parsedID, err := uuid.Parse(id)
+		if err != nil {
+			return integrations.ErrInvalidRevocationConfig
+		}
+		parsedClaim, err := uuid.Parse(claimToken)
+		if err != nil {
+			return integrations.ErrInvalidRevocationConfig
+		}
+		count, err := generated.DeadLetterOAuthTokenRevocation(ctx, appdb.PGXExecutorFor(ctx, s.pool), parsedID, parsedClaim, terminalAt)
+		if err != nil {
+			return fmt.Errorf("dead-letter OAuth token revocation: %w", err)
+		}
+		if count != 1 {
+			return integrations.ErrConflict
+		}
+		return nil
 	}
 	result, err := s.db.ExecContext(ctx, `
 UPDATE provider_token_revocation_jobs

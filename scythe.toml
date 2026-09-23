@@ -4,7 +4,7 @@ version = "1"
 [[sql]]
 name = "probe"
 engine = "cockroachdb"
-schema = ["db/migrations/0001_baseline.sql", "db/migrations/0002_ingest_reservation_token.sql", "db/migrations/0003_activity_snapshot_changes.sql"]
+schema = ["db/migrations/0001_baseline.sql", "db/migrations/0002_ingest_reservation_token.sql", "db/migrations/0003_activity_snapshot_changes.sql", "db/migrations/0004_provider_connection_page_index.sql", "db/migrations/0005_custom_provider_page_index.sql"]
 queries = ["apps/api/internal/adapters/scytheprobe/queries/probe.sql"]
 
 [[sql.gen]]
@@ -14,7 +14,7 @@ output = "apps/api/internal/adapters/scytheprobe/generated"
 [[sql]]
 name = "subjects"
 engine = "cockroachdb"
-schema = ["db/migrations/0001_baseline.sql", "db/migrations/0002_ingest_reservation_token.sql", "db/migrations/0003_activity_snapshot_changes.sql"]
+schema = ["db/migrations/0001_baseline.sql", "db/migrations/0002_ingest_reservation_token.sql", "db/migrations/0003_activity_snapshot_changes.sql", "db/migrations/0004_provider_connection_page_index.sql", "db/migrations/0005_custom_provider_page_index.sql"]
 queries = ["apps/api/internal/adapters/subjects/cockroach/queries/subjects.sql"]
 
 [[sql.gen]]
@@ -24,7 +24,7 @@ output = "apps/api/internal/adapters/subjects/cockroach/generated"
 [[sql]]
 name = "auth"
 engine = "cockroachdb"
-schema = ["db/migrations/0001_baseline.sql", "db/migrations/0002_ingest_reservation_token.sql", "db/migrations/0003_activity_snapshot_changes.sql"]
+schema = ["db/migrations/0001_baseline.sql", "db/migrations/0002_ingest_reservation_token.sql", "db/migrations/0003_activity_snapshot_changes.sql", "db/migrations/0004_provider_connection_page_index.sql", "db/migrations/0005_custom_provider_page_index.sql"]
 queries = ["apps/api/internal/adapters/auth/cockroach/queries/auth.sql"]
 
 [[sql.gen]]
@@ -34,7 +34,7 @@ output = "apps/api/internal/adapters/auth/cockroach/generated"
 [[sql]]
 name = "activity-storage"
 engine = "cockroachdb"
-schema = ["db/migrations/0001_baseline.sql", "db/migrations/0002_ingest_reservation_token.sql", "db/migrations/0003_activity_snapshot_changes.sql"]
+schema = ["db/migrations/0001_baseline.sql", "db/migrations/0002_ingest_reservation_token.sql", "db/migrations/0003_activity_snapshot_changes.sql", "db/migrations/0004_provider_connection_page_index.sql", "db/migrations/0005_custom_provider_page_index.sql"]
 queries = ["apps/api/internal/adapters/storage/cockroach/queries/activity.sql"]
 
 [[sql.gen]]
@@ -44,7 +44,7 @@ output = "apps/api/internal/adapters/storage/cockroach/generated"
 [[sql]]
 name = "oauth-state"
 engine = "cockroachdb"
-schema = ["db/migrations/0001_baseline.sql", "db/migrations/0002_ingest_reservation_token.sql", "db/migrations/0003_activity_snapshot_changes.sql"]
+schema = ["db/migrations/0001_baseline.sql", "db/migrations/0002_ingest_reservation_token.sql", "db/migrations/0003_activity_snapshot_changes.sql", "db/migrations/0004_provider_connection_page_index.sql", "db/migrations/0005_custom_provider_page_index.sql"]
 queries = ["apps/api/internal/adapters/integrations/oauth/cockroach/queries/state.sql"]
 
 [[sql.gen]]
@@ -54,7 +54,7 @@ output = "apps/api/internal/adapters/integrations/oauth/cockroach/generated"
 [[sql]]
 name = "integrations"
 engine = "cockroachdb"
-schema = ["db/migrations/0001_baseline.sql", "db/migrations/0002_ingest_reservation_token.sql", "db/migrations/0003_activity_snapshot_changes.sql"]
+schema = ["db/migrations/0001_baseline.sql", "db/migrations/0002_ingest_reservation_token.sql", "db/migrations/0003_activity_snapshot_changes.sql", "db/migrations/0004_provider_connection_page_index.sql", "db/migrations/0005_custom_provider_page_index.sql"]
 queries = ["apps/api/internal/adapters/integrations/cockroach/queries/integrations.sql"]
 
 [[sql.gen]]
@@ -64,7 +64,7 @@ output = "apps/api/internal/adapters/integrations/cockroach/generated"
 [[sql]]
 name = "ratelimit"
 engine = "cockroachdb"
-schema = ["db/migrations/0001_baseline.sql", "db/migrations/0002_ingest_reservation_token.sql", "db/migrations/0003_activity_snapshot_changes.sql"]
+schema = ["db/migrations/0001_baseline.sql", "db/migrations/0002_ingest_reservation_token.sql", "db/migrations/0003_activity_snapshot_changes.sql", "db/migrations/0004_provider_connection_page_index.sql", "db/migrations/0005_custom_provider_page_index.sql"]
 queries = ["apps/api/internal/adapters/ratelimit/cockroach/queries/ratelimit.sql"]
 
 [[sql.gen]]
@@ -74,7 +74,7 @@ output = "apps/api/internal/adapters/ratelimit/cockroach/generated"
 [[sql]]
 name = "operations"
 engine = "cockroachdb"
-schema = ["db/migrations/0001_baseline.sql", "db/migrations/0002_ingest_reservation_token.sql", "db/migrations/0003_activity_snapshot_changes.sql"]
+schema = ["db/migrations/0001_baseline.sql", "db/migrations/0002_ingest_reservation_token.sql", "db/migrations/0003_activity_snapshot_changes.sql", "db/migrations/0004_provider_connection_page_index.sql", "db/migrations/0005_custom_provider_page_index.sql"]
 queries = ["apps/api/internal/adapters/operations/cockroach/queries/operations.sql"]
 
 [[sql.gen]]

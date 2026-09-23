@@ -52,6 +52,7 @@ graphql-check:
 	sh scripts/test-graphql-contract.sh
 	sh scripts/test-graphql-relay-connections.sh
 	sh scripts/test-graphql-auth-mutations.sh
+	sh scripts/test-graphql-subject-contract.sh
 	sh scripts/test-graphql-generated-drift.sh
 	sh scripts/check-graphql-generated.sh
 	$(YARN) relay-compiler --validate
@@ -226,6 +227,7 @@ baseline-history-test:
 	sh scripts/test-baseline-followup-history.sh
 	sh scripts/test-ingest-reservation-migration.sh
 	sh scripts/test-activity-snapshot-migration.sh
+	sh scripts/test-graphql-page-index-migrations.sh
 
 db-configure-runtime-roles:
 	sh scripts/db-configure-runtime-roles.sh

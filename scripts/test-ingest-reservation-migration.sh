@@ -46,7 +46,7 @@ SELECT
    WHERE create_statement LIKE '%CREATE TABLE public.ingest_idempotency_keys %'
      AND create_statement LIKE '%schema_locked = true%') AS relocked
 " | tail -n 1 | tr -d '\r')
-if [ "$result" != "$(printf '3\t1\t1')" ]; then
+if [ "$result" != "$(printf '5\t1\t1')" ]; then
 	echo "reservation migration validation failed: $result" >&2
 	exit 1
 fi

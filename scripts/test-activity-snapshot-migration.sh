@@ -12,8 +12,8 @@ sql() {
 }
 
 count=$(sql "SELECT count(*) FROM schema_migrations" | tail -n 1 | tr -d '\r')
-if [ "$count" != 3 ]; then
-	echo "snapshot migration history has $count entries, expected 3" >&2
+if [ "$count" != 5 ]; then
+	echo "snapshot migration history has $count entries, expected 5" >&2
 	exit 1
 fi
 

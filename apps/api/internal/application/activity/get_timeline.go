@@ -24,14 +24,16 @@ const (
 )
 
 var (
-	ErrNilStore            = errors.New("activity application: store is required")
-	ErrInvalidDate         = errors.New("activity application: invalid date")
-	ErrInvalidDateRange    = errors.New("activity application: from must not be after to")
-	ErrDateRangeTooLarge   = errors.New("activity application: date range is too large")
-	ErrInvalidProvider     = errors.New("activity application: invalid provider")
-	ErrProviderFact        = errors.New("activity application: provider returned an invalid fact")
-	ErrProviderUnavailable = errors.New("activity application: provider unavailable and no stale facts exist")
-	ErrProviderSaturated   = errors.New("activity application: provider fetch concurrency saturated")
+	ErrNilStore                      = errors.New("activity application: store is required")
+	ErrInvalidDate                   = errors.New("activity application: invalid date")
+	ErrInvalidDateRange              = errors.New("activity application: from must not be after to")
+	ErrDateRangeTooLarge             = errors.New("activity application: date range is too large")
+	ErrInvalidProvider               = errors.New("activity application: invalid provider")
+	ErrProviderFact                  = errors.New("activity application: provider returned an invalid fact")
+	ErrProviderUnavailable           = errors.New("activity application: provider unavailable and no stale facts exist")
+	ErrProviderSaturated             = errors.New("activity application: provider fetch concurrency saturated")
+	ErrSnapshotProjectionUnavailable = errors.New("activity application: snapshot projection is unavailable")
+	ErrInvalidAudience               = errors.New("activity application: invalid snapshot audience")
 )
 
 // Store extends the domain persistence contract with the two operations needed
@@ -142,6 +144,40 @@ type GetTimelineOutput struct {
 	Warnings  []ProviderWarning
 }
 
+// SnapshotInput is accepted only from a trusted caller that has established
+// ownership before setting AudienceOwner. An untrusted transport must never
+// map a client-supplied owner flag directly to AudienceOwner.
+type SnapshotInput struct {
+	GetTimelineInput
+	Audience AudienceScope
+}
+
+type SnapshotOutput struct {
+	GetTimelineOutput
+	GeneratedAt   time.Time
+	DataUpdatedAt *time.Time
+	Revision      string
+}
+
+// SnapshotProjectionReader returns the authorized facts, environments, and
+// visible change marker from one consistent storage read. It is optional so
+// legacy timeline adapters do not need to implement GraphQL snapshots.
+type SnapshotProjectionReader interface {
+	LoadSnapshotProjection(
+		ctx context.Context,
+		filter domain.LoadFactsInput,
+		environmentIDs []domain.EnvironmentID,
+		includePrivate bool,
+	) ([]domain.Fact, []domain.Environment, *time.Time, error)
+}
+
+type preparedTimeline struct {
+	output   GetTimelineOutput
+	timezone string
+	filter   domain.LoadFactsInput
+	selected map[domain.EnvironmentID]struct{}
+}
+
 type GetTimeline struct {
 	store              Store
 	providers          []Provider
@@ -236,89 +272,19 @@ func NewGetTimeline(store Store, providers []Provider, options GetTimelineOption
 }
 
 func (usecase *GetTimeline) Execute(ctx context.Context, input GetTimelineInput) (GetTimelineOutput, error) {
-	if input.Subject == "" {
-		return GetTimelineOutput{}, domain.ErrEmptySubject
-	}
-
-	timezone, failurePolicy, err := usecase.resolveSubjectSettings(ctx, input)
+	prepared, err := usecase.prepare(ctx, input)
 	if err != nil {
 		return GetTimelineOutput{}, err
 	}
-	location, err := time.LoadLocation(timezone)
-	if err != nil {
-		return GetTimelineOutput{}, fmt.Errorf("%w: timezone %q: %v", ErrInvalidDate, timezone, err)
-	}
-	now := usecase.now()
-	from, to, dates, err := usecase.resolveRange(input.From, input.To, now.In(location))
+	output := prepared.output
+	facts, err := usecase.store.LoadFacts(ctx, prepared.filter)
 	if err != nil {
 		return GetTimelineOutput{}, err
 	}
-
-	if _, err := domain.ResolveFactsOnFetchFailure(nil, failurePolicy); err != nil {
-		return GetTimelineOutput{}, err
-	}
-
-	output := GetTimelineOutput{From: from, To: to}
-	today := domain.Date(now.In(location).Format(time.DateOnly))
-	filter := domain.LoadFactsInput{Subject: input.Subject, From: &from, To: &to}
-
-	selected := make(map[domain.EnvironmentID]struct{}, len(input.EnvironmentIDs))
-	for _, id := range input.EnvironmentIDs {
-		if id == "" {
-			return GetTimelineOutput{}, ErrInvalidProvider
-		}
-		selected[id] = struct{}{}
-	}
-	for _, provider := range usecase.providers {
-		environment := provider.Environment()
-		if len(selected) != 0 {
-			if _, ok := selected[environment.ID]; !ok {
-				continue
-			}
-		}
-		needsRefresh, err := usecase.needsRefresh(ctx, input.Subject, environment.ID, dates, today, now, input.Force)
-		if err != nil {
-			return GetTimelineOutput{}, err
-		}
-		if !needsRefresh {
-			continue
-		}
-
-		providerSubject := input.ProviderSubject
-		if providerSubject == "" {
-			providerSubject = input.Subject
-		}
-		fetchErr := usecase.refreshProvider(ctx, provider, providerSubject, filter, dates, now, timezone, from, to)
-		if fetchErr != nil {
-			output.Warnings = append(output.Warnings, ProviderWarning{
-				Provider: environment.Key,
-				Err:      fetchErr,
-			})
-			switch failurePolicy {
-			case domain.FetchFailureKeepStale:
-				output.Stale = true
-			case domain.FetchFailurePurge:
-				if err := usecase.store.ReplaceFacts(ctx, filter, []domain.EnvironmentID{environment.ID}, nil); err != nil {
-					return GetTimelineOutput{}, err
-				}
-				if err := usecase.store.DeleteCachedAt(ctx, input.Subject, environment.ID, dates); err != nil {
-					return GetTimelineOutput{}, err
-				}
-			}
-			continue
-		}
-
-		output.Refreshed = true
-	}
-
-	facts, err := usecase.store.LoadFacts(ctx, filter)
-	if err != nil {
-		return GetTimelineOutput{}, err
-	}
-	if len(selected) != 0 {
+	if len(prepared.selected) != 0 {
 		filtered := facts[:0]
 		for _, fact := range facts {
-			if _, ok := selected[fact.EnvironmentID]; ok {
+			if _, ok := prepared.selected[fact.EnvironmentID]; ok {
 				filtered = append(filtered, fact)
 			}
 		}
@@ -333,11 +299,137 @@ func (usecase *GetTimeline) Execute(ctx context.Context, input GetTimelineInput)
 		return GetTimelineOutput{}, err
 	}
 	environments, facts = filterVisibleEnvironments(input.Subject, input.IncludeSubjectEnvironments, environments, facts)
-	timeline, err := domain.BuildTimelineFromFacts(input.Subject, timezone, environments, facts)
+	timeline, err := domain.BuildTimelineFromFacts(input.Subject, prepared.timezone, environments, facts)
 	if err != nil {
 		return GetTimelineOutput{}, err
 	}
 	output.Timeline = timeline
+	return output, nil
+}
+
+func (usecase *GetTimeline) prepare(ctx context.Context, input GetTimelineInput) (preparedTimeline, error) {
+	if input.Subject == "" {
+		return preparedTimeline{}, domain.ErrEmptySubject
+	}
+
+	timezone, failurePolicy, err := usecase.resolveSubjectSettings(ctx, input)
+	if err != nil {
+		return preparedTimeline{}, err
+	}
+	location, err := time.LoadLocation(timezone)
+	if err != nil {
+		return preparedTimeline{}, fmt.Errorf("%w: timezone %q: %v", ErrInvalidDate, timezone, err)
+	}
+	now := usecase.now()
+	from, to, dates, err := usecase.resolveRange(input.From, input.To, now.In(location))
+	if err != nil {
+		return preparedTimeline{}, err
+	}
+
+	if _, err := domain.ResolveFactsOnFetchFailure(nil, failurePolicy); err != nil {
+		return preparedTimeline{}, err
+	}
+
+	output := GetTimelineOutput{From: from, To: to}
+	today := domain.Date(now.In(location).Format(time.DateOnly))
+	filter := domain.LoadFactsInput{Subject: input.Subject, From: &from, To: &to}
+
+	selected := make(map[domain.EnvironmentID]struct{}, len(input.EnvironmentIDs))
+	for _, id := range input.EnvironmentIDs {
+		if id == "" {
+			return preparedTimeline{}, ErrInvalidProvider
+		}
+		selected[id] = struct{}{}
+	}
+	for _, provider := range usecase.providers {
+		environment := provider.Environment()
+		if len(selected) != 0 {
+			if _, ok := selected[environment.ID]; !ok {
+				continue
+			}
+		}
+		needsRefresh, err := usecase.needsRefresh(ctx, input.Subject, environment.ID, dates, today, now, input.Force)
+		if err != nil {
+			return preparedTimeline{}, err
+		}
+		if !needsRefresh {
+			continue
+		}
+
+		providerSubject := input.ProviderSubject
+		if providerSubject == "" {
+			providerSubject = input.Subject
+		}
+		fetchErr := usecase.refreshProvider(ctx, provider, providerSubject, filter, dates, now, timezone, from, to)
+		if fetchErr != nil {
+			output.Warnings = append(output.Warnings, ProviderWarning{
+				Provider: string(environment.ID),
+				Err:      fetchErr,
+			})
+			switch failurePolicy {
+			case domain.FetchFailureKeepStale:
+				output.Stale = true
+			case domain.FetchFailurePurge:
+				if err := usecase.store.ReplaceFacts(ctx, filter, []domain.EnvironmentID{environment.ID}, nil); err != nil {
+					return preparedTimeline{}, err
+				}
+				if err := usecase.store.DeleteCachedAt(ctx, input.Subject, environment.ID, dates); err != nil {
+					return preparedTimeline{}, err
+				}
+			}
+			continue
+		}
+
+		output.Refreshed = true
+	}
+
+	return preparedTimeline{output: output, timezone: timezone, filter: filter, selected: selected}, nil
+}
+
+// ExecuteSnapshot refreshes providers before loading one authorized snapshot
+// projection. The storage port must return facts, environments, and the scoped
+// change marker from the same consistent read.
+func (usecase *GetTimeline) ExecuteSnapshot(ctx context.Context, input SnapshotInput) (SnapshotOutput, error) {
+	switch input.Audience {
+	case AudienceAnonymous, AudienceOwner, AudienceAuthenticatedNonOwner:
+	default:
+		return SnapshotOutput{}, ErrInvalidAudience
+	}
+	reader, ok := usecase.store.(SnapshotProjectionReader)
+	if !ok {
+		return SnapshotOutput{}, ErrSnapshotProjectionUnavailable
+	}
+	// The explicit legacy visibility knob does not grant snapshot ownership.
+	input.IncludeSubjectEnvironments = input.Audience == AudienceOwner
+	prepared, err := usecase.prepare(ctx, input.GetTimelineInput)
+	if err != nil {
+		return SnapshotOutput{}, err
+	}
+	selected := make([]domain.EnvironmentID, 0, len(prepared.selected))
+	for id := range prepared.selected {
+		selected = append(selected, id)
+	}
+	sort.Slice(selected, func(i, j int) bool { return selected[i] < selected[j] })
+	facts, environments, dataUpdatedAt, err := reader.LoadSnapshotProjection(
+		ctx, prepared.filter, selected, input.Audience == AudienceOwner,
+	)
+	if err != nil {
+		return SnapshotOutput{}, err
+	}
+	if err := unavailableProviderError(prepared.output.Warnings, facts); err != nil {
+		return SnapshotOutput{}, err
+	}
+	timeline, err := domain.BuildTimelineFromFacts(input.Subject, prepared.timezone, environments, facts)
+	if err != nil {
+		return SnapshotOutput{}, err
+	}
+	output := SnapshotOutput{GetTimelineOutput: prepared.output, DataUpdatedAt: dataUpdatedAt}
+	output.Timeline = timeline
+	output.GeneratedAt = usecase.now()
+	output.Revision = ComputeSnapshotRevision(SnapshotRevisionInput{
+		Timeline: timeline, From: output.From, To: output.To, Timezone: prepared.timezone,
+		EnvironmentIDs: selected, Audience: input.Audience, DataUpdatedAt: dataUpdatedAt,
+	})
 	return output, nil
 }
 

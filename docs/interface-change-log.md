@@ -27,6 +27,27 @@ endpoint로 축소하는 별도 cutover에서 제거합니다.
   유지합니다. Session 조회는 사용자 ID와 세션 ID를 모두 조건으로 제한합니다.
 - Frontend: Node ID는 불투명 값으로만 저장·전달하며 데이터베이스 ID로 파싱하지 않습니다.
 
+## 2026-09-24 — 정적 ActivitySnapshot 계약
+
+호환성: GraphQL 도메인 계약에 조회 전용 `subject(handleOrID).activitySnapshot`을 추가하는
+additive 변경입니다. 범위는 양 끝 날짜를 포함하고 timezone은 IANA 이름이어야 합니다.
+
+`subject(handleOrID:)`는 원시 handle 또는 local ID를 받습니다. 전역 Relay ID 조회는
+`node(id:)`만 사용해 유효한 handle과 base64url ID 사이의 충돌을 피합니다. 기존
+Subject 조회 저장소와 같이 handle이 다른 Subject의 local ID와 같으면 ID가 우선하며,
+해당 handle의 Subject는 `node(id:)`로 조회할 수 있습니다.
+
+- `ActivityDay`, entry, environment, 통계는 값 객체이며 Relay Node가 아닙니다.
+- count·metric·total은 데이터베이스 `INT8` 범위를 잃지 않도록 10진 문자열 `Long` scalar로
+  직렬화합니다. heatmap level과 최장 streak만 범위가 작은 `Int`입니다.
+- `generatedAt`은 일관된 조회 뒤의 서버 UTC 시각, `revision`은 조회 범위·독자 범위·결과가
+  같으면 안정적인 불투명 값입니다. `dataUpdatedAt` 필드는 항상 응답에 있으며, 해당
+  범위에 데이터가 한 번도 반영되지 않았으면 `null`입니다.
+- Backend: 공개·소유자·인증된 비소유자 범위를 구분하고, 실제 가시 데이터 변경만 영속
+  마커에 반영합니다. GraphQL resolver는 비공개 Subject 접근 실패와 부재를 구별하지 않습니다.
+- Frontend: 정적 소비자는 subscription 대신 주기적으로 재조회하고 revision 불변 시
+  산출물 교체를 생략할 수 있습니다. 공식 UI는 이후 Relay store로 전환합니다.
+
 ## 2026-08-12 — 운영·보안 계약 강화 (`1.1.0`)
 
 호환성: `1.0.0` 개발 기준선 대비 breaking change. 아직 배포되지 않은 계약의 Phase 3 완료 조건을 명시적으로 고정합니다.

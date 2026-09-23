@@ -3,6 +3,7 @@ package scalar
 import (
 	"errors"
 	"io"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,6 +14,31 @@ var errInvalidDate = errors.New("Date must be a valid YYYY-MM-DD calendar day")
 var errInvalidDateTime = errors.New("DateTime must be an RFC 3339 instant")
 var errInvalidTimeZone = errors.New("TimeZone must be an IANA timezone name")
 var errInvalidCursor = errors.New("Cursor must be a nonempty opaque string of at most 1024 bytes")
+var errInvalidLong = errors.New("Long must be a canonical signed 64-bit decimal string")
+
+// Long serializes signed 64-bit counts as decimal strings because GraphQL Int
+// is limited to 32 bits and JSON numbers cannot preserve all int64 values.
+type Long int64
+
+func (value Long) MarshalGQL(w io.Writer) {
+	graphql.MarshalString(strconv.FormatInt(int64(value), 10)).MarshalGQL(w)
+}
+
+func (value *Long) UnmarshalGQL(raw any) error {
+	text, ok := raw.(string)
+	if !ok || text == "" || strings.TrimPrefix(text, "-") == "" ||
+		strings.HasPrefix(text, "+") || strings.HasPrefix(text, " ") ||
+		strings.HasPrefix(text, "0") && len(text) > 1 ||
+		strings.HasPrefix(text, "-0") {
+		return errInvalidLong
+	}
+	parsed, err := strconv.ParseInt(text, 10, 64)
+	if err != nil || strconv.FormatInt(parsed, 10) != text {
+		return errInvalidLong
+	}
+	*value = Long(parsed)
+	return nil
+}
 
 // Date is a real calendar day serialized without a timezone.
 type Date string
@@ -98,4 +124,6 @@ var (
 	_ graphql.Unmarshaler = (*TimeZone)(nil)
 	_ graphql.Marshaler   = Cursor("")
 	_ graphql.Unmarshaler = (*Cursor)(nil)
+	_ graphql.Marshaler   = Long(0)
+	_ graphql.Unmarshaler = (*Long)(nil)
 )

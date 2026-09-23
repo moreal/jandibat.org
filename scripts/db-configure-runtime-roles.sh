@@ -38,7 +38,7 @@ for role in jandibat_migrator jandibat_api jandibat_worker jandibat_maintenance;
 	fi
 done
 
-all_runtime_tables='users, user_settings, subjects, subject_settings, user_passkeys, magic_link_tokens, magic_link_mail_outbox, user_sessions, auth_challenges, environments, provider_connections, provider_connection_private_consents, provider_sync_jobs, provider_token_revocation_jobs, custom_providers, custom_provider_secrets, activity_facts, custom_activity_events, ingest_idempotency_keys, timeline_cache, activity_refresh_cache, api_rate_limit_buckets, audit_events, mutation_audit_outbox, maintenance_checkpoints, legal_holds, deletion_request_inbox, deletion_requests, deletion_request_claims, deleted_identity_tombstones, deleted_identity_tombstones_v2'
+all_runtime_tables='users, user_settings, subjects, subject_settings, user_passkeys, magic_link_tokens, magic_link_mail_outbox, user_sessions, auth_challenges, environments, provider_connections, provider_connection_private_consents, provider_sync_jobs, provider_token_revocation_jobs, custom_providers, custom_provider_secrets, activity_facts, activity_snapshot_changes, custom_activity_events, ingest_idempotency_keys, timeline_cache, activity_refresh_cache, api_rate_limit_buckets, audit_events, mutation_audit_outbox, maintenance_checkpoints, legal_holds, deletion_request_inbox, deletion_requests, deletion_request_claims, deleted_identity_tombstones, deleted_identity_tombstones_v2'
 
 sql --execute="
 REVOKE ALL ON TABLE $all_runtime_tables FROM jandibat_api;
@@ -54,7 +54,7 @@ GRANT USAGE, CREATE ON SCHEMA public TO jandibat_migrator;
 
 GRANT SELECT ON TABLE
   users, user_settings, subjects, subject_settings, magic_link_tokens,
-  user_sessions, user_passkeys, auth_challenges, environments, activity_facts,
+  user_sessions, user_passkeys, auth_challenges, environments, activity_facts, activity_snapshot_changes,
   activity_refresh_cache, provider_connections, provider_connection_private_consents, provider_sync_jobs,
   custom_providers, custom_provider_secrets, custom_activity_events, ingest_idempotency_keys,
   api_rate_limit_buckets
@@ -62,7 +62,7 @@ TO jandibat_api;
 GRANT SELECT ON TABLE deletion_request_inbox, deleted_identity_tombstones, deleted_identity_tombstones_v2, magic_link_mail_outbox TO jandibat_api;
 GRANT INSERT ON TABLE
   users, user_settings, subjects, subject_settings,
-  user_sessions, user_passkeys, auth_challenges, environments, activity_facts,
+  user_sessions, user_passkeys, auth_challenges, environments, activity_facts, activity_snapshot_changes,
   activity_refresh_cache, provider_connections, provider_connection_private_consents, provider_sync_jobs,
   custom_providers, custom_provider_secrets, custom_activity_events, ingest_idempotency_keys,
   api_rate_limit_buckets, audit_events, mutation_audit_outbox, deletion_request_inbox, magic_link_mail_outbox
@@ -70,7 +70,7 @@ TO jandibat_api;
 GRANT INSERT ON TABLE provider_token_revocation_jobs TO jandibat_api;
 GRANT UPDATE ON TABLE
   users, user_settings, subjects, subject_settings, magic_link_tokens,
-  user_sessions, user_passkeys, auth_challenges, environments, activity_facts,
+  user_sessions, user_passkeys, auth_challenges, environments, activity_facts, activity_snapshot_changes,
   activity_refresh_cache, provider_connections, provider_connection_private_consents, provider_sync_jobs,
   custom_providers, custom_provider_secrets, ingest_idempotency_keys, api_rate_limit_buckets
 TO jandibat_api;
@@ -84,19 +84,19 @@ TO jandibat_api;
 GRANT SELECT ON TABLE
   provider_connections, provider_connection_private_consents, provider_sync_jobs, provider_token_revocation_jobs,
   magic_link_mail_outbox, mutation_audit_outbox,
-  subjects, subject_settings, environments, activity_facts, custom_providers
+  subjects, subject_settings, environments, activity_facts, activity_snapshot_changes, custom_providers
 TO jandibat_worker;
 GRANT INSERT ON TABLE
-  provider_sync_jobs, environments, activity_facts, audit_events
+  provider_sync_jobs, environments, activity_facts, activity_snapshot_changes, audit_events
 TO jandibat_worker;
 GRANT UPDATE ON TABLE
   provider_connections, provider_sync_jobs, provider_token_revocation_jobs, magic_link_mail_outbox, mutation_audit_outbox,
-  environments, activity_facts
+  environments, activity_facts, activity_snapshot_changes
 TO jandibat_worker;
 GRANT DELETE ON TABLE activity_facts, provider_token_revocation_jobs TO jandibat_worker;
 
 GRANT SELECT ON TABLE
-  provider_connections, provider_connection_private_consents, audit_events, activity_facts, custom_activity_events,
+  provider_connections, provider_connection_private_consents, audit_events, activity_facts, activity_snapshot_changes, custom_activity_events,
   environments, provider_sync_jobs, user_sessions, magic_link_tokens,
   auth_challenges, user_passkeys, ingest_idempotency_keys, timeline_cache,
   activity_refresh_cache, api_rate_limit_buckets, provider_token_revocation_jobs,
@@ -104,16 +104,16 @@ GRANT SELECT ON TABLE
   subject_settings, user_settings, custom_providers, custom_provider_secrets, deleted_identity_tombstones, deleted_identity_tombstones_v2
 TO jandibat_maintenance;
 GRANT INSERT ON TABLE
-  maintenance_checkpoints, deletion_requests, deletion_request_claims, provider_token_revocation_jobs,
+  maintenance_checkpoints, deletion_requests, deletion_request_claims, provider_token_revocation_jobs, activity_snapshot_changes,
   deleted_identity_tombstones, deleted_identity_tombstones_v2
 TO jandibat_maintenance;
 GRANT UPDATE ON TABLE
-  provider_connections, provider_token_revocation_jobs, maintenance_checkpoints, activity_facts,
+  provider_connections, provider_token_revocation_jobs, maintenance_checkpoints, activity_facts, activity_snapshot_changes,
   deletion_request_inbox, deletion_requests, deletion_request_claims, users, subjects,
   deleted_identity_tombstones_v2
 TO jandibat_maintenance;
 GRANT DELETE ON TABLE
-  users, user_settings, subjects, subject_settings, user_passkeys, activity_facts, custom_activity_events,
+  users, user_settings, subjects, subject_settings, user_passkeys, activity_facts, activity_snapshot_changes, custom_activity_events,
   custom_providers, custom_provider_secrets, provider_connections, provider_connection_private_consents, environments, provider_sync_jobs,
   user_sessions, magic_link_tokens,
   auth_challenges, ingest_idempotency_keys, timeline_cache,

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	appdb "github.com/moreal/jandibat.org/apps/api/internal/database"
@@ -142,6 +143,11 @@ func (store *Store) PurgeExpired(ctx context.Context, request operations.Retenti
 	}
 	var deleted int64
 	err = appdb.InTx(ctx, store.pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
+		if request.Dataset == operations.RetentionActivityFacts {
+			count, err := purgeActivityFactsWithProvenance(txctx, tx, query, request, asOf)
+			deleted = count
+			return err
+		}
 		result, err := tx.Exec(txctx, query, request.Before.UTC(), request.Limit, asOf)
 		if err != nil {
 			return fmt.Errorf("purge %s: %w", request.Dataset, err)
@@ -150,6 +156,58 @@ func (store *Store) PurgeExpired(ctx context.Context, request operations.Retenti
 		return nil
 	})
 	return deleted, err
+}
+
+type deletedActivitySnapshotKey struct {
+	subjectID     string
+	environmentID string
+	activityDate  time.Time
+}
+
+func purgeActivityFactsWithProvenance(ctx context.Context, tx pgx.Tx, query string, request operations.RetentionPurgeRequest, asOf time.Time) (int64, error) {
+	rows, err := tx.Query(ctx, query, request.Before.UTC(), request.Limit, asOf)
+	if err != nil {
+		return 0, fmt.Errorf("purge %s: %w", request.Dataset, err)
+	}
+	keys := make(map[deletedActivitySnapshotKey]struct{})
+	var deleted int64
+	for rows.Next() {
+		var key deletedActivitySnapshotKey
+		if err := rows.Scan(&key.subjectID, &key.environmentID, &key.activityDate); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("scan purged activity fact: %w", err)
+		}
+		keys[key] = struct{}{}
+		deleted++
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, fmt.Errorf("scan purged activity facts: %w", err)
+	}
+	rows.Close()
+	for key := range keys {
+		// adapter-sql-allowlist: sealed-dataset-identifiers; only actual deleted rows
+		// can create markers, and the environment must be visible to this subject.
+		result, err := tx.Exec(ctx, `INSERT INTO activity_snapshot_changes (
+  subject_id, environment_id, activity_date, visibility_scope, changed_at
+)
+SELECT $1, $2, $3,
+  CASE WHEN environment.scope = 'subject' AND environment.metadata->>'visibility' = 'private' THEN 'private' ELSE 'public' END,
+  now()
+FROM environments AS environment
+WHERE environment.id = $2
+  AND (environment.scope = 'global' OR environment.owner_subject_id = $1)
+ON CONFLICT (subject_id, environment_id, activity_date, visibility_scope)
+DO UPDATE SET changed_at = GREATEST(activity_snapshot_changes.changed_at + INTERVAL '1 microsecond', excluded.changed_at)`,
+			key.subjectID, key.environmentID, key.activityDate)
+		if err != nil {
+			return 0, fmt.Errorf("record purged activity fact provenance: %w", err)
+		}
+		if result.RowsAffected() > 1 {
+			return 0, fmt.Errorf("record purged activity fact provenance: affected %d rows", result.RowsAffected())
+		}
+	}
+	return deleted, nil
 }
 
 func (store *Store) CountExpired(ctx context.Context, request operations.RetentionPurgeRequest) (int64, error) {
@@ -179,13 +237,17 @@ func buildRetentionPurgeQuery(dataset operations.RetentionDataset) (string, erro
 	candidateKeys := "candidate." + strings.Join(spec.keys, ", candidate.")
 	filters := buildRetentionFilters(spec, "$1", "$3")
 	orderTimestamp := retentionColumn(spec.timestamp)
-	return fmt.Sprintf(`DELETE FROM %s
+	query := fmt.Sprintf(`DELETE FROM %s
 WHERE (%s) IN (
   SELECT %s FROM %s AS candidate
   WHERE %s
   ORDER BY %s, %s
   LIMIT $2
-)`, spec.table, keys, candidateKeys, spec.table, filters, orderTimestamp, candidateKeys), nil
+)`, spec.table, keys, candidateKeys, spec.table, filters, orderTimestamp, candidateKeys)
+	if dataset == operations.RetentionActivityFacts {
+		query += " RETURNING subject_id, environment_id, activity_date"
+	}
+	return query, nil
 }
 
 func buildRetentionCountQuery(dataset operations.RetentionDataset) (string, error) {

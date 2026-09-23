@@ -95,8 +95,17 @@ func (s *Store) RevokeConnectionAggregate(ctx context.Context, id string, now ti
 			return fmt.Errorf("revoke connection: remove private data consent: %w", err)
 		}
 		if connection.AuthMethod != integrations.AuthNone {
+			changes, err := generated.ListConnectionFactChanges(txctx, tx, connection.SubjectID, connection.EnvironmentID)
+			if err != nil {
+				return fmt.Errorf("revoke connection: load fact changes: %w", err)
+			}
 			if err := generated.PurgeConnectionFacts(txctx, tx, connection.SubjectID, connection.EnvironmentID); err != nil {
 				return fmt.Errorf("revoke connection: purge facts: %w", err)
+			}
+			for _, change := range changes {
+				if err := touchActivitySnapshotChange(txctx, tx, change.SubjectId, change.EnvironmentId, change.ActivityDate, change.VisibilityScope); err != nil {
+					return fmt.Errorf("revoke connection: mark changed facts: %w", err)
+				}
 			}
 		}
 		if err := generated.PurgeConnectionSyncJobs(txctx, tx, parsed); err != nil {

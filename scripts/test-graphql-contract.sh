@@ -5,6 +5,7 @@ for file in \
   graphql/schema/scalars.graphqls \
   graphql/schema/node.graphqls \
   graphql/schema/query.graphqls \
+  graphql/schema/activity.graphqls \
   graphql/schema/mutation.graphqls \
   apps/api/gqlgen.yml \
   scripts/check-graphql-generated.sh; do
@@ -43,6 +44,23 @@ if ! grep -q 'node(id: ID!): Node' graphql/schema.graphql; then
 fi
 if grep -Eq '^type (ActivityDay|ActivityStatistics) implements Node' graphql/schema.graphql; then
   echo 'activity days and statistics must remain value objects' >&2
+  exit 1
+fi
+if ! grep -q 'subject(handleOrID: String!): Subject' graphql/schema.graphql ||
+   ! grep -q 'activitySnapshot(' graphql/schema.graphql ||
+   ! grep -q 'range: DateRangeInput!' graphql/schema.graphql; then
+  echo 'static ActivitySnapshot query is missing from the domain contract' >&2
+  exit 1
+fi
+for field in 'generatedAt: DateTime!' 'dataUpdatedAt: DateTime' 'revision: String!'; do
+  if ! grep -q "$field" graphql/schema.graphql; then
+    echo "ActivitySnapshot provenance field is missing: $field" >&2
+    exit 1
+  fi
+done
+if ! grep -q '^scalar Long' graphql/schema.graphql ||
+   [ "$(grep -c ': Long!' graphql/schema.graphql)" -ne 3 ]; then
+  echo 'ActivitySnapshot count, metric and total must retain signed 64-bit range' >&2
   exit 1
 fi
 

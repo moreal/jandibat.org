@@ -60,23 +60,40 @@ func upsertFactGenerated(ctx context.Context, db appdb.DBTX, fact activity.Fact,
 		if err != nil {
 			return fmt.Errorf("cockroach: parse provider connection ID: %w", err)
 		}
-		if err := generated.InsertConnectionFactIfMissing(ctx, db, string(fact.Subject), string(fact.EnvironmentID), date, string(fact.Action), string(fact.Metric.Name), int64(fact.Metric.Value), metadata, &connectionUUID); err != nil {
+		inserted, err := generated.InsertConnectionFactIfMissing(ctx, db, string(fact.Subject), string(fact.EnvironmentID), date, string(fact.Action), string(fact.Metric.Name), int64(fact.Metric.Value), metadata, &connectionUUID)
+		if err != nil {
 			return fmt.Errorf("cockroach: insert connection fact: %w", err)
 		}
-		if err := generated.UpdateConnectionFact(ctx, db, string(fact.Subject), string(fact.EnvironmentID), date, string(fact.Action), string(fact.Metric.Name), int64(fact.Metric.Value), metadata, connectionUUID); err != nil {
+		updated, err := generated.UpdateConnectionFact(ctx, db, string(fact.Subject), string(fact.EnvironmentID), date, string(fact.Action), string(fact.Metric.Name), int64(fact.Metric.Value), metadata, connectionUUID)
+		if err != nil {
 			return fmt.Errorf("cockroach: update connection fact: %w", err)
 		}
-		return nil
+		if inserted+updated == 0 {
+			return nil
+		}
+		return markFactChange(ctx, db, fact.Subject, fact.EnvironmentID, date)
 	}
 	var providerPtr, customPtr *string
 	if customID != "" {
 		customPtr = &customID
 	}
-	if err := generated.InsertFactIfMissing(ctx, db, string(fact.Subject), string(fact.EnvironmentID), date, string(fact.Action), string(fact.Metric.Name), int64(fact.Metric.Value), metadata, providerPtr, customPtr); err != nil {
+	inserted, err := generated.InsertFactIfMissing(ctx, db, string(fact.Subject), string(fact.EnvironmentID), date, string(fact.Action), string(fact.Metric.Name), int64(fact.Metric.Value), metadata, providerPtr, customPtr)
+	if err != nil {
 		return fmt.Errorf("cockroach: insert fact: %w", err)
 	}
-	if err := generated.UpdateMatchingFact(ctx, db, string(fact.Subject), string(fact.EnvironmentID), date, string(fact.Action), string(fact.Metric.Name), int64(fact.Metric.Value), metadata, providerConnectionID, customID); err != nil {
+	updated, err := generated.UpdateMatchingFact(ctx, db, string(fact.Subject), string(fact.EnvironmentID), date, string(fact.Action), string(fact.Metric.Name), int64(fact.Metric.Value), metadata, providerConnectionID, customID)
+	if err != nil {
 		return fmt.Errorf("cockroach: update fact: %w", err)
+	}
+	if inserted+updated == 0 {
+		return nil
+	}
+	return markFactChange(ctx, db, fact.Subject, fact.EnvironmentID, date)
+}
+
+func markFactChange(ctx context.Context, db appdb.DBTX, subject activity.SubjectID, environment activity.EnvironmentID, date time.Time) error {
+	if err := generated.MarkFactChange(ctx, db, string(subject), string(environment), date); err != nil {
+		return fmt.Errorf("cockroach: mark fact change: %w", err)
 	}
 	return nil
 }

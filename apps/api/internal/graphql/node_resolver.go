@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/google/uuid"
+	appactivity "github.com/moreal/jandibat.org/apps/api/internal/application/activity"
 	"github.com/moreal/jandibat.org/apps/api/internal/auth"
 	"github.com/moreal/jandibat.org/apps/api/internal/graphql/model"
 	"github.com/moreal/jandibat.org/apps/api/internal/graphql/relayid"
@@ -30,6 +31,9 @@ type NodeServices struct {
 	}
 	Sessions interface {
 		GetSessionByID(context.Context, string, string) (auth.Session, error)
+	}
+	Activity interface {
+		ExecuteSnapshot(context.Context, appactivity.SnapshotInput) (appactivity.SnapshotOutput, error)
 	}
 }
 
@@ -181,6 +185,25 @@ func (r *queryResolver) resolveNode(ctx context.Context, id string) (model.Node,
 	default:
 		return nil, errInvalidNodeID
 	}
+}
+
+func (r *queryResolver) resolveSubject(ctx context.Context, handleOrID string) (*model.Subject, error) {
+	services, _ := ctx.Value(nodeServicesContextKey{}).(NodeServices)
+	identity, _ := ctx.Value(viewerContextKey{}).(viewerIdentity)
+	if identity.failed {
+		return nil, errNodeAuthentication
+	}
+	if services.Subjects == nil {
+		return nil, errNodeLookup
+	}
+	subject, err := services.Subjects.GetSubject(ctx, identity.userID, handleOrID)
+	if err != nil {
+		return nil, redactNodeError(err)
+	}
+	if subject.ID == "" {
+		return nil, errNodeLookup
+	}
+	return &model.Subject{ID: relayid.Encode(relayid.Subject, subject.ID)}, nil
 }
 
 func ownsSubject(ctx context.Context, service interface {

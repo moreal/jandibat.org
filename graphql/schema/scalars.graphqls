@@ -4,6 +4,9 @@ scalar Date
 "UTC instant in RFC 3339 form."
 scalar DateTime
 
+"Signed 64-bit integer serialized as a base-10 string for JavaScript safety."
+scalar Long
+
 "IANA timezone identifier."
 scalar TimeZone
 

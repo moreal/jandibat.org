@@ -27,3 +27,10 @@ models:
   Cursor:
     model:
       - github.com/moreal/jandibat.org/apps/api/internal/graphql/scalar.Cursor
+  Long:
+    model:
+      - github.com/moreal/jandibat.org/apps/api/internal/graphql/scalar.Long
+  Subject:
+    fields:
+      activitySnapshot:
+        resolver: true

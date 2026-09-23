@@ -249,8 +249,17 @@ func (s *Store) PurgeConnectionData(ctx context.Context, id string) error {
 			return integrations.ErrInvalidConnectionStatus
 		}
 		if integrations.AuthMethod(row.AuthMethod) != integrations.AuthNone {
+			changes, err := generated.ListConnectionFactChanges(txctx, tx, row.SubjectId, row.EnvironmentId)
+			if err != nil {
+				return fmt.Errorf("purge connection data: load fact changes: %w", err)
+			}
 			if err := generated.PurgeConnectionFacts(txctx, tx, row.SubjectId, row.EnvironmentId); err != nil {
 				return fmt.Errorf("purge connection data: purge facts: %w", err)
+			}
+			for _, change := range changes {
+				if err := touchActivitySnapshotChange(txctx, tx, change.SubjectId, change.EnvironmentId, change.ActivityDate, change.VisibilityScope); err != nil {
+					return fmt.Errorf("purge connection data: mark changed facts: %w", err)
+				}
 			}
 		}
 		if err := generated.PurgeConnectionSyncJobs(txctx, tx, parsed); err != nil {

@@ -22,6 +22,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	integrationstore "github.com/moreal/jandibat.org/apps/api/internal/adapters/integrations/cockroach"
+	integrationqueries "github.com/moreal/jandibat.org/apps/api/internal/adapters/integrations/cockroach/generated"
 	activitystore "github.com/moreal/jandibat.org/apps/api/internal/adapters/storage/cockroach"
 	appdb "github.com/moreal/jandibat.org/apps/api/internal/database"
 	"github.com/moreal/jandibat.org/apps/api/internal/domain/activity"
@@ -348,6 +349,13 @@ FROM provider_connections WHERE id = $1`, connectionID).Scan(&credentialColumnsN
 	if err != nil || workerUpdated.Connection.LastSyncedAt == nil || !workerUpdated.Connection.LastSyncedAt.Equal(syncedAt) {
 		t.Fatalf("worker sync state = (%+v, %v)", workerUpdated.Connection, err)
 	}
+	activityDate := now.Format(time.DateOnly)
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO activity_facts (subject_id, environment_id, provider_connection_id, activity_date,
+  action, metric_name, metric_value)
+VALUES ($1, $2, $3, $4::DATE, 'commit', 'count', 1)`, subjectID, environmentID, connectionID, activityDate); err != nil {
+		t.Fatalf("insert revocation fact: %v", err)
+	}
 	err = appdb.InTx(ctx, apiPool, appdb.RetryOptions{}, func(txctx context.Context, _ pgx.Tx) error {
 		revoked, err := generatedStore.RevokeConnectionAggregate(txctx, connectionID, syncedAt.Add(time.Second))
 		if err != nil || revoked.Status != integrations.ConnectionRevoked {
@@ -361,6 +369,16 @@ FROM provider_connections WHERE id = $1`, connectionID).Scan(&credentialColumnsN
 	})
 	if !errors.Is(err, rollbackProbe) {
 		t.Fatalf("rollback revoke probe = %v", err)
+	}
+	var rollbackFacts, rollbackMarkers int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM activity_facts WHERE subject_id=$1 AND environment_id=$2`, subjectID, environmentID).Scan(&rollbackFacts); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM activity_snapshot_changes WHERE subject_id=$1 AND environment_id=$2 AND activity_date=$3::DATE`, subjectID, environmentID, activityDate).Scan(&rollbackMarkers); err != nil {
+		t.Fatal(err)
+	}
+	if rollbackFacts != 1 || rollbackMarkers != 0 {
+		t.Fatalf("rolled-back revocation facts=%d markers=%d, want 1 and 0", rollbackFacts, rollbackMarkers)
 	}
 	outsideRevoke, err := generatedStore.GetConnection(ctx, connectionID)
 	if err != nil || outsideRevoke.Connection.Status != integrations.ConnectionActive {
@@ -393,6 +411,68 @@ FROM provider_connections WHERE id = $1`, connectionID).Scan(&credentialColumnsN
 	}
 	if _, err := generatedStore.RevokeConnectionAggregate(ctx, connectionID, syncedAt.Add(4*time.Second)); err != nil {
 		t.Fatalf("commit OAuth revocation: %v", err)
+	}
+	var revokedMarkers int
+	var changedAt time.Time
+	if err := db.QueryRowContext(ctx, `
+SELECT count(*), max(changed_at) FROM activity_snapshot_changes
+WHERE subject_id=$1 AND environment_id=$2 AND activity_date=$3::DATE AND visibility_scope='public'`,
+		subjectID, environmentID, activityDate).Scan(&revokedMarkers, &changedAt); err != nil || revokedMarkers != 1 {
+		t.Fatalf("revocation marker = (%d, %s, %v), want one public marker", revokedMarkers, changedAt, err)
+	}
+	if _, err := generatedStore.RevokeConnectionAggregate(ctx, connectionID, syncedAt.Add(5*time.Second)); err != nil {
+		t.Fatalf("repeat OAuth revocation: %v", err)
+	}
+	var repeatedChangedAt time.Time
+	if err := db.QueryRowContext(ctx, `SELECT changed_at FROM activity_snapshot_changes WHERE subject_id=$1 AND environment_id=$2 AND activity_date=$3::DATE AND visibility_scope='public'`,
+		subjectID, environmentID, activityDate).Scan(&repeatedChangedAt); err != nil || !repeatedChangedAt.Equal(changedAt) {
+		t.Fatalf("repeat revocation marker changed_at = (%s, %v), want %s", repeatedChangedAt, err, changedAt)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE environments SET metadata='{"visibility":"private"}'::JSONB WHERE id=$1`, environmentID); err != nil {
+		t.Fatalf("make recovery fact environment private: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO activity_facts (subject_id, environment_id, provider_connection_id, activity_date,
+  action, metric_name, metric_value)
+VALUES ($1, $2, $3, $4::DATE, 'recovery', 'count', 1)`, subjectID, environmentID, connectionID, activityDate); err != nil {
+		t.Fatalf("insert recovery fact: %v", err)
+	}
+	if err := generatedStore.PurgeConnectionData(ctx, connectionID); err != nil {
+		t.Fatalf("purge recovered connection data: %v", err)
+	}
+	var privateMarkerTime, publicMarkerAfterPrivatePurge time.Time
+	if err := db.QueryRowContext(ctx, `SELECT changed_at FROM activity_snapshot_changes WHERE subject_id=$1 AND environment_id=$2 AND activity_date=$3::DATE AND visibility_scope='private'`,
+		subjectID, environmentID, activityDate).Scan(&privateMarkerTime); err != nil {
+		t.Fatalf("private recovery purge marker: %v", err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT changed_at FROM activity_snapshot_changes WHERE subject_id=$1 AND environment_id=$2 AND activity_date=$3::DATE AND visibility_scope='public'`,
+		subjectID, environmentID, activityDate).Scan(&publicMarkerAfterPrivatePurge); err != nil || !publicMarkerAfterPrivatePurge.Equal(changedAt) {
+		t.Fatalf("public marker after private purge = (%s, %v), want unchanged %s", publicMarkerAfterPrivatePurge, err, changedAt)
+	}
+	globalEnvironmentID := "it-global-" + suffix
+	if _, err := db.ExecContext(ctx, `INSERT INTO environments (id, key, name, scope, metadata) VALUES ($1, $1, 'Global visibility probe', 'global', '{"visibility":"private"}'::JSONB)`, globalEnvironmentID); err != nil {
+		t.Fatalf("insert global visibility probe environment: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, done := context.WithTimeout(context.Background(), 10*time.Second)
+		defer done()
+		_, _ = db.ExecContext(cleanupCtx, `DELETE FROM activity_facts WHERE subject_id=$1 AND environment_id=$2`, subjectID, globalEnvironmentID)
+		_, _ = db.ExecContext(cleanupCtx, `DELETE FROM environments WHERE id=$1`, globalEnvironmentID)
+	})
+	if _, err := db.ExecContext(ctx, `INSERT INTO activity_facts (subject_id, environment_id, activity_date, action, metric_name, metric_value) VALUES ($1, $2, $3::DATE, 'global', 'count', 1)`, subjectID, globalEnvironmentID, activityDate); err != nil {
+		t.Fatalf("insert global visibility probe fact: %v", err)
+	}
+	globalChanges, err := integrationqueries.ListConnectionFactChanges(ctx, apiPool, subjectID, globalEnvironmentID)
+	if err != nil || len(globalChanges) != 1 || globalChanges[0].VisibilityScope != "public" {
+		t.Fatalf("global environment change scope = (%+v, %v), want public despite private metadata", globalChanges, err)
+	}
+	if err := generatedStore.PurgeConnectionData(ctx, connectionID); err != nil {
+		t.Fatalf("repeat connection data purge: %v", err)
+	}
+	var privateMarkerAfterRepeat time.Time
+	if err := db.QueryRowContext(ctx, `SELECT changed_at FROM activity_snapshot_changes WHERE subject_id=$1 AND environment_id=$2 AND activity_date=$3::DATE AND visibility_scope='private'`,
+		subjectID, environmentID, activityDate).Scan(&privateMarkerAfterRepeat); err != nil || !privateMarkerAfterRepeat.Equal(privateMarkerTime) {
+		t.Fatalf("private marker after repeat purge = (%s, %v), want unchanged %s", privateMarkerAfterRepeat, err, privateMarkerTime)
 	}
 	var queuedAfterCommit int
 	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM provider_token_revocation_jobs WHERE connection_id=$1 AND token_ciphertext IS NOT NULL`, connectionID).Scan(&queuedAfterCommit); err != nil || queuedAfterCommit != 1 {
@@ -711,8 +791,18 @@ VALUES ($1, $2, $3, 'UTC', true, now(), now())`, subjectID, userID, handle); err
 	if _, err := integrationDB.GetCustomProvider(ctx, deleteCandidate.ID); err != nil {
 		t.Fatalf("provider missing after delete rollback: %v", err)
 	}
+	var beforeEmptyDeletionMarkers int
+	var beforeEmptyDeletionAt sql.NullTime
+	if err := db.QueryRowContext(ctx, `SELECT count(*), max(changed_at) FROM activity_snapshot_changes WHERE subject_id=$1 AND environment_id=$2`, subjectID, deleteCandidate.EnvironmentID).Scan(&beforeEmptyDeletionMarkers, &beforeEmptyDeletionAt); err != nil {
+		t.Fatal(err)
+	}
 	if err := service.Delete(ctx, deleteCandidate.ID); err != nil {
 		t.Fatalf("delete provider: %v", err)
+	}
+	var emptyDeletionMarkers int
+	var afterEmptyDeletionAt sql.NullTime
+	if err := db.QueryRowContext(ctx, `SELECT count(*), max(changed_at) FROM activity_snapshot_changes WHERE subject_id=$1 AND environment_id=$2`, subjectID, deleteCandidate.EnvironmentID).Scan(&emptyDeletionMarkers, &afterEmptyDeletionAt); err != nil || emptyDeletionMarkers != beforeEmptyDeletionMarkers || !reflect.DeepEqual(afterEmptyDeletionAt, beforeEmptyDeletionAt) {
+		t.Fatalf("factless provider deletion markers = (%d, %v, %v), want unchanged (%d, %v)", emptyDeletionMarkers, afterEmptyDeletionAt, err, beforeEmptyDeletionMarkers, beforeEmptyDeletionAt)
 	}
 	if _, err := integrationDB.GetCustomProvider(ctx, deleteCandidate.ID); !errors.Is(err, integrations.ErrNotFound) {
 		t.Fatalf("deleted provider lookup = %v", err)
@@ -847,8 +937,19 @@ VALUES ($1, $2, $3, 'UTC', true, now(), now())`, subjectID, userID, handle); err
 			t.Fatalf("%s count = %d, want %d", table, count, want)
 		}
 	}
+	var beforeProviderDeletionMarker time.Time
+	if err := db.QueryRowContext(ctx, `SELECT changed_at FROM activity_snapshot_changes WHERE subject_id=$1 AND environment_id=$2 AND activity_date=$3::DATE AND visibility_scope='public'`,
+		subjectID, environmentID, input.Activities[0].Date).Scan(&beforeProviderDeletionMarker); err != nil {
+		t.Fatalf("missing custom ingest provenance before deletion: %v", err)
+	}
 	if err := service.Delete(ctx, provider.ID); err != nil {
 		t.Fatalf("delete custom provider: %v", err)
+	}
+	var deletionMarkers int
+	var afterProviderDeletionMarker time.Time
+	if err := db.QueryRowContext(ctx, `SELECT count(*), max(changed_at) FROM activity_snapshot_changes WHERE subject_id=$1 AND environment_id=$2 AND activity_date=$3::DATE AND visibility_scope='public'`,
+		subjectID, environmentID, input.Activities[0].Date).Scan(&deletionMarkers, &afterProviderDeletionMarker); err != nil || deletionMarkers != 1 || !afterProviderDeletionMarker.After(beforeProviderDeletionMarker) {
+		t.Fatalf("provider deletion marker = (%d, %s, %v), want later than %s", deletionMarkers, afterProviderDeletionMarker, err, beforeProviderDeletionMarker)
 	}
 	var remainingFacts int
 	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM activity_facts WHERE subject_id = $1`, subjectID).Scan(&remainingFacts); err != nil {
@@ -856,6 +957,35 @@ VALUES ($1, $2, $3, 'UTC', true, now(), now())`, subjectID, userID, handle); err
 	}
 	if remainingFacts != 0 {
 		t.Fatalf("facts after provider delete = %d", remainingFacts)
+	}
+	directProvider, err := service.Create(ctx, integrations.CreateCustomProviderInput{
+		SubjectID: subjectID, Slug: "direct_" + suffix, Name: "Direct deletion probe",
+		AllowedActions: []string{"read"}, AllowedMetrics: []string{"count"}, IngestSecret: secret + "-direct",
+	})
+	if err != nil {
+		t.Fatalf("create direct deletion provider: %v", err)
+	}
+	directIngest := input
+	directIngest.ProviderID = directProvider.ID
+	directIngest.IngestSecret = secret + "-direct"
+	directIngest.IdempotencyKey = "direct-idem-" + suffix
+	directIngest.Activities = append([]integrations.CustomActivity(nil), input.Activities...)
+	directIngest.Activities[0].ExternalID = "direct-event-" + suffix
+	if result, err := service.Ingest(ctx, directIngest); err != nil || result.Accepted != 1 {
+		t.Fatalf("ingest direct deletion fact = (%+v, %v)", result, err)
+	}
+	var beforeDirectDeletion time.Time
+	if err := db.QueryRowContext(ctx, `SELECT changed_at FROM activity_snapshot_changes WHERE subject_id=$1 AND environment_id=$2 AND activity_date=$3::DATE AND visibility_scope='public'`,
+		subjectID, directProvider.EnvironmentID, input.Activities[0].Date).Scan(&beforeDirectDeletion); err != nil {
+		t.Fatalf("direct provider pre-delete marker: %v", err)
+	}
+	if err := integrationDB.DeleteCustomProvider(ctx, directProvider.ID); err != nil {
+		t.Fatalf("direct provider delete: %v", err)
+	}
+	var afterDirectDeletion time.Time
+	if err := db.QueryRowContext(ctx, `SELECT changed_at FROM activity_snapshot_changes WHERE subject_id=$1 AND environment_id=$2 AND activity_date=$3::DATE AND visibility_scope='public'`,
+		subjectID, directProvider.EnvironmentID, input.Activities[0].Date).Scan(&afterDirectDeletion); err != nil || !afterDirectDeletion.After(beforeDirectDeletion) {
+		t.Fatalf("direct provider deletion marker = (%s, %v), want later than %s", afterDirectDeletion, err, beforeDirectDeletion)
 	}
 }
 

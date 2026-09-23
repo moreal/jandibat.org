@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-database=${BASELINE_TEST_DATABASE:-jandibat_baseline_test}
+database=${BASELINE_TEST_DATABASE:-jandibat_baseline_test_$(date +%s)_$$}
 case "$database" in
   jandibat_baseline_test*) ;;
   *) echo "BASELINE_TEST_DATABASE must begin with jandibat_baseline_test" >&2; exit 2 ;;
@@ -18,8 +18,8 @@ sql() {
 COCKROACH_DATABASE="$database" sh scripts/db-migrate.sh >/dev/null
 
 versions=$(sql --execute="SELECT string_agg(version, ',' ORDER BY version) FROM schema_migrations" | tail -n 1 | tr -d '\r')
-if [ "$versions" != 0001_baseline.sql,0002_ingest_reservation_token.sql ]; then
-  echo "expected baseline and reservation-token migrations; got: $versions" >&2
+if [ "$versions" != 0001_baseline.sql,0002_ingest_reservation_token.sql,0003_activity_snapshot_changes.sql ]; then
+  echo "expected baseline, reservation-token, and snapshot migrations; got: $versions" >&2
   exit 1
 fi
 

@@ -310,6 +310,33 @@ WHERE subject_id = $1::STRING AND environment_id = $2::STRING;
 DELETE FROM activity_facts
 WHERE custom_provider_id = $1::UUID OR (subject_id = $2::STRING AND environment_id = $3::STRING);
 
+-- @name ListCustomProviderFactChanges
+-- @returns :many
+SELECT DISTINCT facts.subject_id, facts.environment_id, facts.activity_date,
+  CASE WHEN environments.scope = 'subject' AND environments.metadata->>'visibility' = 'private'
+    THEN 'private' ELSE 'public' END AS visibility_scope
+FROM activity_facts AS facts
+JOIN environments ON environments.id = facts.environment_id
+WHERE facts.custom_provider_id = $1::UUID
+   OR (facts.subject_id = $2::STRING AND facts.environment_id = $3::STRING);
+
+-- @name ListCustomProviderCascadeFactChanges
+-- @returns :many
+SELECT DISTINCT facts.subject_id, facts.environment_id, facts.activity_date,
+  CASE WHEN environments.scope = 'subject' AND environments.metadata->>'visibility' = 'private'
+    THEN 'private' ELSE 'public' END AS visibility_scope
+FROM activity_facts AS facts
+JOIN environments ON environments.id = facts.environment_id
+WHERE facts.custom_provider_id = $1::UUID;
+
+-- @name TouchActivitySnapshotChange
+-- @returns :exec
+INSERT INTO activity_snapshot_changes (
+  subject_id, environment_id, activity_date, visibility_scope, changed_at
+) VALUES ($1::STRING, $2::STRING, $3::DATE, $4::STRING, now())
+ON CONFLICT (subject_id, environment_id, activity_date, visibility_scope) DO UPDATE
+SET changed_at = greatest(activity_snapshot_changes.changed_at + INTERVAL '1 microsecond', excluded.changed_at);
+
 -- @name DeleteCustomProviderByID
 -- @returns :exec_result
 DELETE FROM custom_providers WHERE id = $1::UUID;
@@ -356,6 +383,15 @@ WHERE id = $1::UUID;
 -- @name PurgeConnectionFacts
 -- @returns :exec
 DELETE FROM activity_facts WHERE subject_id = $1::STRING AND environment_id = $2::STRING;
+
+-- @name ListConnectionFactChanges
+-- @returns :many
+SELECT DISTINCT facts.subject_id, facts.environment_id, facts.activity_date,
+  CASE WHEN environments.scope = 'subject' AND environments.metadata->>'visibility' = 'private'
+    THEN 'private' ELSE 'public' END AS visibility_scope
+FROM activity_facts AS facts
+JOIN environments ON environments.id = facts.environment_id
+WHERE facts.subject_id = $1::STRING AND facts.environment_id = $2::STRING;
 
 -- @name PurgeConnectionSyncJobs
 -- @returns :exec

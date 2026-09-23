@@ -29,10 +29,27 @@ func upsertEnvironmentGenerated(ctx context.Context, db appdb.DBTX, environment 
 	if err != nil {
 		return fmt.Errorf("cockroach: encode environment metadata: %w", err)
 	}
+	existing, err := generated.ListEnvironmentsByIds(ctx, db, []string{string(environment.ID)})
+	if err != nil {
+		return fmt.Errorf("cockroach: load environment before upsert: %w", err)
+	}
 	var owner *string
 	if environment.OwnerSubject != nil {
 		value := string(*environment.OwnerSubject)
 		owner = &value
+	}
+	var oldScope string
+	if len(existing) != 0 {
+		old := existing[0]
+		oldMetadata, decodeErr := decodeMetadata(old.Metadata)
+		if decodeErr != nil {
+			return fmt.Errorf("cockroach: decode existing environment metadata: %w", decodeErr)
+		}
+		if old.Key == environment.Key && old.Name == environment.Name && old.Scope == string(environment.Scope) &&
+			sameOptionalString(old.OwnerSubjectId, owner) && sameEnvironmentMetadata(oldMetadata, environment.Metadata) {
+			return nil
+		}
+		oldScope = snapshotVisibilityScope(activity.EnvironmentScope(old.Scope), oldMetadata)
 	}
 	count, err := generated.UpsertEnvironment(ctx, db, string(environment.ID), environment.Key, environment.Name, string(environment.Scope), owner, metadata)
 	if err != nil {
@@ -41,7 +58,44 @@ func upsertEnvironmentGenerated(ctx context.Context, db appdb.DBTX, environment 
 	if count != 1 {
 		return fmt.Errorf("cockroach: environment ownership conflict")
 	}
+	if len(existing) != 0 {
+		if err := generated.MarkEnvironmentFactChanges(ctx, db, string(environment.ID), oldScope); err != nil {
+			return fmt.Errorf("cockroach: mark old environment visibility: %w", err)
+		}
+		newScope := snapshotVisibilityScope(environment.Scope, environment.Metadata)
+		if newScope != oldScope {
+			if err := generated.MarkEnvironmentFactChanges(ctx, db, string(environment.ID), newScope); err != nil {
+				return fmt.Errorf("cockroach: mark new environment visibility: %w", err)
+			}
+		}
+	}
 	return nil
+}
+
+func sameOptionalString(left, right *string) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
+func sameEnvironmentMetadata(left, right map[string]string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for key, value := range left {
+		if right[key] != value {
+			return false
+		}
+	}
+	return true
+}
+
+func snapshotVisibilityScope(scope activity.EnvironmentScope, metadata map[string]string) string {
+	if scope == activity.EnvironmentScopeSubject && metadata["visibility"] == "private" {
+		return "private"
+	}
+	return "public"
 }
 
 func (s *Store) LoadEnvironments(ctx context.Context, input activity.LoadEnvironmentsInput) ([]activity.Environment, error) {

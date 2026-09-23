@@ -7,6 +7,7 @@ import (
 
 	"github.com/moreal/jandibat.org/apps/api/internal/graphql/generated"
 	"github.com/moreal/jandibat.org/apps/api/internal/graphql/model"
+	"github.com/moreal/jandibat.org/apps/api/internal/graphql/scalar"
 )
 
 type Resolver struct{}
@@ -26,15 +27,29 @@ func (r *queryResolver) Node(ctx context.Context, id string) (model.Node, error)
 	return r.resolveNode(ctx, id)
 }
 
+// Subject is the resolver for the subject field.
+func (r *queryResolver) Subject(ctx context.Context, handleOrID string) (*model.Subject, error) {
+	return r.resolveSubject(ctx, handleOrID)
+}
+
+// ActivitySnapshot is the resolver for the activitySnapshot field.
+func (r *subjectResolver) ActivitySnapshot(ctx context.Context, obj *model.Subject, rangeArg model.DateRangeInput, timezone scalar.TimeZone, environmentIDs []string) (*model.ActivitySnapshot, error) {
+	return r.resolveActivitySnapshot(ctx, obj, rangeArg, timezone, environmentIDs)
+}
+
 // Mutation returns generated.MutationResolver implementation.
 func (r *Resolver) Mutation() generated.MutationResolver { return &mutationResolver{r} }
 
 // Query returns generated.QueryResolver implementation.
 func (r *Resolver) Query() generated.QueryResolver { return &queryResolver{r} }
 
+// Subject returns generated.SubjectResolver implementation.
+func (r *Resolver) Subject() generated.SubjectResolver { return &subjectResolver{r} }
+
 type (
 	mutationResolver struct{ *Resolver }
 	queryResolver    struct{ *Resolver }
+	subjectResolver  struct{ *Resolver }
 )
 
 // !!! WARNING !!!

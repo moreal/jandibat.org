@@ -1,3 +1,56 @@
+input DateRangeInput {
+  from: Date!
+  to: Date!
+}
+
+type DateRange {
+  from: Date!
+  to: Date!
+}
+
+"A value object; activity days are not Relay Nodes."
+type ActivityDay {
+  date: Date!
+  count: Long!
+  level: Int!
+  entries: [ActivityEntry!]!
+}
+
+type ActivityEntry {
+  environmentID: String!
+  action: String!
+  metricName: String!
+  metricValue: Long!
+  metadata: [ActivityMetadataEntry!]!
+}
+
+type ActivityEnvironment {
+  id: String!
+  key: String!
+  name: String!
+  scope: String!
+  metadata: [ActivityMetadataEntry!]!
+}
+
+type ActivityMetadataEntry {
+  key: String!
+  value: String!
+}
+
+"A complete authorized projection for static consumers."
+type ActivitySnapshot {
+  subject: Subject!
+  range: DateRange!
+  days: [ActivityDay!]!
+  environments: [ActivityEnvironment!]!
+  total: Long!
+  longestStreak: Int!
+  generatedAt: DateTime!
+  "Null only when this scoped range has never incorporated activity."
+  dataUpdatedAt: DateTime
+  revision: String!
+}
+
 "A stable domain validation failure returned inside mutation payloads."
 type MutationError {
   code: String!
@@ -22,6 +75,12 @@ interface Node {
 
 type Subject implements Node {
   id: ID!
+  "A bounded, static projection; non-owners see only public activity."
+  activitySnapshot(
+    range: DateRangeInput!
+    timezone: TimeZone!
+    environmentIDs: [String!]
+  ): ActivitySnapshot!
 }
 
 type ProviderConnection implements Node {
@@ -44,6 +103,8 @@ type Session implements Node {
 type Query {
   _contract: Boolean!
   node(id: ID!): Node
+  "Resolve by raw handle or local ID (ID wins on collision); Relay IDs use node(id:)."
+  subject(handleOrID: String!): Subject
 }
 
 "Calendar date in ISO 8601 YYYY-MM-DD form."
@@ -51,6 +112,9 @@ scalar Date
 
 "UTC instant in RFC 3339 form."
 scalar DateTime
+
+"Signed 64-bit integer serialized as a base-10 string for JavaScript safety."
+scalar Long
 
 "IANA timezone identifier."
 scalar TimeZone

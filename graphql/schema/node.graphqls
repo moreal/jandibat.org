@@ -5,6 +5,12 @@ interface Node {
 
 type Subject implements Node {
   id: ID!
+  "A bounded, static projection; non-owners see only public activity."
+  activitySnapshot(
+    range: DateRangeInput!
+    timezone: TimeZone!
+    environmentIDs: [String!]
+  ): ActivitySnapshot!
 }
 
 type ProviderConnection implements Node {

@@ -2,6 +2,10 @@
 
 package model
 
+import (
+	"github.com/moreal/jandibat.org/apps/api/internal/graphql/scalar"
+)
+
 // Mutation results carry typed data and validation errors; transport failures use GraphQL errors.
 type MutationPayload interface {
 	IsMutationPayload()
@@ -14,12 +18,65 @@ type Node interface {
 	GetID() string
 }
 
+// A value object; activity days are not Relay Nodes.
+type ActivityDay struct {
+	Date    scalar.Date      `json:"date"`
+	Count   scalar.Long      `json:"count"`
+	Level   int              `json:"level"`
+	Entries []*ActivityEntry `json:"entries"`
+}
+
+type ActivityEntry struct {
+	EnvironmentID string                   `json:"environmentID"`
+	Action        string                   `json:"action"`
+	MetricName    string                   `json:"metricName"`
+	MetricValue   scalar.Long              `json:"metricValue"`
+	Metadata      []*ActivityMetadataEntry `json:"metadata"`
+}
+
+type ActivityEnvironment struct {
+	ID       string                   `json:"id"`
+	Key      string                   `json:"key"`
+	Name     string                   `json:"name"`
+	Scope    string                   `json:"scope"`
+	Metadata []*ActivityMetadataEntry `json:"metadata"`
+}
+
+type ActivityMetadataEntry struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+// A complete authorized projection for static consumers.
+type ActivitySnapshot struct {
+	Subject       *Subject               `json:"subject"`
+	Range         *DateRange             `json:"range"`
+	Days          []*ActivityDay         `json:"days"`
+	Environments  []*ActivityEnvironment `json:"environments"`
+	Total         scalar.Long            `json:"total"`
+	LongestStreak int                    `json:"longestStreak"`
+	GeneratedAt   scalar.DateTime        `json:"generatedAt"`
+	// Null only when this scoped range has never incorporated activity.
+	DataUpdatedAt *scalar.DateTime `json:"dataUpdatedAt,omitempty"`
+	Revision      string           `json:"revision"`
+}
+
 type CustomProvider struct {
 	ID string `json:"id"`
 }
 
 func (CustomProvider) IsNode()            {}
 func (this CustomProvider) GetID() string { return this.ID }
+
+type DateRange struct {
+	From scalar.Date `json:"from"`
+	To   scalar.Date `json:"to"`
+}
+
+type DateRangeInput struct {
+	From scalar.Date `json:"from"`
+	To   scalar.Date `json:"to"`
+}
 
 // Mutation root; domain mutations are added after their authorization tests.
 type Mutation struct {
@@ -52,6 +109,8 @@ func (this Session) GetID() string { return this.ID }
 
 type Subject struct {
 	ID string `json:"id"`
+	// A bounded, static projection; non-owners see only public activity.
+	ActivitySnapshot *ActivitySnapshot `json:"activitySnapshot"`
 }
 
 func (Subject) IsNode()            {}

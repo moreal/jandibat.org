@@ -14,6 +14,7 @@ import (
 	"github.com/99designs/gqlgen/graphql"
 	"github.com/99designs/gqlgen/graphql/introspection"
 	"github.com/moreal/jandibat.org/apps/api/internal/graphql/model"
+	"github.com/moreal/jandibat.org/apps/api/internal/graphql/scalar"
 	gqlparser "github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
 )
@@ -30,14 +31,60 @@ type Config = graphql.Config[ResolverRoot, DirectiveRoot, ComplexityRoot]
 type ResolverRoot interface {
 	Mutation() MutationResolver
 	Query() QueryResolver
+	Subject() SubjectResolver
 }
 
 type DirectiveRoot struct {
 }
 
 type ComplexityRoot struct {
+	ActivityDay struct {
+		Count   func(childComplexity int) int
+		Date    func(childComplexity int) int
+		Entries func(childComplexity int) int
+		Level   func(childComplexity int) int
+	}
+
+	ActivityEntry struct {
+		Action        func(childComplexity int) int
+		EnvironmentID func(childComplexity int) int
+		Metadata      func(childComplexity int) int
+		MetricName    func(childComplexity int) int
+		MetricValue   func(childComplexity int) int
+	}
+
+	ActivityEnvironment struct {
+		ID       func(childComplexity int) int
+		Key      func(childComplexity int) int
+		Metadata func(childComplexity int) int
+		Name     func(childComplexity int) int
+		Scope    func(childComplexity int) int
+	}
+
+	ActivityMetadataEntry struct {
+		Key   func(childComplexity int) int
+		Value func(childComplexity int) int
+	}
+
+	ActivitySnapshot struct {
+		DataUpdatedAt func(childComplexity int) int
+		Days          func(childComplexity int) int
+		Environments  func(childComplexity int) int
+		GeneratedAt   func(childComplexity int) int
+		LongestStreak func(childComplexity int) int
+		Range         func(childComplexity int) int
+		Revision      func(childComplexity int) int
+		Subject       func(childComplexity int) int
+		Total         func(childComplexity int) int
+	}
+
 	CustomProvider struct {
 		ID func(childComplexity int) int
+	}
+
+	DateRange struct {
+		From func(childComplexity int) int
+		To   func(childComplexity int) int
 	}
 
 	Mutation struct {
@@ -57,6 +104,7 @@ type ComplexityRoot struct {
 	Query struct {
 		Contract func(childComplexity int) int
 		Node     func(childComplexity int, id string) int
+		Subject  func(childComplexity int, handleOrID string) int
 	}
 
 	Session struct {
@@ -64,7 +112,8 @@ type ComplexityRoot struct {
 	}
 
 	Subject struct {
-		ID func(childComplexity int) int
+		ActivitySnapshot func(childComplexity int, rangeArg model.DateRangeInput, timezone scalar.TimeZone, environmentIDs []string) int
+		ID               func(childComplexity int) int
 	}
 
 	SyncJob struct {
@@ -82,6 +131,10 @@ type MutationResolver interface {
 type QueryResolver interface {
 	Contract(ctx context.Context) (bool, error)
 	Node(ctx context.Context, id string) (model.Node, error)
+	Subject(ctx context.Context, handleOrID string) (*model.Subject, error)
+}
+type SubjectResolver interface {
+	ActivitySnapshot(ctx context.Context, obj *model.Subject, rangeArg model.DateRangeInput, timezone scalar.TimeZone, environmentIDs []string) (*model.ActivitySnapshot, error)
 }
 
 // endregion ************************** generated!.gotpl **************************
@@ -102,12 +155,180 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 	_ = ec
 	switch typeName + "." + field {
 
+	case "ActivityDay.count":
+		if e.ComplexityRoot.ActivityDay.Count == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ActivityDay.Count(childComplexity), true
+	case "ActivityDay.date":
+		if e.ComplexityRoot.ActivityDay.Date == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ActivityDay.Date(childComplexity), true
+	case "ActivityDay.entries":
+		if e.ComplexityRoot.ActivityDay.Entries == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ActivityDay.Entries(childComplexity), true
+	case "ActivityDay.level":
+		if e.ComplexityRoot.ActivityDay.Level == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ActivityDay.Level(childComplexity), true
+
+	case "ActivityEntry.action":
+		if e.ComplexityRoot.ActivityEntry.Action == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ActivityEntry.Action(childComplexity), true
+	case "ActivityEntry.environmentID":
+		if e.ComplexityRoot.ActivityEntry.EnvironmentID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ActivityEntry.EnvironmentID(childComplexity), true
+	case "ActivityEntry.metadata":
+		if e.ComplexityRoot.ActivityEntry.Metadata == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ActivityEntry.Metadata(childComplexity), true
+	case "ActivityEntry.metricName":
+		if e.ComplexityRoot.ActivityEntry.MetricName == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ActivityEntry.MetricName(childComplexity), true
+	case "ActivityEntry.metricValue":
+		if e.ComplexityRoot.ActivityEntry.MetricValue == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ActivityEntry.MetricValue(childComplexity), true
+
+	case "ActivityEnvironment.id":
+		if e.ComplexityRoot.ActivityEnvironment.ID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ActivityEnvironment.ID(childComplexity), true
+	case "ActivityEnvironment.key":
+		if e.ComplexityRoot.ActivityEnvironment.Key == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ActivityEnvironment.Key(childComplexity), true
+	case "ActivityEnvironment.metadata":
+		if e.ComplexityRoot.ActivityEnvironment.Metadata == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ActivityEnvironment.Metadata(childComplexity), true
+	case "ActivityEnvironment.name":
+		if e.ComplexityRoot.ActivityEnvironment.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ActivityEnvironment.Name(childComplexity), true
+	case "ActivityEnvironment.scope":
+		if e.ComplexityRoot.ActivityEnvironment.Scope == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ActivityEnvironment.Scope(childComplexity), true
+
+	case "ActivityMetadataEntry.key":
+		if e.ComplexityRoot.ActivityMetadataEntry.Key == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ActivityMetadataEntry.Key(childComplexity), true
+	case "ActivityMetadataEntry.value":
+		if e.ComplexityRoot.ActivityMetadataEntry.Value == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ActivityMetadataEntry.Value(childComplexity), true
+
+	case "ActivitySnapshot.dataUpdatedAt":
+		if e.ComplexityRoot.ActivitySnapshot.DataUpdatedAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ActivitySnapshot.DataUpdatedAt(childComplexity), true
+	case "ActivitySnapshot.days":
+		if e.ComplexityRoot.ActivitySnapshot.Days == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ActivitySnapshot.Days(childComplexity), true
+	case "ActivitySnapshot.environments":
+		if e.ComplexityRoot.ActivitySnapshot.Environments == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ActivitySnapshot.Environments(childComplexity), true
+	case "ActivitySnapshot.generatedAt":
+		if e.ComplexityRoot.ActivitySnapshot.GeneratedAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ActivitySnapshot.GeneratedAt(childComplexity), true
+	case "ActivitySnapshot.longestStreak":
+		if e.ComplexityRoot.ActivitySnapshot.LongestStreak == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ActivitySnapshot.LongestStreak(childComplexity), true
+	case "ActivitySnapshot.range":
+		if e.ComplexityRoot.ActivitySnapshot.Range == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ActivitySnapshot.Range(childComplexity), true
+	case "ActivitySnapshot.revision":
+		if e.ComplexityRoot.ActivitySnapshot.Revision == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ActivitySnapshot.Revision(childComplexity), true
+	case "ActivitySnapshot.subject":
+		if e.ComplexityRoot.ActivitySnapshot.Subject == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ActivitySnapshot.Subject(childComplexity), true
+	case "ActivitySnapshot.total":
+		if e.ComplexityRoot.ActivitySnapshot.Total == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ActivitySnapshot.Total(childComplexity), true
+
 	case "CustomProvider.id":
 		if e.ComplexityRoot.CustomProvider.ID == nil {
 			break
 		}
 
 		return e.ComplexityRoot.CustomProvider.ID(childComplexity), true
+
+	case "DateRange.from":
+		if e.ComplexityRoot.DateRange.From == nil {
+			break
+		}
+
+		return e.ComplexityRoot.DateRange.From(childComplexity), true
+	case "DateRange.to":
+		if e.ComplexityRoot.DateRange.To == nil {
+			break
+		}
+
+		return e.ComplexityRoot.DateRange.To(childComplexity), true
 
 	case "Mutation._contract":
 		if e.ComplexityRoot.Mutation.Contract == nil {
@@ -160,6 +381,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Query.Node(childComplexity, args["id"].(string)), true
+	case "Query.subject":
+		if e.ComplexityRoot.Query.Subject == nil {
+			break
+		}
+
+		args, err := ec.field_Query_subject_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.Subject(childComplexity, args["handleOrID"].(string)), true
 
 	case "Session.id":
 		if e.ComplexityRoot.Session.ID == nil {
@@ -168,6 +400,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Session.ID(childComplexity), true
 
+	case "Subject.activitySnapshot":
+		if e.ComplexityRoot.Subject.ActivitySnapshot == nil {
+			break
+		}
+
+		args, err := ec.field_Subject_activitySnapshot_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Subject.ActivitySnapshot(childComplexity, args["range"].(model.DateRangeInput), args["timezone"].(scalar.TimeZone), args["environmentIDs"].([]string)), true
 	case "Subject.id":
 		if e.ComplexityRoot.Subject.ID == nil {
 			break
@@ -189,7 +432,9 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 	opCtx := graphql.GetOperationContext(ctx)
 	ec := newExecutionContext(opCtx, e, make(chan graphql.DeferredResult))
-	inputUnmarshalMap := graphql.BuildUnmarshalerMap()
+	inputUnmarshalMap := graphql.BuildUnmarshalerMap(
+		ec.unmarshalInputDateRangeInput,
+	)
 	first := true
 
 	switch opCtx.Operation.Operation {
@@ -264,6 +509,59 @@ func newExecutionContext(
 }
 
 var sources = []*ast.Source{
+	{Name: "../../../../../graphql/schema/activity.graphqls", Input: `input DateRangeInput {
+  from: Date!
+  to: Date!
+}
+
+type DateRange {
+  from: Date!
+  to: Date!
+}
+
+"A value object; activity days are not Relay Nodes."
+type ActivityDay {
+  date: Date!
+  count: Long!
+  level: Int!
+  entries: [ActivityEntry!]!
+}
+
+type ActivityEntry {
+  environmentID: String!
+  action: String!
+  metricName: String!
+  metricValue: Long!
+  metadata: [ActivityMetadataEntry!]!
+}
+
+type ActivityEnvironment {
+  id: String!
+  key: String!
+  name: String!
+  scope: String!
+  metadata: [ActivityMetadataEntry!]!
+}
+
+type ActivityMetadataEntry {
+  key: String!
+  value: String!
+}
+
+"A complete authorized projection for static consumers."
+type ActivitySnapshot {
+  subject: Subject!
+  range: DateRange!
+  days: [ActivityDay!]!
+  environments: [ActivityEnvironment!]!
+  total: Long!
+  longestStreak: Int!
+  generatedAt: DateTime!
+  "Null only when this scoped range has never incorporated activity."
+  dataUpdatedAt: DateTime
+  revision: String!
+}
+`, BuiltIn: false},
 	{Name: "../../../../../graphql/schema/mutation.graphqls", Input: `"A stable domain validation failure returned inside mutation payloads."
 type MutationError {
   code: String!
@@ -288,6 +586,12 @@ interface Node {
 
 type Subject implements Node {
   id: ID!
+  "A bounded, static projection; non-owners see only public activity."
+  activitySnapshot(
+    range: DateRangeInput!
+    timezone: TimeZone!
+    environmentIDs: [String!]
+  ): ActivitySnapshot!
 }
 
 type ProviderConnection implements Node {
@@ -310,6 +614,8 @@ type Session implements Node {
 type Query {
   _contract: Boolean!
   node(id: ID!): Node
+  "Resolve by raw handle or local ID (ID wins on collision); Relay IDs use node(id:)."
+  subject(handleOrID: String!): Subject
 }
 `, BuiltIn: false},
 	{Name: "../../../../../graphql/schema/scalars.graphqls", Input: `"Calendar date in ISO 8601 YYYY-MM-DD form."
@@ -317,6 +623,9 @@ scalar Date
 
 "UTC instant in RFC 3339 form."
 scalar DateTime
+
+"Signed 64-bit integer serialized as a base-10 string for JavaScript safety."
+scalar Long
 
 "IANA timezone identifier."
 scalar TimeZone
@@ -330,6 +639,106 @@ var parsedSchema = gqlparser.MustLoadSchema(sources...)
 // childFields_* functions provide shared child field context lookups.
 // Each function is generated once per unique object type, deduplicating the
 // switch statements that were previously inlined in every fieldContext_* function.
+
+func (ec *executionContext) childFields_ActivityDay(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "date":
+		return ec.fieldContext_ActivityDay_date(ctx, field)
+	case "count":
+		return ec.fieldContext_ActivityDay_count(ctx, field)
+	case "level":
+		return ec.fieldContext_ActivityDay_level(ctx, field)
+	case "entries":
+		return ec.fieldContext_ActivityDay_entries(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ActivityDay", field.Name)
+}
+
+func (ec *executionContext) childFields_ActivityEntry(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "environmentID":
+		return ec.fieldContext_ActivityEntry_environmentID(ctx, field)
+	case "action":
+		return ec.fieldContext_ActivityEntry_action(ctx, field)
+	case "metricName":
+		return ec.fieldContext_ActivityEntry_metricName(ctx, field)
+	case "metricValue":
+		return ec.fieldContext_ActivityEntry_metricValue(ctx, field)
+	case "metadata":
+		return ec.fieldContext_ActivityEntry_metadata(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ActivityEntry", field.Name)
+}
+
+func (ec *executionContext) childFields_ActivityEnvironment(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "id":
+		return ec.fieldContext_ActivityEnvironment_id(ctx, field)
+	case "key":
+		return ec.fieldContext_ActivityEnvironment_key(ctx, field)
+	case "name":
+		return ec.fieldContext_ActivityEnvironment_name(ctx, field)
+	case "scope":
+		return ec.fieldContext_ActivityEnvironment_scope(ctx, field)
+	case "metadata":
+		return ec.fieldContext_ActivityEnvironment_metadata(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ActivityEnvironment", field.Name)
+}
+
+func (ec *executionContext) childFields_ActivityMetadataEntry(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "key":
+		return ec.fieldContext_ActivityMetadataEntry_key(ctx, field)
+	case "value":
+		return ec.fieldContext_ActivityMetadataEntry_value(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ActivityMetadataEntry", field.Name)
+}
+
+func (ec *executionContext) childFields_ActivitySnapshot(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "subject":
+		return ec.fieldContext_ActivitySnapshot_subject(ctx, field)
+	case "range":
+		return ec.fieldContext_ActivitySnapshot_range(ctx, field)
+	case "days":
+		return ec.fieldContext_ActivitySnapshot_days(ctx, field)
+	case "environments":
+		return ec.fieldContext_ActivitySnapshot_environments(ctx, field)
+	case "total":
+		return ec.fieldContext_ActivitySnapshot_total(ctx, field)
+	case "longestStreak":
+		return ec.fieldContext_ActivitySnapshot_longestStreak(ctx, field)
+	case "generatedAt":
+		return ec.fieldContext_ActivitySnapshot_generatedAt(ctx, field)
+	case "dataUpdatedAt":
+		return ec.fieldContext_ActivitySnapshot_dataUpdatedAt(ctx, field)
+	case "revision":
+		return ec.fieldContext_ActivitySnapshot_revision(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ActivitySnapshot", field.Name)
+}
+
+func (ec *executionContext) childFields_DateRange(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "from":
+		return ec.fieldContext_DateRange_from(ctx, field)
+	case "to":
+		return ec.fieldContext_DateRange_to(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type DateRange", field.Name)
+}
+
+func (ec *executionContext) childFields_Subject(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "id":
+		return ec.fieldContext_Subject_id(ctx, field)
+	case "activitySnapshot":
+		return ec.fieldContext_Subject_activitySnapshot(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type Subject", field.Name)
+}
 
 func (ec *executionContext) childFields___Directive(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
@@ -475,6 +884,50 @@ func (ec *executionContext) field_Query_node_args(ctx context.Context, rawArgs m
 	return args, nil
 }
 
+func (ec *executionContext) field_Query_subject_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "handleOrID",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["handleOrID"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Subject_activitySnapshot_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "range",
+		func(ctx context.Context, v any) (model.DateRangeInput, error) {
+			return ec.unmarshalNDateRangeInput2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐDateRangeInput(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["range"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "timezone",
+		func(ctx context.Context, v any) (scalar.TimeZone, error) {
+			return ec.unmarshalNTimeZone2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋscalarᚐTimeZone(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["timezone"] = arg1
+	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "environmentIDs",
+		func(ctx context.Context, v any) ([]string, error) {
+			return ec.unmarshalOString2ᚕstringᚄ(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["environmentIDs"] = arg2
+	return args, nil
+}
+
 func (ec *executionContext) field___Directive_args_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -535,6 +988,644 @@ func (ec *executionContext) field___Type_fields_args(ctx context.Context, rawArg
 
 // region    **************************** field.gotpl *****************************
 
+func (ec *executionContext) _ActivityDay_date(ctx context.Context, field graphql.CollectedField, obj *model.ActivityDay) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ActivityDay_date(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Date, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v scalar.Date) graphql.Marshaler {
+			return ec.marshalNDate2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋscalarᚐDate(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ActivityDay_date(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ActivityDay", field, false, false, errors.New("field of type Date does not have child fields"))
+}
+
+func (ec *executionContext) _ActivityDay_count(ctx context.Context, field graphql.CollectedField, obj *model.ActivityDay) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ActivityDay_count(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Count, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v scalar.Long) graphql.Marshaler {
+			return ec.marshalNLong2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋscalarᚐLong(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ActivityDay_count(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ActivityDay", field, false, false, errors.New("field of type Long does not have child fields"))
+}
+
+func (ec *executionContext) _ActivityDay_level(ctx context.Context, field graphql.CollectedField, obj *model.ActivityDay) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ActivityDay_level(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Level, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ActivityDay_level(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ActivityDay", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _ActivityDay_entries(ctx context.Context, field graphql.CollectedField, obj *model.ActivityDay) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ActivityDay_entries(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Entries, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*model.ActivityEntry) graphql.Marshaler {
+			return ec.marshalNActivityEntry2ᚕᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐActivityEntryᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ActivityDay_entries(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ActivityDay",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_ActivityEntry(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ActivityEntry_environmentID(ctx context.Context, field graphql.CollectedField, obj *model.ActivityEntry) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ActivityEntry_environmentID(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.EnvironmentID, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ActivityEntry_environmentID(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ActivityEntry", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ActivityEntry_action(ctx context.Context, field graphql.CollectedField, obj *model.ActivityEntry) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ActivityEntry_action(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Action, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ActivityEntry_action(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ActivityEntry", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ActivityEntry_metricName(ctx context.Context, field graphql.CollectedField, obj *model.ActivityEntry) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ActivityEntry_metricName(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.MetricName, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ActivityEntry_metricName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ActivityEntry", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ActivityEntry_metricValue(ctx context.Context, field graphql.CollectedField, obj *model.ActivityEntry) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ActivityEntry_metricValue(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.MetricValue, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v scalar.Long) graphql.Marshaler {
+			return ec.marshalNLong2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋscalarᚐLong(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ActivityEntry_metricValue(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ActivityEntry", field, false, false, errors.New("field of type Long does not have child fields"))
+}
+
+func (ec *executionContext) _ActivityEntry_metadata(ctx context.Context, field graphql.CollectedField, obj *model.ActivityEntry) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ActivityEntry_metadata(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Metadata, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*model.ActivityMetadataEntry) graphql.Marshaler {
+			return ec.marshalNActivityMetadataEntry2ᚕᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐActivityMetadataEntryᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ActivityEntry_metadata(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ActivityEntry",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_ActivityMetadataEntry(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ActivityEnvironment_id(ctx context.Context, field graphql.CollectedField, obj *model.ActivityEnvironment) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ActivityEnvironment_id(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ID, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ActivityEnvironment_id(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ActivityEnvironment", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ActivityEnvironment_key(ctx context.Context, field graphql.CollectedField, obj *model.ActivityEnvironment) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ActivityEnvironment_key(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Key, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ActivityEnvironment_key(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ActivityEnvironment", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ActivityEnvironment_name(ctx context.Context, field graphql.CollectedField, obj *model.ActivityEnvironment) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ActivityEnvironment_name(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Name, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ActivityEnvironment_name(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ActivityEnvironment", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ActivityEnvironment_scope(ctx context.Context, field graphql.CollectedField, obj *model.ActivityEnvironment) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ActivityEnvironment_scope(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Scope, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ActivityEnvironment_scope(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ActivityEnvironment", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ActivityEnvironment_metadata(ctx context.Context, field graphql.CollectedField, obj *model.ActivityEnvironment) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ActivityEnvironment_metadata(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Metadata, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*model.ActivityMetadataEntry) graphql.Marshaler {
+			return ec.marshalNActivityMetadataEntry2ᚕᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐActivityMetadataEntryᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ActivityEnvironment_metadata(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ActivityEnvironment",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_ActivityMetadataEntry(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ActivityMetadataEntry_key(ctx context.Context, field graphql.CollectedField, obj *model.ActivityMetadataEntry) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ActivityMetadataEntry_key(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Key, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ActivityMetadataEntry_key(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ActivityMetadataEntry", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ActivityMetadataEntry_value(ctx context.Context, field graphql.CollectedField, obj *model.ActivityMetadataEntry) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ActivityMetadataEntry_value(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Value, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ActivityMetadataEntry_value(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ActivityMetadataEntry", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ActivitySnapshot_subject(ctx context.Context, field graphql.CollectedField, obj *model.ActivitySnapshot) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ActivitySnapshot_subject(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Subject, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.Subject) graphql.Marshaler {
+			return ec.marshalNSubject2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐSubject(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ActivitySnapshot_subject(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ActivitySnapshot",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Subject(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ActivitySnapshot_range(ctx context.Context, field graphql.CollectedField, obj *model.ActivitySnapshot) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ActivitySnapshot_range(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Range, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.DateRange) graphql.Marshaler {
+			return ec.marshalNDateRange2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐDateRange(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ActivitySnapshot_range(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ActivitySnapshot",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_DateRange(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ActivitySnapshot_days(ctx context.Context, field graphql.CollectedField, obj *model.ActivitySnapshot) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ActivitySnapshot_days(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Days, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*model.ActivityDay) graphql.Marshaler {
+			return ec.marshalNActivityDay2ᚕᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐActivityDayᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ActivitySnapshot_days(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ActivitySnapshot",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_ActivityDay(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ActivitySnapshot_environments(ctx context.Context, field graphql.CollectedField, obj *model.ActivitySnapshot) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ActivitySnapshot_environments(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Environments, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*model.ActivityEnvironment) graphql.Marshaler {
+			return ec.marshalNActivityEnvironment2ᚕᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐActivityEnvironmentᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ActivitySnapshot_environments(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ActivitySnapshot",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_ActivityEnvironment(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ActivitySnapshot_total(ctx context.Context, field graphql.CollectedField, obj *model.ActivitySnapshot) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ActivitySnapshot_total(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Total, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v scalar.Long) graphql.Marshaler {
+			return ec.marshalNLong2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋscalarᚐLong(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ActivitySnapshot_total(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ActivitySnapshot", field, false, false, errors.New("field of type Long does not have child fields"))
+}
+
+func (ec *executionContext) _ActivitySnapshot_longestStreak(ctx context.Context, field graphql.CollectedField, obj *model.ActivitySnapshot) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ActivitySnapshot_longestStreak(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.LongestStreak, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ActivitySnapshot_longestStreak(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ActivitySnapshot", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _ActivitySnapshot_generatedAt(ctx context.Context, field graphql.CollectedField, obj *model.ActivitySnapshot) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ActivitySnapshot_generatedAt(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.GeneratedAt, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v scalar.DateTime) graphql.Marshaler {
+			return ec.marshalNDateTime2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋscalarᚐDateTime(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ActivitySnapshot_generatedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ActivitySnapshot", field, false, false, errors.New("field of type DateTime does not have child fields"))
+}
+
+func (ec *executionContext) _ActivitySnapshot_dataUpdatedAt(ctx context.Context, field graphql.CollectedField, obj *model.ActivitySnapshot) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ActivitySnapshot_dataUpdatedAt(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.DataUpdatedAt, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *scalar.DateTime) graphql.Marshaler {
+			return ec.marshalODateTime2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋscalarᚐDateTime(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_ActivitySnapshot_dataUpdatedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ActivitySnapshot", field, false, false, errors.New("field of type DateTime does not have child fields"))
+}
+
+func (ec *executionContext) _ActivitySnapshot_revision(ctx context.Context, field graphql.CollectedField, obj *model.ActivitySnapshot) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ActivitySnapshot_revision(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Revision, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ActivitySnapshot_revision(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ActivitySnapshot", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
 func (ec *executionContext) _CustomProvider_id(ctx context.Context, field graphql.CollectedField, obj *model.CustomProvider) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -556,6 +1647,52 @@ func (ec *executionContext) _CustomProvider_id(ctx context.Context, field graphq
 }
 func (ec *executionContext) fieldContext_CustomProvider_id(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("CustomProvider", field, false, false, errors.New("field of type ID does not have child fields"))
+}
+
+func (ec *executionContext) _DateRange_from(ctx context.Context, field graphql.CollectedField, obj *model.DateRange) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_DateRange_from(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.From, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v scalar.Date) graphql.Marshaler {
+			return ec.marshalNDate2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋscalarᚐDate(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_DateRange_from(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("DateRange", field, false, false, errors.New("field of type Date does not have child fields"))
+}
+
+func (ec *executionContext) _DateRange_to(ctx context.Context, field graphql.CollectedField, obj *model.DateRange) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_DateRange_to(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.To, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v scalar.Date) graphql.Marshaler {
+			return ec.marshalNDate2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋscalarᚐDate(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_DateRange_to(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("DateRange", field, false, false, errors.New("field of type Date does not have child fields"))
 }
 
 func (ec *executionContext) _Mutation__contract(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
@@ -740,6 +1877,50 @@ func (ec *executionContext) fieldContext_Query_node(ctx context.Context, field g
 	return fc, nil
 }
 
+func (ec *executionContext) _Query_subject(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Query_subject(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().Subject(ctx, fc.Args["handleOrID"].(string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.Subject) graphql.Marshaler {
+			return ec.marshalOSubject2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐSubject(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_Query_subject(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Subject(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_subject_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Query___type(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -860,6 +2041,50 @@ func (ec *executionContext) _Subject_id(ctx context.Context, field graphql.Colle
 }
 func (ec *executionContext) fieldContext_Subject_id(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("Subject", field, false, false, errors.New("field of type ID does not have child fields"))
+}
+
+func (ec *executionContext) _Subject_activitySnapshot(ctx context.Context, field graphql.CollectedField, obj *model.Subject) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Subject_activitySnapshot(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Subject().ActivitySnapshot(ctx, obj, fc.Args["range"].(model.DateRangeInput), fc.Args["timezone"].(scalar.TimeZone), fc.Args["environmentIDs"].([]string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.ActivitySnapshot) graphql.Marshaler {
+			return ec.marshalNActivitySnapshot2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐActivitySnapshot(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Subject_activitySnapshot(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Subject",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_ActivitySnapshot(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Subject_activitySnapshot_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
 }
 
 func (ec *executionContext) _SyncJob_id(ctx context.Context, field graphql.CollectedField, obj *model.SyncJob) (ret graphql.Marshaler) {
@@ -1944,6 +3169,43 @@ func (ec *executionContext) fieldContext___Type_isOneOf(_ context.Context, field
 
 // region    **************************** input.gotpl *****************************
 
+func (ec *executionContext) unmarshalInputDateRangeInput(ctx context.Context, obj any) (model.DateRangeInput, error) {
+	var it model.DateRangeInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"from", "to"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "from":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("from"))
+			data, err := ec.unmarshalNDate2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋscalarᚐDate(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.From = data
+		case "to":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("to"))
+			data, err := ec.unmarshalNDate2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋscalarᚐDate(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.To = data
+		}
+	}
+	return it, nil
+}
+
 // endregion **************************** input.gotpl *****************************
 
 // region    ************************** interface.gotpl ***************************
@@ -2013,6 +3275,296 @@ func (ec *executionContext) _Node(ctx context.Context, sel ast.SelectionSet, obj
 
 // region    **************************** object.gotpl ****************************
 
+var activityDayImplementors = []string{"ActivityDay"}
+
+func (ec *executionContext) _ActivityDay(ctx context.Context, sel ast.SelectionSet, obj *model.ActivityDay) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, activityDayImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("ActivityDay")
+		case "date":
+			out.Values[i] = ec._ActivityDay_date(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "count":
+			out.Values[i] = ec._ActivityDay_count(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "level":
+			out.Values[i] = ec._ActivityDay_level(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "entries":
+			out.Values[i] = ec._ActivityDay_entries(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var activityEntryImplementors = []string{"ActivityEntry"}
+
+func (ec *executionContext) _ActivityEntry(ctx context.Context, sel ast.SelectionSet, obj *model.ActivityEntry) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, activityEntryImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("ActivityEntry")
+		case "environmentID":
+			out.Values[i] = ec._ActivityEntry_environmentID(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "action":
+			out.Values[i] = ec._ActivityEntry_action(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "metricName":
+			out.Values[i] = ec._ActivityEntry_metricName(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "metricValue":
+			out.Values[i] = ec._ActivityEntry_metricValue(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "metadata":
+			out.Values[i] = ec._ActivityEntry_metadata(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var activityEnvironmentImplementors = []string{"ActivityEnvironment"}
+
+func (ec *executionContext) _ActivityEnvironment(ctx context.Context, sel ast.SelectionSet, obj *model.ActivityEnvironment) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, activityEnvironmentImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("ActivityEnvironment")
+		case "id":
+			out.Values[i] = ec._ActivityEnvironment_id(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "key":
+			out.Values[i] = ec._ActivityEnvironment_key(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "name":
+			out.Values[i] = ec._ActivityEnvironment_name(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "scope":
+			out.Values[i] = ec._ActivityEnvironment_scope(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "metadata":
+			out.Values[i] = ec._ActivityEnvironment_metadata(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var activityMetadataEntryImplementors = []string{"ActivityMetadataEntry"}
+
+func (ec *executionContext) _ActivityMetadataEntry(ctx context.Context, sel ast.SelectionSet, obj *model.ActivityMetadataEntry) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, activityMetadataEntryImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("ActivityMetadataEntry")
+		case "key":
+			out.Values[i] = ec._ActivityMetadataEntry_key(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "value":
+			out.Values[i] = ec._ActivityMetadataEntry_value(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var activitySnapshotImplementors = []string{"ActivitySnapshot"}
+
+func (ec *executionContext) _ActivitySnapshot(ctx context.Context, sel ast.SelectionSet, obj *model.ActivitySnapshot) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, activitySnapshotImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("ActivitySnapshot")
+		case "subject":
+			out.Values[i] = ec._ActivitySnapshot_subject(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "range":
+			out.Values[i] = ec._ActivitySnapshot_range(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "days":
+			out.Values[i] = ec._ActivitySnapshot_days(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "environments":
+			out.Values[i] = ec._ActivitySnapshot_environments(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "total":
+			out.Values[i] = ec._ActivitySnapshot_total(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "longestStreak":
+			out.Values[i] = ec._ActivitySnapshot_longestStreak(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "generatedAt":
+			out.Values[i] = ec._ActivitySnapshot_generatedAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "dataUpdatedAt":
+			out.Values[i] = ec._ActivitySnapshot_dataUpdatedAt(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "revision":
+			out.Values[i] = ec._ActivitySnapshot_revision(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
 var customProviderImplementors = []string{"CustomProvider", "Node"}
 
 func (ec *executionContext) _CustomProvider(ctx context.Context, sel ast.SelectionSet, obj *model.CustomProvider) graphql.Marshaler {
@@ -2027,6 +3579,49 @@ func (ec *executionContext) _CustomProvider(ctx context.Context, sel ast.Selecti
 			out.Values[i] = graphql.MarshalString("CustomProvider")
 		case "id":
 			out.Values[i] = ec._CustomProvider_id(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var dateRangeImplementors = []string{"DateRange"}
+
+func (ec *executionContext) _DateRange(ctx context.Context, sel ast.SelectionSet, obj *model.DateRange) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, dateRangeImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("DateRange")
+		case "from":
+			out.Values[i] = ec._DateRange_from(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "to":
+			out.Values[i] = ec._DateRange_to(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -2249,6 +3844,28 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "subject":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_subject(ctx, field)
+				if res == graphql.RequiredNull {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
 		case "__type":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Query___type(ctx, field)
@@ -2337,8 +3954,46 @@ func (ec *executionContext) _Subject(ctx context.Context, sel ast.SelectionSet, 
 		case "id":
 			out.Values[i] = ec._Subject_id(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
+		case "activitySnapshot":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Subject_activitySnapshot(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.IsDeferred() {
+				deferredFieldSet.AddField(field)
+				fieldIndex := len(deferredFieldSet.Values) - 1
+				deferredFieldSet.Concurrently(fieldIndex, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, deferredFieldSet)
+				})
+
+				for _, deferrable := range field.Deferrables {
+					view, ok := deferLabelToView[deferrable.Label]
+					if !ok {
+						view = deferredFieldSet.NewView()
+						deferLabelToView[deferrable.Label] = view
+					}
+					view.AddIndices(fieldIndex)
+				}
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -2790,6 +4445,124 @@ func (ec *executionContext) ___Type(ctx context.Context, sel ast.SelectionSet, o
 
 // region    ***************************** type.gotpl *****************************
 
+func (ec *executionContext) marshalNActivityDay2ᚕᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐActivityDayᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.ActivityDay) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNActivityDay2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐActivityDay(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNActivityDay2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐActivityDay(ctx context.Context, sel ast.SelectionSet, v *model.ActivityDay) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._ActivityDay(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNActivityEntry2ᚕᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐActivityEntryᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.ActivityEntry) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNActivityEntry2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐActivityEntry(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNActivityEntry2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐActivityEntry(ctx context.Context, sel ast.SelectionSet, v *model.ActivityEntry) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._ActivityEntry(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNActivityEnvironment2ᚕᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐActivityEnvironmentᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.ActivityEnvironment) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNActivityEnvironment2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐActivityEnvironment(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNActivityEnvironment2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐActivityEnvironment(ctx context.Context, sel ast.SelectionSet, v *model.ActivityEnvironment) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._ActivityEnvironment(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNActivityMetadataEntry2ᚕᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐActivityMetadataEntryᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.ActivityMetadataEntry) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNActivityMetadataEntry2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐActivityMetadataEntry(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNActivityMetadataEntry2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐActivityMetadataEntry(ctx context.Context, sel ast.SelectionSet, v *model.ActivityMetadataEntry) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._ActivityMetadataEntry(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNActivitySnapshot2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐActivitySnapshot(ctx context.Context, sel ast.SelectionSet, v model.ActivitySnapshot) graphql.Marshaler {
+	return ec._ActivitySnapshot(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNActivitySnapshot2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐActivitySnapshot(ctx context.Context, sel ast.SelectionSet, v *model.ActivitySnapshot) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._ActivitySnapshot(ctx, sel, v)
+}
+
 func (ec *executionContext) unmarshalNBoolean2bool(ctx context.Context, v any) (bool, error) {
 	res, err := graphql.UnmarshalBoolean(v)
 	return res, graphql.ErrorOnPath(ctx, err)
@@ -2804,6 +4577,41 @@ func (ec *executionContext) marshalNBoolean2bool(ctx context.Context, sel ast.Se
 		}
 	}
 	return res
+}
+
+func (ec *executionContext) unmarshalNDate2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋscalarᚐDate(ctx context.Context, v any) (scalar.Date, error) {
+	var res scalar.Date
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNDate2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋscalarᚐDate(ctx context.Context, sel ast.SelectionSet, v scalar.Date) graphql.Marshaler {
+	return v
+}
+
+func (ec *executionContext) marshalNDateRange2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐDateRange(ctx context.Context, sel ast.SelectionSet, v *model.DateRange) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._DateRange(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNDateRangeInput2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐDateRangeInput(ctx context.Context, v any) (model.DateRangeInput, error) {
+	res, err := ec.unmarshalInputDateRangeInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalNDateTime2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋscalarᚐDateTime(ctx context.Context, v any) (scalar.DateTime, error) {
+	var res scalar.DateTime
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNDateTime2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋscalarᚐDateTime(ctx context.Context, sel ast.SelectionSet, v scalar.DateTime) graphql.Marshaler {
+	return v
 }
 
 func (ec *executionContext) unmarshalNID2string(ctx context.Context, v any) (string, error) {
@@ -2822,6 +4630,32 @@ func (ec *executionContext) marshalNID2string(ctx context.Context, sel ast.Selec
 	return res
 }
 
+func (ec *executionContext) unmarshalNInt2int(ctx context.Context, v any) (int, error) {
+	res, err := graphql.UnmarshalInt(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNInt2int(ctx context.Context, sel ast.SelectionSet, v int) graphql.Marshaler {
+	_ = sel
+	res := graphql.MarshalInt(v)
+	if res == graphql.Null {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+	}
+	return res
+}
+
+func (ec *executionContext) unmarshalNLong2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋscalarᚐLong(ctx context.Context, v any) (scalar.Long, error) {
+	var res scalar.Long
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNLong2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋscalarᚐLong(ctx context.Context, sel ast.SelectionSet, v scalar.Long) graphql.Marshaler {
+	return v
+}
+
 func (ec *executionContext) unmarshalNString2string(ctx context.Context, v any) (string, error) {
 	res, err := graphql.UnmarshalString(v)
 	return res, graphql.ErrorOnPath(ctx, err)
@@ -2836,6 +4670,26 @@ func (ec *executionContext) marshalNString2string(ctx context.Context, sel ast.S
 		}
 	}
 	return res
+}
+
+func (ec *executionContext) marshalNSubject2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐSubject(ctx context.Context, sel ast.SelectionSet, v *model.Subject) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._Subject(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNTimeZone2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋscalarᚐTimeZone(ctx context.Context, v any) (scalar.TimeZone, error) {
+	var res scalar.TimeZone
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNTimeZone2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋscalarᚐTimeZone(ctx context.Context, sel ast.SelectionSet, v scalar.TimeZone) graphql.Marshaler {
+	return v
 }
 
 func (ec *executionContext) marshalN__Directive2githubᚗcomᚋ99designsᚋgqlgenᚋgraphqlᚋintrospectionᚐDirective(ctx context.Context, sel ast.SelectionSet, v introspection.Directive) graphql.Marshaler {
@@ -3008,11 +4862,62 @@ func (ec *executionContext) marshalOBoolean2ᚖbool(ctx context.Context, sel ast
 	return res
 }
 
+func (ec *executionContext) unmarshalODateTime2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋscalarᚐDateTime(ctx context.Context, v any) (*scalar.DateTime, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var res = new(scalar.DateTime)
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalODateTime2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋscalarᚐDateTime(ctx context.Context, sel ast.SelectionSet, v *scalar.DateTime) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return v
+}
+
 func (ec *executionContext) marshalONode2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐNode(ctx context.Context, sel ast.SelectionSet, v model.Node) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._Node(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalOString2ᚕstringᚄ(ctx context.Context, v any) ([]string, error) {
+	if v == nil {
+		return nil, nil
+	}
+	vSlice := graphql.CoerceList(v)
+	var err error
+	res := make([]string, len(vSlice))
+	for i := range vSlice {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
+		res[i], err = ec.unmarshalNString2string(ctx, vSlice[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
+}
+
+func (ec *executionContext) marshalOString2ᚕstringᚄ(ctx context.Context, sel ast.SelectionSet, v []string) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	ret := make(graphql.Array, len(v))
+	for i := range v {
+		ret[i] = ec.marshalNString2string(ctx, sel, v[i])
+	}
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
 }
 
 func (ec *executionContext) unmarshalOString2ᚖstring(ctx context.Context, v any) (*string, error) {
@@ -3031,6 +4936,13 @@ func (ec *executionContext) marshalOString2ᚖstring(ctx context.Context, sel as
 	_ = ctx
 	res := graphql.MarshalString(*v)
 	return res
+}
+
+func (ec *executionContext) marshalOSubject2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐSubject(ctx context.Context, sel ast.SelectionSet, v *model.Subject) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._Subject(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalO__EnumValue2ᚕgithubᚗcomᚋ99designsᚋgqlgenᚋgraphqlᚋintrospectionᚐEnumValueᚄ(ctx context.Context, sel ast.SelectionSet, v []introspection.EnumValue) graphql.Marshaler {

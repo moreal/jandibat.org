@@ -107,6 +107,10 @@ func (s *Store) DeleteCustomProviderAggregate(ctx context.Context, id string) er
 		if row == nil {
 			return notFound("custom provider", id)
 		}
+		changes, err := generated.ListCustomProviderFactChanges(txctx, tx, parsed, row.SubjectId, row.EnvironmentId)
+		if err != nil {
+			return fmt.Errorf("delete custom provider aggregate: load fact changes: %w", err)
+		}
 		if err := generated.DeleteCustomProviderRefreshCache(txctx, tx, row.SubjectId, row.EnvironmentId); err != nil {
 			return fmt.Errorf("delete custom provider aggregate: refresh cache: %w", err)
 		}
@@ -115,6 +119,11 @@ func (s *Store) DeleteCustomProviderAggregate(ctx context.Context, id string) er
 		}
 		if _, err := generated.DeleteCustomProviderById(txctx, tx, parsed); err != nil {
 			return fmt.Errorf("delete custom provider aggregate: provider: %w", err)
+		}
+		for _, change := range changes {
+			if err := touchActivitySnapshotChange(txctx, tx, change.SubjectId, change.EnvironmentId, change.ActivityDate, change.VisibilityScope); err != nil {
+				return fmt.Errorf("delete custom provider aggregate: mark changed facts: %w", err)
+			}
 		}
 		// API cannot DELETE environments; maintenance reaps the sanitized tombstone.
 		return nil
@@ -182,14 +191,28 @@ func (s *Store) DeleteCustomProvider(ctx context.Context, id string) error {
 	if err != nil {
 		return integrations.ErrInvalidIdentifier
 	}
-	count, err := generated.DeleteCustomProviderById(ctx, appdb.PGXExecutorFor(ctx, s.pool), parsed)
-	if err != nil {
-		return fmt.Errorf("delete custom provider: %w", err)
-	}
-	if count == 0 {
-		return notFound("custom provider", id)
-	}
-	return nil
+	return appdb.InTx(ctx, s.pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
+		row, err := generated.LockCustomProviderAggregate(txctx, tx, parsed)
+		if err != nil {
+			return fmt.Errorf("delete custom provider: load: %w", err)
+		}
+		if row == nil {
+			return notFound("custom provider", id)
+		}
+		changes, err := generated.ListCustomProviderCascadeFactChanges(txctx, tx, parsed)
+		if err != nil {
+			return fmt.Errorf("delete custom provider: load fact changes: %w", err)
+		}
+		if _, err := generated.DeleteCustomProviderById(txctx, tx, parsed); err != nil {
+			return fmt.Errorf("delete custom provider: %w", err)
+		}
+		for _, change := range changes {
+			if err := touchActivitySnapshotChange(txctx, tx, change.SubjectId, change.EnvironmentId, change.ActivityDate, change.VisibilityScope); err != nil {
+				return fmt.Errorf("delete custom provider: mark changed facts: %w", err)
+			}
+		}
+		return nil
+	})
 }
 
 type customProviderConfiguration struct {

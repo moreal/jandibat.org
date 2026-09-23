@@ -1,0 +1,52 @@
+input DateRangeInput {
+  from: Date!
+  to: Date!
+}
+
+type DateRange {
+  from: Date!
+  to: Date!
+}
+
+"A value object; activity days are not Relay Nodes."
+type ActivityDay {
+  date: Date!
+  count: Long!
+  level: Int!
+  entries: [ActivityEntry!]!
+}
+
+type ActivityEntry {
+  environmentID: String!
+  action: String!
+  metricName: String!
+  metricValue: Long!
+  metadata: [ActivityMetadataEntry!]!
+}
+
+type ActivityEnvironment {
+  id: String!
+  key: String!
+  name: String!
+  scope: String!
+  metadata: [ActivityMetadataEntry!]!
+}
+
+type ActivityMetadataEntry {
+  key: String!
+  value: String!
+}
+
+"A complete authorized projection for static consumers."
+type ActivitySnapshot {
+  subject: Subject!
+  range: DateRange!
+  days: [ActivityDay!]!
+  environments: [ActivityEnvironment!]!
+  total: Long!
+  longestStreak: Int!
+  generatedAt: DateTime!
+  "Null only when this scoped range has never incorporated activity."
+  dataUpdatedAt: DateTime
+  revision: String!
+}

@@ -192,8 +192,9 @@ func projectProviderConnection(connection integrations.ProviderConnection) *mode
 
 func projectCustomProvider(provider integrations.CustomProvider) *model.CustomProvider {
 	return &model.CustomProvider{
-		ID:            relayid.Encode(relayid.CustomProvider, provider.ID),
-		EnvironmentID: provider.EnvironmentID, Slug: provider.Slug, Name: provider.Name,
+		ID:               relayid.Encode(relayid.CustomProvider, provider.ID),
+		IngestProviderID: provider.ID,
+		EnvironmentID:    provider.EnvironmentID, Slug: provider.Slug, Name: provider.Name,
 		Description: provider.Description, Status: string(provider.Status),
 		AllowedActions: append([]string{}, provider.AllowedActions...),
 		AllowedMetrics: append([]string{}, provider.AllowedMetrics...),

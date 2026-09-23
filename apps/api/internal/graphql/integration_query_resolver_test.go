@@ -204,19 +204,22 @@ func TestIntegrationGraphQLProjectsConnectionsAndNodesWithoutSecrets(t *testing.
 		providerCatalog { id kind category supportsOAuth }
 		subject(handleOrID: "mine") {
 			providerConnections(first: 1) { edges { node { id providerID environmentID authMethod status externalAccountID scopes privateDataEnabled createdAt updatedAt } } pageInfo { hasNextPage hasPreviousPage } }
-			customProviders(first: 1) { edges { node { id environmentID slug name description status allowedActions allowedMetrics createdAt updatedAt } } }
+			customProviders(first: 1) { edges { node { id ingestProviderID environmentID slug name description status allowedActions allowedMetrics createdAt updatedAt } } }
 		}
 		connection: node(id: $connection) { ... on ProviderConnection { providerID environmentID authMethod status externalAccountID scopes createdAt updatedAt } }
-		custom: node(id: $custom) { ... on CustomProvider { environmentID slug name description status allowedActions allowedMetrics createdAt updatedAt } }
+		custom: node(id: $custom) { ... on CustomProvider { id ingestProviderID environmentID slug name description status allowedActions allowedMetrics createdAt updatedAt } }
 	}`, client.Var("connection", relayid.Encode(relayid.ProviderConnection, integrationConnectionID1)), client.Var("custom", relayid.Encode(relayid.CustomProvider, integrationCustomID1)))
 	if err != nil || len(response.Errors) != 0 {
 		t.Fatalf("GraphQL integration projection = (%#v, %v)", response, err)
 	}
 	data, _ := json.Marshal(response.Data)
-	for _, want := range []string{`"providerID":"github"`, `"authMethod":"oauth2"`, `"slug":"steps"`, `"allowedMetrics":["steps"]`, `"createdAt":"2026-09-24T01:02:03Z"`, `"hasPreviousPage":false`} {
+	for _, want := range []string{`"providerID":"github"`, `"authMethod":"oauth2"`, `"slug":"steps"`, `"ingestProviderID":"` + integrationCustomID1 + `"`, `"allowedMetrics":["steps"]`, `"createdAt":"2026-09-24T01:02:03Z"`, `"hasPreviousPage":false`} {
 		if !strings.Contains(string(data), want) {
 			t.Fatalf("missing safe metadata %s: %s", want, data)
 		}
+	}
+	if strings.Count(string(data), `"ingestProviderID":"`+integrationCustomID1+`"`) != 2 || !strings.Contains(string(data), `"id":"`+relayid.Encode(relayid.CustomProvider, integrationCustomID1)+`"`) {
+		t.Fatalf("custom list/node must expose the separate raw ingest identifier and opaque Relay ID: %s", data)
 	}
 	for _, private := range []string{"private-login", "secret diagnostic", "EncryptedCredentials", "EncryptedIngestSecret"} {
 		if strings.Contains(string(data), private) {

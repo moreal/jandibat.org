@@ -409,6 +409,8 @@ type ProviderConnection implements Node {
 
 type CustomProvider implements Node {
   id: ID!
+  "Owner-scoped raw UUID for the HTTP activity-ingest edge path; not a credential or Relay ID."
+  ingestProviderID: String!
   environmentID: String!
   slug: String!
   name: String!

@@ -108,16 +108,17 @@ type ComplexityRoot struct {
 	}
 
 	CustomProvider struct {
-		AllowedActions func(childComplexity int) int
-		AllowedMetrics func(childComplexity int) int
-		CreatedAt      func(childComplexity int) int
-		Description    func(childComplexity int) int
-		EnvironmentID  func(childComplexity int) int
-		ID             func(childComplexity int) int
-		Name           func(childComplexity int) int
-		Slug           func(childComplexity int) int
-		Status         func(childComplexity int) int
-		UpdatedAt      func(childComplexity int) int
+		AllowedActions   func(childComplexity int) int
+		AllowedMetrics   func(childComplexity int) int
+		CreatedAt        func(childComplexity int) int
+		Description      func(childComplexity int) int
+		EnvironmentID    func(childComplexity int) int
+		ID               func(childComplexity int) int
+		IngestProviderID func(childComplexity int) int
+		Name             func(childComplexity int) int
+		Slug             func(childComplexity int) int
+		Status           func(childComplexity int) int
+		UpdatedAt        func(childComplexity int) int
 	}
 
 	CustomProviderConnection struct {
@@ -752,6 +753,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.CustomProvider.ID(childComplexity), true
+	case "CustomProvider.ingestProviderID":
+		if e.ComplexityRoot.CustomProvider.IngestProviderID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CustomProvider.IngestProviderID(childComplexity), true
 	case "CustomProvider.name":
 		if e.ComplexityRoot.CustomProvider.Name == nil {
 			break
@@ -2454,6 +2461,8 @@ type ProviderConnection implements Node {
 
 type CustomProvider implements Node {
   id: ID!
+  "Owner-scoped raw UUID for the HTTP activity-ingest edge path; not a credential or Relay ID."
+  ingestProviderID: String!
   environmentID: String!
   slug: String!
   name: String!
@@ -2768,6 +2777,8 @@ func (ec *executionContext) childFields_CustomProvider(ctx context.Context, fiel
 	switch field.Name {
 	case "id":
 		return ec.fieldContext_CustomProvider_id(ctx, field)
+	case "ingestProviderID":
+		return ec.fieldContext_CustomProvider_ingestProviderID(ctx, field)
 	case "environmentID":
 		return ec.fieldContext_CustomProvider_environmentID(ctx, field)
 	case "slug":
@@ -4935,6 +4946,29 @@ func (ec *executionContext) _CustomProvider_id(ctx context.Context, field graphq
 }
 func (ec *executionContext) fieldContext_CustomProvider_id(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("CustomProvider", field, false, false, errors.New("field of type ID does not have child fields"))
+}
+
+func (ec *executionContext) _CustomProvider_ingestProviderID(ctx context.Context, field graphql.CollectedField, obj *model.CustomProvider) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_CustomProvider_ingestProviderID(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.IngestProviderID, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_CustomProvider_ingestProviderID(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("CustomProvider", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
 func (ec *executionContext) _CustomProvider_environmentID(ctx context.Context, field graphql.CollectedField, obj *model.CustomProvider) (ret graphql.Marshaler) {
@@ -12701,6 +12735,11 @@ func (ec *executionContext) _CustomProvider(ctx context.Context, sel ast.Selecti
 			out.Values[i] = graphql.MarshalString("CustomProvider")
 		case "id":
 			out.Values[i] = ec._CustomProvider_id(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "ingestProviderID":
+			out.Values[i] = ec._CustomProvider_ingestProviderID(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}

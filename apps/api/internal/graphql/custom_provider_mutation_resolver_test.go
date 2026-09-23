@@ -144,8 +144,8 @@ func TestCreateCustomProviderGeneratesOneTimeKeyOnlyForOwnedSubject(t *testing.T
 	if err != nil || string(decoded) != strings.Repeat("x", 32) || p.created.IngestSecret != *got.IngestionKey || p.created.SubjectID != "subject-1" {
 		t.Fatalf("generated key or scoped input incorrect: %v, %v", err, p.created.SubjectID)
 	}
-	if got.Provider.ID != relayid.Encode(relayid.CustomProvider, customMutationID) {
-		t.Fatalf("provider ID = %q", got.Provider.ID)
+	if got.Provider.ID != relayid.Encode(relayid.CustomProvider, customMutationID) || got.Provider.IngestProviderID != customMutationID {
+		t.Fatalf("provider identities = (%q, %q)", got.Provider.ID, got.Provider.IngestProviderID)
 	}
 	encoded, _ := json.Marshal(got.Provider)
 	if strings.Contains(string(encoded), *got.IngestionKey) || strings.Contains(string(encoded), "secret") || strings.Contains(string(encoded), "ingestionKey") {
@@ -205,7 +205,7 @@ func TestUpdateCustomProviderMergesPartialFieldsAndExplicitClear(t *testing.T) {
 				}
 				return
 			}
-			if len(got.Errors) != 0 || got.Provider == nil || p.updated.Description != test.wantDescription || p.updated.Status != integrations.CustomProviderActive || len(p.updated.AllowedMetrics) != 1 || p.updated.AllowedMetrics[0] != "count" {
+			if len(got.Errors) != 0 || got.Provider == nil || got.Provider.ID != id || got.Provider.IngestProviderID != customMutationID || p.updated.Description != test.wantDescription || p.updated.Status != integrations.CustomProviderActive || len(p.updated.AllowedMetrics) != 1 || p.updated.AllowedMetrics[0] != "count" {
 				t.Fatalf("partial merge = %#v, %#v", got, p.updated)
 			}
 		})

@@ -182,16 +182,18 @@ func (this CreateSubjectPayload) GetErrors() []*MutationError {
 }
 
 type CustomProvider struct {
-	ID             string          `json:"id"`
-	EnvironmentID  string          `json:"environmentID"`
-	Slug           string          `json:"slug"`
-	Name           string          `json:"name"`
-	Description    string          `json:"description"`
-	Status         string          `json:"status"`
-	AllowedActions []string        `json:"allowedActions"`
-	AllowedMetrics []string        `json:"allowedMetrics"`
-	CreatedAt      scalar.DateTime `json:"createdAt"`
-	UpdatedAt      scalar.DateTime `json:"updatedAt"`
+	ID string `json:"id"`
+	// Owner-scoped raw UUID for the HTTP activity-ingest edge path; not a credential or Relay ID.
+	IngestProviderID string          `json:"ingestProviderID"`
+	EnvironmentID    string          `json:"environmentID"`
+	Slug             string          `json:"slug"`
+	Name             string          `json:"name"`
+	Description      string          `json:"description"`
+	Status           string          `json:"status"`
+	AllowedActions   []string        `json:"allowedActions"`
+	AllowedMetrics   []string        `json:"allowedMetrics"`
+	CreatedAt        scalar.DateTime `json:"createdAt"`
+	UpdatedAt        scalar.DateTime `json:"updatedAt"`
 }
 
 func (CustomProvider) IsNode()            {}

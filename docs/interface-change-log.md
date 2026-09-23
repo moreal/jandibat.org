@@ -3,6 +3,20 @@
 API 계약 변경 시 이 파일과 GraphQL SDL(도메인) 또는 `openapi/jandibat.yaml`(HTTP edge)을 같은 변경에 포함합니다.
 각 항목에는 날짜, 호환성, 영향받는 operation/schema, 백엔드·프론트엔드 후속 작업을 기록합니다.
 
+## 2026-09-24 — CustomProvider HTTP 수집 식별자
+
+호환성: GraphQL `CustomProvider`에 owner-scoped `ingestProviderID: String!`을 추가하는
+additive 변경입니다. `id`는 계속 불투명 Relay Node ID이며, 클라이언트는 이를 해독하지
+않습니다. `ingestProviderID`는 유지되는 HTTP
+`POST /v1/custom-providers/{customProviderId}/activities:ingest`의 경로 UUID입니다.
+
+- 이 식별자는 수집 credential이 아닙니다. 일회용 `ingestionKey`는 Node나 Relay normalized
+  store, AppState, localStorage에 저장하지 않고 수집 요청 헤더에만 사용합니다.
+- Backend: owner에게만 반환되는 CustomProvider 투영에서 저장된 UUID를 매핑합니다.
+- Frontend: HTTP 수집 경로에는 `ingestProviderID`를 사용하고 Relay `id`는 Node 조작에만
+  사용합니다. key 표시·전달은 ephemeral 경계에서 처리합니다.
+- Coordination: SDL/gqlgen/Relay 생성물과 계약 테스트의 drift를 검증합니다.
+
 ## 2026-09-24 — GraphQL HTTP transport 공개 경계
 
 호환성: 기존 REST 도메인 경로를 제거하기 전 `POST /graphql`을 additive로 추가합니다.

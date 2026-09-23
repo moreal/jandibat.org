@@ -54,6 +54,41 @@ func TestNodeGraphQLExecutionAndDeniedResult(t *testing.T) {
 	}
 }
 
+func TestCustomProviderIngestIdentifierIsNotVisibleToAnonymousOrNonOwner(t *testing.T) {
+	const providerID = "550e8400-e29b-41d4-a716-446655440201"
+	query := `query($id: ID!) { node(id: $id) { ... on CustomProvider { id ingestProviderID } } }`
+	schema := handler.NewDefaultServer(generated.NewExecutableSchema(generated.Config{Resolvers: &Resolver{}}))
+	for _, tc := range []struct {
+		name  string
+		actor string
+	}{
+		{name: "anonymous"},
+		{name: "nonowner", actor: "other"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			graph := client.New(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				ctx := request.Context()
+				if tc.actor != "" {
+					ctx = ContextWithVerifiedViewer(ctx, tc.actor)
+				}
+				ctx = ContextWithNodeServices(ctx, NodeServices{
+					Subjects:        nodeSubjectPort{owned: false},
+					CustomProviders: nodeCustomPort{value: integrations.CustomProvider{ID: providerID, SubjectID: "subject"}},
+				})
+				schema.ServeHTTP(w, request.WithContext(ctx))
+			}))
+			response, err := graph.RawPost(query, client.Var("id", relayid.Encode(relayid.CustomProvider, providerID)))
+			if err != nil || len(response.Errors) != 0 {
+				t.Fatalf("private provider query = (%#v, %v)", response, err)
+			}
+			data, err := json.Marshal(response.Data)
+			if err != nil || string(data) != `{"node":null}` {
+				t.Fatalf("private provider must not be visible: %s, %v", data, err)
+			}
+		})
+	}
+}
+
 func TestSyncJobNodeGraphQLProjectsSafeRequiredMetadata(t *testing.T) {
 	created := time.Date(2026, 9, 24, 1, 2, 3, 0, time.UTC)
 	updated := created.Add(time.Minute)

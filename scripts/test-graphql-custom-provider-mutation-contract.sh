@@ -3,6 +3,7 @@ set -eu
 
 schema=graphql/schema/integrations.graphqls
 root=graphql/schema/mutation.graphqls
+node=graphql/schema/node.graphqls
 
 grep -Fq 'enum CustomProviderStatus {' "$schema"
 grep -Fq 'input CreateCustomProviderInput {' "$schema"
@@ -19,6 +20,7 @@ grep -Fq 'createCustomProvider(input: CreateCustomProviderInput!): CreateCustomP
 grep -Fq 'updateCustomProvider(input: UpdateCustomProviderInput!): UpdateCustomProviderPayload!' "$root"
 grep -Fq 'rotateCustomProviderKey(input: RotateCustomProviderKeyInput!): RotateCustomProviderKeyPayload!' "$root"
 grep -Fq 'deleteCustomProvider(input: DeleteCustomProviderInput!): DeleteCustomProviderPayload!' "$root"
+sed -n '/^type CustomProvider implements Node {/,/^}/p' "$node" | grep -Fq 'ingestProviderID: String!'
 
 if sed -n '/^type CustomProvider implements Node {/,/^}/p' graphql/schema/node.graphqls | grep -Eq 'ingestionKey|ingestTokenHash|secret|token'; then
   echo 'CustomProvider Node must not expose ingestion credentials' >&2

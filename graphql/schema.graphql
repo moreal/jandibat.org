@@ -51,6 +51,50 @@ type ActivitySnapshot {
   revision: String!
 }
 
+"The viewer is a scoped value object, not a globally addressable Node."
+type Viewer {
+  user: UserProfile!
+  "Forward page; first: 1..100, default 25."
+  sessions(first: Int = 25, after: Cursor): SessionConnection!
+}
+
+type UserProfile {
+  id: String!
+  primaryEmail: String!
+  status: String!
+  emailVerifiedAt: DateTime
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+"Standard forward-only Relay connection page information."
+type PageInfo {
+  hasNextPage: Boolean!
+  hasPreviousPage: Boolean!
+  startCursor: Cursor
+  endCursor: Cursor
+}
+
+type SessionEdge {
+  cursor: Cursor!
+  node: Session!
+}
+
+type SessionConnection {
+  edges: [SessionEdge!]!
+  pageInfo: PageInfo!
+}
+
+type SyncJobEdge {
+  cursor: Cursor!
+  node: SyncJob!
+}
+
+type SyncJobConnection {
+  edges: [SyncJobEdge!]!
+  pageInfo: PageInfo!
+}
+
 "A stable domain validation failure returned inside mutation payloads."
 type MutationError {
   code: String!
@@ -85,6 +129,8 @@ type Subject implements Node {
 
 type ProviderConnection implements Node {
   id: ID!
+  "Forward page; first: 1..100, default 25."
+  syncJobs(first: Int = 25, after: Cursor): SyncJobConnection
 }
 
 type CustomProvider implements Node {
@@ -93,10 +139,20 @@ type CustomProvider implements Node {
 
 type SyncJob implements Node {
   id: ID!
+  status: String!
+  attempt: Int!
+  createdAt: DateTime!
+  updatedAt: DateTime!
 }
 
 type Session implements Node {
   id: ID!
+  createdAt: DateTime!
+  expiresAt: DateTime!
+  revokedAt: DateTime
+  lastSeenAt: DateTime
+  ipAddress: String
+  userAgent: String
 }
 
 "Root of the domain API. Domain fields are added with resolver authorization."
@@ -105,6 +161,8 @@ type Query {
   node(id: ID!): Node
   "Resolve by raw handle or local ID (ID wins on collision); Relay IDs use node(id:)."
   subject(handleOrID: String!): Subject
+  "The authenticated account projection; null for anonymous requests."
+  viewer: Viewer
 }
 
 "Calendar date in ISO 8601 YYYY-MM-DD form."

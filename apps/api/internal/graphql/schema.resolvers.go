@@ -17,6 +17,11 @@ func (r *mutationResolver) Contract(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
+// SyncJobs is the resolver for the syncJobs field.
+func (r *providerConnectionResolver) SyncJobs(ctx context.Context, obj *model.ProviderConnection, first *int, after *scalar.Cursor) (*model.SyncJobConnection, error) {
+	return resolveSyncJobs(ctx, obj, first, after)
+}
+
 // Contract is the resolver for the _contract field.
 func (r *queryResolver) Contract(ctx context.Context) (bool, error) {
 	return true, nil
@@ -32,13 +37,28 @@ func (r *queryResolver) Subject(ctx context.Context, handleOrID string) (*model.
 	return r.resolveSubject(ctx, handleOrID)
 }
 
+// Viewer is the resolver for the viewer field.
+func (r *queryResolver) Viewer(ctx context.Context) (*model.Viewer, error) {
+	return r.resolveViewer(ctx)
+}
+
 // ActivitySnapshot is the resolver for the activitySnapshot field.
 func (r *subjectResolver) ActivitySnapshot(ctx context.Context, obj *model.Subject, rangeArg model.DateRangeInput, timezone scalar.TimeZone, environmentIDs []string) (*model.ActivitySnapshot, error) {
 	return r.resolveActivitySnapshot(ctx, obj, rangeArg, timezone, environmentIDs)
 }
 
+// Sessions is the resolver for the sessions field.
+func (r *viewerResolver) Sessions(ctx context.Context, obj *model.Viewer, first *int, after *scalar.Cursor) (*model.SessionConnection, error) {
+	return r.resolveSessions(ctx, obj, first, after)
+}
+
 // Mutation returns generated.MutationResolver implementation.
 func (r *Resolver) Mutation() generated.MutationResolver { return &mutationResolver{r} }
+
+// ProviderConnection returns generated.ProviderConnectionResolver implementation.
+func (r *Resolver) ProviderConnection() generated.ProviderConnectionResolver {
+	return &providerConnectionResolver{r}
+}
 
 // Query returns generated.QueryResolver implementation.
 func (r *Resolver) Query() generated.QueryResolver { return &queryResolver{r} }
@@ -46,10 +66,15 @@ func (r *Resolver) Query() generated.QueryResolver { return &queryResolver{r} }
 // Subject returns generated.SubjectResolver implementation.
 func (r *Resolver) Subject() generated.SubjectResolver { return &subjectResolver{r} }
 
+// Viewer returns generated.ViewerResolver implementation.
+func (r *Resolver) Viewer() generated.ViewerResolver { return &viewerResolver{r} }
+
 type (
-	mutationResolver struct{ *Resolver }
-	queryResolver    struct{ *Resolver }
-	subjectResolver  struct{ *Resolver }
+	mutationResolver           struct{ *Resolver }
+	providerConnectionResolver struct{ *Resolver }
+	queryResolver              struct{ *Resolver }
+	subjectResolver            struct{ *Resolver }
+	viewerResolver             struct{ *Resolver }
 )
 
 // !!! WARNING !!!

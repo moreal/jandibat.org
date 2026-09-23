@@ -34,3 +34,11 @@ models:
     fields:
       activitySnapshot:
         resolver: true
+  Viewer:
+    fields:
+      sessions:
+        resolver: true
+  ProviderConnection:
+    fields:
+      syncJobs:
+        resolver: true

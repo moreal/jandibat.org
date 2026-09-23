@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/99designs/gqlgen/client"
 	"github.com/99designs/gqlgen/graphql/handler"
@@ -50,6 +51,43 @@ func TestNodeGraphQLExecutionAndDeniedResult(t *testing.T) {
 	missingData, _ := json.Marshal(missing.Data)
 	if string(deniedData) != `{"node":null}` || string(missingData) != string(deniedData) {
 		t.Fatalf("denied and missing must be indistinguishable: denied=%s missing=%s", deniedData, missingData)
+	}
+}
+
+func TestSyncJobNodeGraphQLProjectsSafeRequiredMetadata(t *testing.T) {
+	created := time.Date(2026, 9, 24, 1, 2, 3, 0, time.UTC)
+	updated := created.Add(time.Minute)
+	const jobID = "550e8400-e29b-41d4-a716-446655440011"
+	const connectionID = "550e8400-e29b-41d4-a716-446655440012"
+	ports := NodeServices{
+		Subjects:    nodeSubjectPort{owned: true},
+		Connections: nodeConnectionPort{value: integrations.ProviderConnection{ID: connectionID, SubjectID: "subject"}},
+		SyncJobs: nodeSyncPort{value: integrations.SyncJob{
+			ID: jobID, ConnectionID: connectionID, Status: integrations.SyncJobSucceeded,
+			Attempt: 2, CreatedAt: created, UpdatedAt: updated,
+			LastError: "sensitive error", ClaimToken: "sensitive claim",
+		}},
+	}
+	schema := handler.NewDefaultServer(generated.NewExecutableSchema(generated.Config{Resolvers: &Resolver{}}))
+	graph := client.New(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		ctx := ContextWithNodeServices(ContextWithVerifiedViewer(request.Context(), "owner"), ports)
+		schema.ServeHTTP(w, request.WithContext(ctx))
+	}))
+	response, err := graph.RawPost(`query Node($id: ID!) { node(id: $id) { __typename id ... on SyncJob { status attempt createdAt updatedAt } } }`, client.Var("id", relayid.Encode(relayid.SyncJob, jobID)))
+	if err != nil || len(response.Errors) != 0 {
+		t.Fatalf("SyncJob Node query = (%#v, %v)", response, err)
+	}
+	data, err := json.Marshal(response.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"__typename":"SyncJob"`, `"status":"succeeded"`, `"attempt":2`, `"createdAt":"2026-09-24T01:02:03Z"`, `"updatedAt":"2026-09-24T01:03:03Z"`} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("SyncJob projection missing %s: %s", want, data)
+		}
+	}
+	if strings.Contains(string(data), "sensitive") {
+		t.Fatalf("SyncJob projection leaked private metadata: %s", data)
 	}
 }
 

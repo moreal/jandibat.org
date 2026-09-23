@@ -9,6 +9,7 @@ import (
 	"github.com/moreal/jandibat.org/apps/api/internal/auth"
 	"github.com/moreal/jandibat.org/apps/api/internal/graphql/model"
 	"github.com/moreal/jandibat.org/apps/api/internal/graphql/relayid"
+	"github.com/moreal/jandibat.org/apps/api/internal/graphql/scalar"
 	"github.com/moreal/jandibat.org/apps/api/internal/integrations"
 	"github.com/moreal/jandibat.org/apps/api/internal/subjects"
 )
@@ -16,6 +17,12 @@ import (
 // NodeServices are application-layer ports, not persistence adapters. Their
 // existing visibility and tombstone rules remain authoritative.
 type NodeServices struct {
+	ViewerUsers interface {
+		GetCurrentUser(context.Context, string) (subjects.User, error)
+	}
+	SessionPages interface {
+		ListSessionsPage(context.Context, string, *auth.SessionCursor, int) ([]auth.Session, error)
+	}
 	Subjects interface {
 		GetSubject(context.Context, string, string) (subjects.Subject, error)
 		OwnsSubject(context.Context, string, string) (bool, error)
@@ -158,7 +165,11 @@ func (r *queryResolver) resolveNode(ctx context.Context, id string) (model.Node,
 		if err != nil || !visible {
 			return nil, err
 		}
-		return &model.SyncJob{ID: relayid.Encode(relayid.SyncJob, job.ID)}, nil
+		return &model.SyncJob{
+			ID:     relayid.Encode(relayid.SyncJob, job.ID),
+			Status: string(job.Status), Attempt: job.Attempt,
+			CreatedAt: scalar.DateTime(job.CreatedAt), UpdatedAt: scalar.DateTime(job.UpdatedAt),
+		}, nil
 	case relayid.Session:
 		if identity.userID == "" {
 			return nil, nil
@@ -181,7 +192,8 @@ func (r *queryResolver) resolveNode(ctx context.Context, id string) (model.Node,
 		if actualID != requestedID || session.UserID != identity.userID {
 			return nil, nil
 		}
-		return &model.Session{ID: relayid.Encode(relayid.Session, actualID.String())}, nil
+		session.ID = actualID.String()
+		return projectSession(session), nil
 	default:
 		return nil, errInvalidNodeID
 	}

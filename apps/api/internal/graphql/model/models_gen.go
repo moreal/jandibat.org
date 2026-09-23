@@ -89,8 +89,18 @@ type MutationError struct {
 	Field   *string `json:"field,omitempty"`
 }
 
+// Standard forward-only Relay connection page information.
+type PageInfo struct {
+	HasNextPage     bool           `json:"hasNextPage"`
+	HasPreviousPage bool           `json:"hasPreviousPage"`
+	StartCursor     *scalar.Cursor `json:"startCursor,omitempty"`
+	EndCursor       *scalar.Cursor `json:"endCursor,omitempty"`
+}
+
 type ProviderConnection struct {
 	ID string `json:"id"`
+	// Forward page; first: 1..100, default 25.
+	SyncJobs *SyncJobConnection `json:"syncJobs,omitempty"`
 }
 
 func (ProviderConnection) IsNode()            {}
@@ -101,11 +111,27 @@ type Query struct {
 }
 
 type Session struct {
-	ID string `json:"id"`
+	ID         string           `json:"id"`
+	CreatedAt  scalar.DateTime  `json:"createdAt"`
+	ExpiresAt  scalar.DateTime  `json:"expiresAt"`
+	RevokedAt  *scalar.DateTime `json:"revokedAt,omitempty"`
+	LastSeenAt *scalar.DateTime `json:"lastSeenAt,omitempty"`
+	IPAddress  *string          `json:"ipAddress,omitempty"`
+	UserAgent  *string          `json:"userAgent,omitempty"`
 }
 
 func (Session) IsNode()            {}
 func (this Session) GetID() string { return this.ID }
+
+type SessionConnection struct {
+	Edges    []*SessionEdge `json:"edges"`
+	PageInfo *PageInfo      `json:"pageInfo"`
+}
+
+type SessionEdge struct {
+	Cursor scalar.Cursor `json:"cursor"`
+	Node   *Session      `json:"node"`
+}
 
 type Subject struct {
 	ID string `json:"id"`
@@ -117,8 +143,38 @@ func (Subject) IsNode()            {}
 func (this Subject) GetID() string { return this.ID }
 
 type SyncJob struct {
-	ID string `json:"id"`
+	ID        string          `json:"id"`
+	Status    string          `json:"status"`
+	Attempt   int             `json:"attempt"`
+	CreatedAt scalar.DateTime `json:"createdAt"`
+	UpdatedAt scalar.DateTime `json:"updatedAt"`
 }
 
 func (SyncJob) IsNode()            {}
 func (this SyncJob) GetID() string { return this.ID }
+
+type SyncJobConnection struct {
+	Edges    []*SyncJobEdge `json:"edges"`
+	PageInfo *PageInfo      `json:"pageInfo"`
+}
+
+type SyncJobEdge struct {
+	Cursor scalar.Cursor `json:"cursor"`
+	Node   *SyncJob      `json:"node"`
+}
+
+type UserProfile struct {
+	ID              string           `json:"id"`
+	PrimaryEmail    string           `json:"primaryEmail"`
+	Status          string           `json:"status"`
+	EmailVerifiedAt *scalar.DateTime `json:"emailVerifiedAt,omitempty"`
+	CreatedAt       scalar.DateTime  `json:"createdAt"`
+	UpdatedAt       scalar.DateTime  `json:"updatedAt"`
+}
+
+// The viewer is a scoped value object, not a globally addressable Node.
+type Viewer struct {
+	User *UserProfile `json:"user"`
+	// Forward page; first: 1..100, default 25.
+	Sessions *SessionConnection `json:"sessions"`
+}

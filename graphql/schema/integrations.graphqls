@@ -1,0 +1,9 @@
+type SyncJobEdge {
+  cursor: Cursor!
+  node: SyncJob!
+}
+
+type SyncJobConnection {
+  edges: [SyncJobEdge!]!
+  pageInfo: PageInfo!
+}

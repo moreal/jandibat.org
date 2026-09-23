@@ -48,6 +48,23 @@ Subject 조회 저장소와 같이 handle이 다른 Subject의 local ID와 같�
 - Frontend: 정적 소비자는 subscription 대신 주기적으로 재조회하고 revision 불변 시
   산출물 교체를 생략할 수 있습니다. 공식 UI는 이후 Relay store로 전환합니다.
 
+## 2026-09-24 — 세션·동기화 작업 Relay connection
+
+호환성: GraphQL 도메인 계약에 `viewer.sessions`와
+`ProviderConnection.syncJobs`를 추가하는 additive 변경입니다. 두 목록은
+`(createdAt, id)` 위치의 종류별 불투명 커서를 사용하고 최대 `first=100`으로 제한합니다.
+삭제된 커서 기준 행은 재조회하지 않으며, 같은 시각의 행을 건너뛰거나 중복하지 않습니다.
+
+- Session은 소유자만 볼 수 있고 bearer token·token hash를 노출하지 않습니다.
+- SyncJob은 부모 ProviderConnection 소유권을 확인한 뒤에만 조회합니다.
+- 부모 연결이 조회 사이에 삭제·철회되거나 접근 불가가 되면 `syncJobs`는 `null`이며,
+  내부 저장소 오류와는 구별합니다.
+- Node는 기존 다섯 durable entity로 유지하고 edge·PageInfo·Viewer는 값 객체입니다.
+- Backend: Query/field resolver를 application port에 연결하고 소유자·비소유자·익명
+  보안 테스트를 추가합니다. GraphQL HTTP 경계의 operation-aware 감사는 별도 Task입니다.
+- Frontend: 생성된 connection artifact를 사용하고 cursor를 해석하거나 DB offset으로
+  바꾸지 않습니다.
+
 ## 2026-08-12 — 운영·보안 계약 강화 (`1.1.0`)
 
 호환성: `1.0.0` 개발 기준선 대비 breaking change. 아직 배포되지 않은 계약의 Phase 3 완료 조건을 명시적으로 고정합니다.

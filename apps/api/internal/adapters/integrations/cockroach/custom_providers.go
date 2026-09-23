@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -365,6 +366,49 @@ func (s *Store) SaveIngestedActivities(ctx context.Context, activities []integra
 			return nil, fmt.Errorf("save ingested activities: mixed provider IDs")
 		}
 	}
+	if s.pool != nil {
+		id, err := uuid.Parse(providerID)
+		if err != nil {
+			return nil, integrations.ErrInvalidIdentifier
+		}
+		var accepted []integrations.IngestedActivity
+		err = appdb.InTx(ctx, s.pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
+			locked, err := generated.LockProviderForIngest(txctx, tx, id)
+			if err != nil {
+				return fmt.Errorf("save ingested activities: get provider: %w", err)
+			}
+			if locked == nil {
+				return notFound("custom provider", providerID)
+			}
+			accepted = make([]integrations.IngestedActivity, 0, len(activities))
+			for _, item := range activities {
+				metadata := item.Metadata
+				if metadata == nil {
+					metadata = map[string]string{}
+				}
+				encoded, err := json.Marshal(metadata)
+				if err != nil {
+					return fmt.Errorf("save ingested activities: encode metadata: %w", err)
+				}
+				row, err := generated.InsertCustomActivity(txctx, tx, id, item.ExternalID,
+					item.Date, item.Action, item.Metric, int64(item.Value), encoded,
+					optionalTimeText(item.ObservedAt), item.IngestedAt)
+				if err != nil {
+					return fmt.Errorf("save ingested activities: insert event %q: %w", item.ExternalID, err)
+				}
+				if row == nil {
+					continue
+				}
+				stored, err := ingestedActivityFromGenerated(*row)
+				if err != nil {
+					return err
+				}
+				accepted = append(accepted, stored)
+			}
+			return generated.TouchCustomProviderIngested(txctx, tx, id)
+		})
+		return accepted, err
+	}
 	ctx, scope, err := s.beginMutation(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("save ingested activities: begin: %w", err)
@@ -415,7 +459,54 @@ WHERE id = $1::UUID`, canonicalProviderID); err != nil {
 	return accepted, nil
 }
 
+func ingestedActivityFromGenerated(row generated.InsertCustomActivityRow) (integrations.IngestedActivity, error) {
+	item := integrations.IngestedActivity{
+		ProviderID: row.ProviderId, SubjectID: row.SubjectId, ExternalID: row.ExternalId,
+		Date: row.ActivityDate, Action: row.Action, Metric: row.MetricName,
+		Value: int(row.MetricValue), IngestedAt: row.IngestedAt,
+	}
+	if int64(item.Value) != row.MetricValue {
+		return integrations.IngestedActivity{}, integrations.ErrInvalidProvider
+	}
+	if err := json.Unmarshal(row.Metadata, &item.Metadata); err != nil {
+		return integrations.IngestedActivity{}, fmt.Errorf("decode custom activity metadata: %w", err)
+	}
+	item.Metadata = cloneMetadata(item.Metadata)
+	if row.ObservedAt != nil {
+		value := *row.ObservedAt
+		item.ObservedAt = &value
+	}
+	return item, nil
+}
+
 func (s *Store) ListIngestedActivities(ctx context.Context, providerID string) ([]integrations.IngestedActivity, error) {
+	if s.pool != nil {
+		id, err := uuid.Parse(providerID)
+		if err != nil {
+			return nil, integrations.ErrInvalidIdentifier
+		}
+		executor := appdb.PGXExecutorFor(ctx, s.pool)
+		exists, err := generated.GetCustomProviderExists(ctx, executor, id)
+		if err != nil {
+			return nil, fmt.Errorf("list ingested activities: get provider: %w", err)
+		}
+		if !exists.Exists {
+			return nil, notFound("custom provider", providerID)
+		}
+		rows, err := generated.ListCustomActivities(ctx, executor, id)
+		if err != nil {
+			return nil, fmt.Errorf("list ingested activities: query: %w", err)
+		}
+		items := make([]integrations.IngestedActivity, 0, len(rows))
+		for _, row := range rows {
+			item, err := ingestedActivityFromGenerated(generated.InsertCustomActivityRow(row))
+			if err != nil {
+				return nil, err
+			}
+			items = append(items, item)
+		}
+		return items, nil
+	}
 	executor := appdb.ExecutorFor(ctx, s.db)
 	var canonicalProviderID string
 	err := executor.QueryRowContext(ctx,
@@ -477,6 +568,22 @@ func scanIngestedActivity(row scanner) (integrations.IngestedActivity, error) {
 // body for a pending reservation. It returns false while an unexpired record
 // already owns the key.
 func (s *Store) CreateIngestIdempotencyKey(ctx context.Context, record integrations.IngestIdempotencyRecord) (bool, error) {
+	if s.pool != nil {
+		id, err := uuid.Parse(record.ProviderID)
+		if err != nil {
+			return false, integrations.ErrInvalidIdentifier
+		}
+		if record.ResponseStatus < 0 || record.ResponseStatus > math.MaxInt32 {
+			return false, integrations.ErrInvalidProvider
+		}
+		count, err := generated.ReserveIngestKey(ctx, appdb.PGXExecutorFor(ctx, s.pool), id,
+			record.KeyHash, record.RequestHash, int32(record.ResponseStatus), record.ResponseBody,
+			record.CreatedAt, record.ExpiresAt)
+		if err != nil {
+			return false, fmt.Errorf("create ingest idempotency key: %w", err)
+		}
+		return count == 1, nil
+	}
 	executor, err := s.mutationExecutor(ctx)
 	if err != nil {
 		return false, err
@@ -511,6 +618,22 @@ WHERE ingest_idempotency_keys.expires_at <= now()`,
 // to its replayable response. The request hash and pending status form a CAS so
 // a different request can never complete the reservation.
 func (s *Store) CompleteIngestIdempotencyKey(ctx context.Context, record integrations.IngestIdempotencyRecord) (bool, error) {
+	if s.pool != nil {
+		id, err := uuid.Parse(record.ProviderID)
+		if err != nil {
+			return false, integrations.ErrInvalidIdentifier
+		}
+		if record.ResponseStatus < 0 || record.ResponseStatus > math.MaxInt32 {
+			return false, integrations.ErrInvalidProvider
+		}
+		count, err := generated.CompleteIngestKey(ctx, appdb.PGXExecutorFor(ctx, s.pool), id,
+			record.KeyHash, record.RequestHash, int32(record.ResponseStatus), record.ResponseBody,
+			record.ExpiresAt)
+		if err != nil {
+			return false, fmt.Errorf("complete ingest idempotency key: %w", err)
+		}
+		return count == 1, nil
+	}
 	executor, err := s.mutationExecutor(ctx)
 	if err != nil {
 		return false, err
@@ -540,6 +663,16 @@ WHERE custom_provider_id = $1::UUID
 // allowing a retry after validation, event persistence, or projection fails.
 // Completed responses and reservations for another request are untouched.
 func (s *Store) ReleaseIngestIdempotencyKey(ctx context.Context, providerID string, keyHash, requestHash []byte) error {
+	if s.pool != nil {
+		id, err := uuid.Parse(providerID)
+		if err != nil {
+			return integrations.ErrInvalidIdentifier
+		}
+		if err := generated.ReleaseIngestKey(ctx, appdb.PGXExecutorFor(ctx, s.pool), id, keyHash, requestHash); err != nil {
+			return fmt.Errorf("release ingest idempotency key: %w", err)
+		}
+		return nil
+	}
 	executor, err := s.mutationExecutor(ctx)
 	if err != nil {
 		return err
@@ -558,6 +691,25 @@ WHERE custom_provider_id = $1::UUID
 // GetIngestIdempotencyKey loads an unexpired provider-scoped key. Expired or
 // unknown keys return found=false and may be reclaimed after retention cleanup.
 func (s *Store) GetIngestIdempotencyKey(ctx context.Context, providerID string, keyHash []byte) (record integrations.IngestIdempotencyRecord, found bool, err error) {
+	if s.pool != nil {
+		id, err := uuid.Parse(providerID)
+		if err != nil {
+			return integrations.IngestIdempotencyRecord{}, false, integrations.ErrInvalidIdentifier
+		}
+		row, err := generated.GetActiveIngestKey(ctx, appdb.PGXExecutorFor(ctx, s.pool), id, keyHash)
+		if err != nil {
+			return integrations.IngestIdempotencyRecord{}, false, fmt.Errorf("get ingest idempotency key: %w", err)
+		}
+		if row == nil {
+			return integrations.IngestIdempotencyRecord{}, false, nil
+		}
+		return integrations.IngestIdempotencyRecord{
+			ProviderID: row.ProviderId, KeyHash: append([]byte(nil), row.KeyHash...),
+			RequestHash: append([]byte(nil), row.RequestHash...), ResponseStatus: int(row.ResponseStatus),
+			ResponseBody: append(json.RawMessage(nil), row.ResponseBody...),
+			CreatedAt:    row.CreatedAt, ExpiresAt: row.ExpiresAt,
+		}, true, nil
+	}
 	executor, err := s.mutationExecutor(ctx)
 	if err != nil {
 		return integrations.IngestIdempotencyRecord{}, false, err

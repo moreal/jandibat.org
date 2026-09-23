@@ -185,3 +185,82 @@ SET environment_id = $3::STRING, slug = $4::STRING, name = $5::STRING,
     || jsonb_build_object('allowed_actions', $8::JSONB, 'allowed_metrics', $9::JSONB),
   created_at = $10::TIMESTAMPTZ, updated_at = $11::TIMESTAMPTZ
 WHERE id = $1::UUID AND subject_id = $2::STRING;
+
+-- @name ReserveIngestKey
+-- @returns :exec_result
+INSERT INTO ingest_idempotency_keys (
+  custom_provider_id, key_hash, request_hash, response_status, response_body,
+  created_at, expires_at
+)
+VALUES ($1::UUID, $2::BYTES, $3::BYTES, $4::INT, $5::JSONB,
+  $6::TIMESTAMPTZ, $7::TIMESTAMPTZ)
+ON CONFLICT (custom_provider_id, key_hash) DO UPDATE SET
+  request_hash = excluded.request_hash,
+  response_status = excluded.response_status,
+  response_body = excluded.response_body,
+  created_at = excluded.created_at,
+  expires_at = excluded.expires_at
+WHERE ingest_idempotency_keys.expires_at <= now();
+
+-- @name CompleteIngestKey
+-- @returns :exec_result
+UPDATE ingest_idempotency_keys
+SET response_status = $4::INT, response_body = $5::JSONB, expires_at = $6::TIMESTAMPTZ
+WHERE custom_provider_id = $1::UUID
+  AND key_hash = $2::BYTES
+  AND request_hash = $3::BYTES
+  AND response_status = 0
+  AND expires_at > now();
+
+-- @name ReleaseIngestKey
+-- @returns :exec
+DELETE FROM ingest_idempotency_keys
+WHERE custom_provider_id = $1::UUID
+  AND key_hash = $2::BYTES
+  AND request_hash = $3::BYTES
+  AND response_status = 0;
+
+-- @name GetActiveIngestKey
+-- @returns :opt
+SELECT custom_provider_id::STRING AS provider_id, key_hash, request_hash,
+  response_status, response_body, created_at, expires_at
+FROM ingest_idempotency_keys
+WHERE custom_provider_id = $1::UUID AND key_hash = $2::BYTES AND expires_at > now();
+
+-- @name LockProviderForIngest
+-- @returns :opt
+SELECT id::STRING AS id FROM custom_providers WHERE id = $1::UUID FOR UPDATE;
+
+-- @name InsertCustomActivity
+-- @returns :opt
+INSERT INTO custom_activity_events (
+  custom_provider_id, subject_id, environment_id, event_id, activity_date,
+  action, metric_name, metric_value, metadata, observed_at, ingested_at
+)
+SELECT provider.id, provider.subject_id, provider.environment_id,
+  $2::STRING, $3::STRING::DATE, $4::STRING, $5::STRING, $6::INT8, $7::JSONB,
+  NULLIF($8::STRING, '')::TIMESTAMPTZ, $9::TIMESTAMPTZ
+FROM custom_providers AS provider
+WHERE provider.id = $1::UUID
+ON CONFLICT (custom_provider_id, event_id) DO NOTHING
+RETURNING custom_provider_id::STRING AS provider_id, subject_id,
+  event_id AS external_id, activity_date::STRING AS activity_date,
+  action, metric_name, metric_value, metadata, observed_at, ingested_at;
+
+-- @name TouchCustomProviderIngested
+-- @returns :exec
+UPDATE custom_providers SET last_ingested_at = now(), updated_at = now()
+WHERE id = $1::UUID;
+
+-- @name GetCustomProviderExists
+-- @returns :one
+SELECT EXISTS (SELECT 1 FROM custom_providers WHERE id = $1::UUID) AS exists;
+
+-- @name ListCustomActivities
+-- @returns :many
+SELECT custom_provider_id::STRING AS provider_id, subject_id,
+  event_id AS external_id, activity_date::STRING AS activity_date,
+  action, metric_name, metric_value, metadata, observed_at, ingested_at
+FROM custom_activity_events
+WHERE custom_provider_id = $1::UUID
+ORDER BY activity_date, event_id;

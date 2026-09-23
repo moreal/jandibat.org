@@ -427,6 +427,33 @@ VALUES ($1, $2, $3, 'UTC', true, now(), now())`, subjectID, userID, handle); err
 	if !reflect.DeepEqual(replayed, first) {
 		t.Fatalf("replay = %#v, want %#v", replayed, first)
 	}
+	rollbackIngest := input
+	rollbackIngest.IdempotencyKey = "rollback-idem-" + suffix
+	rollbackIngest.Activities = append([]integrations.CustomActivity(nil), input.Activities...)
+	rollbackIngest.Activities[0].ExternalID = "rollback-event-" + suffix
+	rollbackKeyHash := sha256.Sum256([]byte(rollbackIngest.IdempotencyKey))
+	ingestCtx, doneIngest := context.WithTimeout(ctx, 3*time.Second)
+	defer doneIngest()
+	err = appdb.InTx(ingestCtx, activityPool, appdb.RetryOptions{}, func(txctx context.Context, _ pgx.Tx) error {
+		result, err := service.Ingest(txctx, rollbackIngest)
+		if err != nil || result.Accepted != 1 {
+			return fmt.Errorf("transactional ingest = (%+v, %v)", result, err)
+		}
+		return readRollback
+	})
+	if !errors.Is(err, readRollback) {
+		t.Fatalf("rollback ingest = %v", err)
+	}
+	var rolledBackEvents, rolledBackKeys int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM custom_activity_events WHERE custom_provider_id=$1 AND event_id=$2`, provider.ID, rollbackIngest.Activities[0].ExternalID).Scan(&rolledBackEvents); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM ingest_idempotency_keys WHERE custom_provider_id=$1 AND key_hash=$2`, provider.ID, rollbackKeyHash[:]).Scan(&rolledBackKeys); err != nil {
+		t.Fatal(err)
+	}
+	if rolledBackEvents != 0 || rolledBackKeys != 0 {
+		t.Fatalf("ingest rollback left events=%d keys=%d", rolledBackEvents, rolledBackKeys)
+	}
 
 	reservationKey := sha256.Sum256([]byte("reservation-" + suffix))
 	requestHashes := [2][sha256.Size]byte{

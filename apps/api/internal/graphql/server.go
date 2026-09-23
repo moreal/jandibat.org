@@ -8,14 +8,18 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"unicode/utf8"
 
+	gqlgen "github.com/99designs/gqlgen/graphql"
 	"github.com/99designs/gqlgen/graphql/handler"
 	"github.com/99designs/gqlgen/graphql/handler/extension"
 	"github.com/99designs/gqlgen/graphql/handler/transport"
 	"github.com/moreal/jandibat.org/apps/api/internal/graphql/generated"
+	"github.com/moreal/jandibat.org/apps/api/internal/graphql/model"
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 	"github.com/vektah/gqlparser/v2/parser"
@@ -48,6 +52,28 @@ type OperationMetadata struct {
 
 type operationMetadataKey struct{}
 type preflightCompleteKey struct{}
+type operationOutcomeKey struct{}
+
+// OperationOutcome is the trusted, selection-independent result for audit.
+// A mutation is successful only when Executed is true and Failed is false.
+// It never contains user input, payload data or error messages.
+type OperationOutcome struct {
+	Executed bool
+	Failed   bool
+}
+
+type operationOutcomeState struct {
+	executed atomic.Bool
+	failed   atomic.Bool
+}
+
+func OperationOutcomeFromContext(ctx context.Context) (OperationOutcome, bool) {
+	state, ok := ctx.Value(operationOutcomeKey{}).(*operationOutcomeState)
+	if !ok || state == nil {
+		return OperationOutcome{}, false
+	}
+	return OperationOutcome{Executed: state.executed.Load(), Failed: state.failed.Load()}, true
+}
 
 func OperationMetadataFromContext(ctx context.Context) (OperationMetadata, bool) {
 	meta, ok := ctx.Value(operationMetadataKey{}).(OperationMetadata)
@@ -106,6 +132,7 @@ func PreflightHTTP(next http.Handler, options HTTPOptions) http.Handler {
 			return
 		}
 		ctx := context.WithValue(r.Context(), operationMetadataKey{}, metadata)
+		ctx = context.WithValue(ctx, operationOutcomeKey{}, &operationOutcomeState{})
 		ctx = context.WithValue(ctx, preflightCompleteKey{}, true)
 		r = r.WithContext(ctx)
 		r.Body = io.NopCloser(bytes.NewReader(body))
@@ -314,6 +341,31 @@ func writePreflightError(w http.ResponseWriter, status int) {
 func NewHTTPHandler(resolver *Resolver, options HTTPOptions) http.Handler {
 	server := handler.New(generated.NewExecutableSchema(generated.Config{Resolvers: resolver}))
 	server.AddTransport(transport.POST{})
+	server.AroundFields(func(ctx context.Context, next gqlgen.Resolver) (any, error) {
+		field := gqlgen.GetFieldContext(ctx)
+		if field == nil || field.Object != "Mutation" {
+			return next(ctx)
+		}
+		state, _ := ctx.Value(operationOutcomeKey{}).(*operationOutcomeState)
+		value, err := next(ctx)
+		if state != nil {
+			state.executed.Store(true)
+			payload, ok := value.(model.MutationPayload)
+			if err != nil || !ok || value == nil || reflect.ValueOf(value).Kind() == reflect.Ptr && reflect.ValueOf(value).IsNil() {
+				state.failed.Store(true)
+			} else if len(payload.GetErrors()) != 0 {
+				state.failed.Store(true)
+			}
+		}
+		return value, err
+	})
+	server.AroundResponses(func(ctx context.Context, next gqlgen.ResponseHandler) *gqlgen.Response {
+		response := next(ctx)
+		if state, _ := ctx.Value(operationOutcomeKey{}).(*operationOutcomeState); state != nil && response != nil && len(response.Errors) != 0 {
+			state.failed.Store(true)
+		}
+		return response
+	})
 	if options.Development {
 		server.Use(extension.Introspection{})
 	}
@@ -322,7 +374,15 @@ func NewHTTPHandler(resolver *Resolver, options HTTPOptions) http.Handler {
 	server.SetRecoverFunc(func(_ context.Context, _ any) error {
 		return errors.New("Internal server error.")
 	})
-	return PreflightHTTP(server, options)
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server.ServeHTTP(w, r)
+		if metadata, ok := OperationMetadataFromContext(r.Context()); ok && metadata.Type == ast.Mutation {
+			if state, ok := r.Context().Value(operationOutcomeKey{}).(*operationOutcomeState); ok && !state.executed.Load() {
+				state.failed.Store(true)
+			}
+		}
+	})
+	return PreflightHTTP(inner, options)
 }
 
 // This is intentionally a closed mapping: even a resolver-supplied gqlerror

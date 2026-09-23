@@ -185,6 +185,40 @@ func TestGraphQLHTTPRejectsOverlongOperationNameBeforeMetadata(t *testing.T) {
 	}
 }
 
+func TestGraphQLMutationOutcomeIgnoresSelectedPayloadFields(t *testing.T) {
+	for _, tc := range []struct {
+		name, query string
+		failed      bool
+		executed    bool
+		wantStatus  int
+	}{
+		{"omitted errors", `mutation Invalid { requestMagicLink(input: {email: "invalid"}) { accepted } }`, true, true, http.StatusOK},
+		{"aliased errors", `mutation Aliased { requestMagicLink(input: {email: "invalid"}) { e: errors { code } } }`, true, true, http.StatusOK},
+		{"successful payload without errors selection", `mutation Valid { requestMagicLink(input: {email: "person@example.org"}) { accepted } }`, false, true, http.StatusOK},
+		{"resolver error", `mutation Unauthorized { signOut { errors { code } } }`, true, true, http.StatusOK},
+		{"execution error", `mutation Broken($input: RequestMagicLinkInput!) { requestMagicLink(input: $input) { accepted } }`, true, false, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var outcome OperationOutcome
+			var found bool
+			port := &accountAuthPort{}
+			ctx := ContextWithVerifiedViewer(context.Background(), "owner")
+			ctx = ContextWithAuthAccountService(ctx, port)
+			ctx = ContextWithAuthMutationFailureReporter(ctx, &accountFailureReporter{})
+			handler := PreflightHTTP(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				NewHTTPHandler(&Resolver{}, HTTPOptions{}).ServeHTTP(w, r)
+				outcome, found = OperationOutcomeFromContext(r.Context())
+			}), HTTPOptions{})
+			body, _ := json.Marshal(map[string]string{"query": tc.query})
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, graphRequest(http.MethodPost, "application/json", string(body)).WithContext(ctx))
+			if tc.wantStatus != 0 && w.Code != tc.wantStatus || !found || outcome.Failed != tc.failed || outcome.Executed != tc.executed {
+				t.Fatalf("status=%d found=%t outcome=%+v body=%s", w.Code, found, outcome, w.Body.String())
+			}
+		})
+	}
+}
+
 func TestGraphQLHTTPDevelopmentAllowsUnnamedIntrospection(t *testing.T) {
 	handler := NewHTTPHandler(&Resolver{}, HTTPOptions{Development: true})
 	w := httptest.NewRecorder()

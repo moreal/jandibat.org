@@ -109,7 +109,7 @@ GRANT INSERT ON TABLE
 TO jandibat_maintenance;
 GRANT UPDATE ON TABLE
   provider_connections, provider_token_revocation_jobs, maintenance_checkpoints, activity_facts,
-  deletion_request_inbox, deletion_requests, deletion_request_claims, users,
+  deletion_request_inbox, deletion_requests, deletion_request_claims, users, subjects,
   deleted_identity_tombstones_v2
 TO jandibat_maintenance;
 GRANT DELETE ON TABLE

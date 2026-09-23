@@ -49,6 +49,7 @@ sql "$WORKER_DATABASE_URL" "DELETE FROM provider_token_revocation_jobs WHERE fal
 sql "$MAINTENANCE_DATABASE_URL" "SELECT count(*) FROM provider_token_revocation_jobs" >/dev/null
 sql "$MAINTENANCE_DATABASE_URL" "UPDATE provider_token_revocation_jobs SET token_key_id = token_key_id WHERE false" >/dev/null
 sql "$MAINTENANCE_DATABASE_URL" "UPDATE activity_facts SET provider_connection_id = provider_connection_id WHERE false" >/dev/null
+sql "$MAINTENANCE_DATABASE_URL" "UPDATE subjects SET owner_user_id = owner_user_id WHERE false" >/dev/null
 sql "$MAINTENANCE_DATABASE_URL" "DELETE FROM provider_connection_private_consents WHERE false" >/dev/null
 sql "$MAINTENANCE_DATABASE_URL" "DELETE FROM subject_settings WHERE false" >/dev/null
 sql "$MAINTENANCE_DATABASE_URL" "DELETE FROM user_settings WHERE false" >/dev/null

@@ -844,7 +844,7 @@ func (store *Store) persistDeletionIdentityTombstonePGX(ctx context.Context, tx 
 }
 
 func (store *Store) DeletePrimaryData(ctx context.Context, request operations.DeletionRequest, now time.Time) (operations.DeletionRequest, error) {
-	if store.pool != nil && request.TargetType == operations.DeletionTargetSubject {
+	if store.pool != nil {
 		var updated operations.DeletionRequest
 		err := appdb.InTx(ctx, store.pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
 			if err := lockDeletionLeasePGX(txctx, tx, request); err != nil {
@@ -853,8 +853,39 @@ func (store *Store) DeletePrimaryData(ctx context.Context, request operations.De
 			if err := rejectActiveDeletionHoldPGX(txctx, tx, request, now); err != nil {
 				return err
 			}
+			var primaryEmail string
+			if request.TargetType == operations.DeletionTargetAccount {
+				account, err := generated.GetAccountEmailForDeletion(txctx, tx, request.TargetID)
+				if err != nil {
+					return fmt.Errorf("lock account identity before primary deletion: %w", err)
+				}
+				if account != nil {
+					primaryEmail = account.PrimaryEmail
+					if err := store.persistDeletionIdentityTombstonePGX(txctx, tx, request.RequestID, primaryEmail, now); err != nil {
+						return err
+					}
+				}
+			}
 			if err := deleteSubjectPrimaryDataPGX(txctx, tx, request.SubjectIDs); err != nil {
 				return err
+			}
+			if request.TargetType == operations.DeletionTargetAccount {
+				if err := generated.DeleteAccountAuthChallengesForDeletion(txctx, tx, request.TargetID, request.SubjectIDs); err != nil {
+					return fmt.Errorf("delete residual auth challenges: %w", err)
+				}
+				if err := generated.DeleteAccountMagicLinksForDeletion(txctx, tx, request.TargetID, primaryEmail); err != nil {
+					return fmt.Errorf("delete residual magic links: %w", err)
+				}
+				if err := generated.DeleteAccountPasskeys(txctx, tx, request.TargetID); err != nil {
+					return fmt.Errorf("delete passkeys: %w", err)
+				}
+				count, err := generated.DeleteAccountRow(txctx, tx, request.TargetID)
+				if err != nil {
+					return fmt.Errorf("delete account: %w", err)
+				}
+				if count > 1 {
+					return fmt.Errorf("delete account affected %d rows", count)
+				}
 			}
 			count, err := generated.MarkDeletionPrimaryDeleted(txctx, tx, request.RequestID, request.SubjectIDs, now.UTC())
 			if err != nil {

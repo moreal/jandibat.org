@@ -941,6 +941,30 @@ func TestCockroachMaintenanceAccountCredentialRevocationIsAtomic(t *testing.T) {
 	if err := admin.QueryRowContext(ctx, `SELECT count(*) FROM magic_link_tokens WHERE email=$1`, email).Scan(&magicLinks); err != nil || magicLinks != 0 {
 		t.Fatalf("committed magic link count=%d err=%v", magicLinks, err)
 	}
+	rollbackPrimary := errors.New("rollback account primary deletion")
+	err = appdb.InTx(ctx, pool, appdb.RetryOptions{}, func(txctx context.Context, _ pgx.Tx) error {
+		updated, err := store.DeletePrimaryData(txctx, committed, now.Add(4*time.Second))
+		if err != nil || updated.Status != operations.DeletionVerifying {
+			return fmt.Errorf("transactional account primary deletion status=%s err=%v", updated.Status, err)
+		}
+		return rollbackPrimary
+	})
+	if !errors.Is(err, rollbackPrimary) {
+		t.Fatalf("account primary deletion rollback=%v", err)
+	}
+	if err := admin.QueryRowContext(ctx, `SELECT count(*) FROM users WHERE id=$1`, userID).Scan(&tombstones); err != nil || tombstones != 1 {
+		t.Fatalf("account primary deletion escaped rollback: user count=%d err=%v", tombstones, err)
+	}
+	deleted, err := store.DeletePrimaryData(ctx, committed, now.Add(5*time.Second))
+	if err != nil || deleted.Status != operations.DeletionVerifying {
+		t.Fatalf("committed account primary deletion status=%s err=%v", deleted.Status, err)
+	}
+	if err := admin.QueryRowContext(ctx, `SELECT count(*) FROM users WHERE id=$1`, userID).Scan(&tombstones); err != nil || tombstones != 0 {
+		t.Fatalf("committed account user count=%d err=%v", tombstones, err)
+	}
+	if err := admin.QueryRowContext(ctx, `SELECT count(*) FROM deleted_identity_tombstones_v2 WHERE deletion_request_id=(SELECT id FROM deletion_requests WHERE request_id=$1)`, requestID).Scan(&tombstones); err != nil || tombstones != 1 {
+		t.Fatalf("committed account HMAC tombstone count=%d err=%v", tombstones, err)
+	}
 }
 
 func TestCockroachMaintenanceCustomProviderDeleteCascadesSecrets(t *testing.T) {

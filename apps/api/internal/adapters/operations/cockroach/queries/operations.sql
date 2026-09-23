@@ -70,6 +70,14 @@ DELETE FROM environments WHERE owner_subject_id = ANY($1::STRING[]);
 -- @returns :exec
 DELETE FROM subjects WHERE id = ANY($1::STRING[]);
 
+-- @name DeleteAccountPasskeys
+-- @returns :exec
+DELETE FROM user_passkeys WHERE user_id = $1::STRING;
+
+-- @name DeleteAccountRow
+-- @returns :exec_result
+DELETE FROM users WHERE id = $1::STRING;
+
 -- @name MarkDeletionPrimaryDeleted
 -- @returns :exec_result
 UPDATE deletion_requests SET
@@ -113,7 +121,7 @@ DELETE FROM user_sessions WHERE user_id = $1::STRING;
 
 -- @name DeleteAccountMagicLinksForDeletion
 -- @returns :exec
-DELETE FROM magic_link_tokens WHERE user_id = $1::STRING OR email = $2::STRING;
+DELETE FROM magic_link_tokens WHERE user_id = $1::STRING OR ($2::STRING <> '' AND email = $2::STRING);
 
 -- @name DeleteAccountAuthChallengesForDeletion
 -- @returns :exec

@@ -19,6 +19,19 @@
 - `nix/fixtures/scythe-cockroach-repro/`는 앱 코드가 없는 최소 재현이고,
   `nix build .#checks.<system>.scythe-compatibility`가 생성 결과를 강제한다.
   실제 DB 검증은 `make sql-check-live`와 Go integration test로 수행한다.
+- `scytheprobe`는 운영 쿼리로 대체하지 않는다. 최소 fixture가 `UPSERT`,
+  Cockroach catalog 정수 폭, nullable JSONB/배열, pool/Tx 겸용 생성 시그니처를
+  직접 회귀 검증하므로 upstream local patch의 제거 조건에 필요하다.
+- 정적 쿼리 계약은 `scythe.toml`의 각 `.sql` 파일이다. `make sql-generate`로
+  Go 코드를 재생성하고, `make sql-check sql-generated-drift-check`로 쿼리 의미와
+  체크인된 생성물의 일치를 각각 검사한다. drift 검사는 임시 복사본만 생성하므로
+  작업 트리의 생성 파일을 덮어쓰지 않는다. CI backend job은 이 두 offline 검사를,
+  migration job은 baseline 적용 뒤 `make sql-live-drift-test sql-check-live`를
+  실행한다. 두 drift 테스트는 복사본의 생성 Go 파일 또는 schema 열을 바꿔
+  offline/live 게이트가 각각 실패하는지 확인한다.
+- 런타임의 불가피한 동적 retention SQL은 닫힌 dataset→테이블/열 매핑에서만
+  식별자를 선택하며 cutoff·limit·as-of 값은 바인딩한다. 식별자 거부는 fuzz
+  테스트로 검사한다. SQLSTATE 40001 retry는 Scythe가 아니라 pgx 트랜잭션 경계가 담당한다.
 - 해당 보정이 포함된 공식 Scythe release가 나오고 위 Nix check 및 실제 DB
   검증이 원본에서 통과할 때 local patch를 제거한다. upstream issue/PR은 아직
   작성하지 않았다. 외부 저장소에 쓰기 전에 별도 조율이 필요하다.

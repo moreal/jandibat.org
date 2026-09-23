@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 	generated "github.com/moreal/jandibat.org/apps/api/internal/adapters/integrations/cockroach/generated"
 	"github.com/moreal/jandibat.org/apps/api/internal/adapters/internal/fakedb"
 	"github.com/moreal/jandibat.org/apps/api/internal/integrations"
@@ -20,6 +21,23 @@ func TestNewRejectsNilDatabase(t *testing.T) {
 	}
 	if store != nil {
 		t.Fatal("New(nil) returned non-nil store")
+	}
+}
+
+func TestNewWithPGXPoolAcceptsPoolWithoutSQLHandle(t *testing.T) {
+	pool := new(pgxpool.Pool)
+	store, err := NewWithPGXPool(nil, pool)
+	if err != nil {
+		t.Fatalf("NewWithPGXPool(nil, pool) error = %v", err)
+	}
+	if store == nil || store.pool != pool {
+		t.Fatalf("NewWithPGXPool(nil, pool) = %#v; want store using supplied pool", store)
+	}
+}
+
+func TestNewWithPGXPoolRejectsNilPool(t *testing.T) {
+	if store, err := NewWithPGXPool(nil, nil); store != nil || !errors.Is(err, ErrNilDB) {
+		t.Fatalf("NewWithPGXPool(nil, nil) = %#v, %v; want ErrNilDB", store, err)
 	}
 }
 

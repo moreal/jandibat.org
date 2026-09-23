@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/moreal/jandibat.org/apps/api/internal/adapters/internal/fakedb"
 	"github.com/moreal/jandibat.org/apps/api/internal/operations"
 )
@@ -18,6 +19,23 @@ import (
 func TestNewRejectsNilDB(t *testing.T) {
 	if store, err := New(nil); store != nil || !errors.Is(err, ErrNilDB) {
 		t.Fatalf("New(nil) = %#v, %v", store, err)
+	}
+}
+
+func TestNewWithPGXPoolAcceptsPoolWithoutSQLHandle(t *testing.T) {
+	pool := new(pgxpool.Pool)
+	store, err := NewWithPGXPool(nil, pool, "private_field")
+	if err != nil {
+		t.Fatalf("NewWithPGXPool(nil, pool) error = %v", err)
+	}
+	if store == nil || store.pool != pool {
+		t.Fatalf("NewWithPGXPool(nil, pool) = %#v; want store using supplied pool", store)
+	}
+}
+
+func TestNewWithPGXPoolRejectsNilPool(t *testing.T) {
+	if store, err := NewWithPGXPool(nil, nil); store != nil || !errors.Is(err, ErrNilDB) {
+		t.Fatalf("NewWithPGXPool(nil, nil) = %#v, %v; want ErrNilDB", store, err)
 	}
 }
 

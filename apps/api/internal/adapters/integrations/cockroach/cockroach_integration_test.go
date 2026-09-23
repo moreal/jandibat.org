@@ -498,20 +498,13 @@ func TestCockroachRevocationSchemaProbeUsesPGXPool(t *testing.T) {
 		t.Fatalf("ping CockroachDB as API role: %v", err)
 	}
 
-	// A migrated Store must not consult the legacy SQL handle for this probe.
-	db, err := sql.Open("pgx", dsn)
+	// A migrated Store must operate without any database/sql handle.
+	store, err := integrationstore.NewWithPGXPool(nil, pool)
 	if err != nil {
-		t.Fatal(err)
-	}
-	store, err := integrationstore.NewWithPGXPool(db, pool)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.CheckRevocationSchema(ctx); err != nil {
-		t.Fatalf("probe with PGX pool and closed legacy handle: %v", err)
+		t.Fatalf("probe with PGX pool only: %v", err)
 	}
 	rolledBack := errors.New("rollback schema scope")
 	err = appdb.InTx(ctx, pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {

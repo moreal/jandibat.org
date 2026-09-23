@@ -90,7 +90,6 @@ var ErrNilDB = errors.New("operations cockroach: database is required")
 var ErrInvalidDeletedIdentityHMAC = errors.New("operations cockroach: invalid deleted identity HMAC configuration")
 
 type Store struct {
-	db                    *sql.DB
 	pool                  *pgxpool.Pool
 	redactor              operations.Redactor
 	identityHMACMu        sync.RWMutex
@@ -145,16 +144,16 @@ func New(db *sql.DB, extraSensitiveAuditKeys ...string) (*Store, error) {
 	if db == nil {
 		return nil, ErrNilDB
 	}
-	return &Store{db: db, redactor: operations.NewRedactor(extraSensitiveAuditKeys...)}, nil
+	return &Store{redactor: operations.NewRedactor(extraSensitiveAuditKeys...)}, nil
 }
 
-// NewWithPGXPool keeps legacy operational methods on db while migrated
-// request-audit methods share pool with the other pgx-backed stores.
-func NewWithPGXPool(db *sql.DB, pool *pgxpool.Pool, extraSensitiveAuditKeys ...string) (*Store, error) {
-	if db == nil || pool == nil {
+// NewWithPGXPool uses only pool; the SQL handle argument remains for callers
+// that have not yet switched to a PGX-only constructor signature.
+func NewWithPGXPool(_ *sql.DB, pool *pgxpool.Pool, extraSensitiveAuditKeys ...string) (*Store, error) {
+	if pool == nil {
 		return nil, ErrNilDB
 	}
-	return &Store{db: db, pool: pool, redactor: operations.NewRedactor(extraSensitiveAuditKeys...)}, nil
+	return &Store{pool: pool, redactor: operations.NewRedactor(extraSensitiveAuditKeys...)}, nil
 }
 
 // Check implements operations.DependencyProbe.

@@ -13,9 +13,8 @@ import (
 var ErrNilDB = errors.New("integration cockroach: database is required")
 
 // Store implements all persistence ports used by the integrations services.
-// The caller owns and closes both configured handles.
+// The caller owns and closes the configured pool.
 type Store struct {
-	db   *sql.DB
 	pool *pgxpool.Pool
 }
 
@@ -32,16 +31,16 @@ func New(db *sql.DB) (*Store, error) {
 	if db == nil {
 		return nil, ErrNilDB
 	}
-	return &Store{db: db}, nil
+	return &Store{}, nil
 }
 
-// NewWithPGXPool keeps legacy adapters on db while migrated query groups use
-// pool. Both handles must target the same database and runtime role.
-func NewWithPGXPool(db *sql.DB, pool *pgxpool.Pool) (*Store, error) {
-	if db == nil || pool == nil {
+// NewWithPGXPool uses only pool; the SQL handle argument remains for callers
+// that have not yet switched to a PGX-only constructor signature.
+func NewWithPGXPool(_ *sql.DB, pool *pgxpool.Pool) (*Store, error) {
+	if pool == nil {
 		return nil, ErrNilDB
 	}
-	return &Store{db: db, pool: pool}, nil
+	return &Store{pool: pool}, nil
 }
 
 func persistenceError(err error, duplicate error) error {

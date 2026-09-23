@@ -2292,19 +2292,15 @@ func TestCockroachOperationsSchemaChecksJoinPGXTransactionWithoutSQLHandle(t *te
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	legacy, err := sql.Open("pgx", dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := legacy.Close(); err != nil {
-		t.Fatal(err)
-	}
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	store := &Store{db: legacy, pool: pool}
+	store, err := NewWithPGXPool(nil, pool)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := store.Check(ctx); err != nil {
 		t.Fatalf("operations schema check used closed SQL handle: %v", err)
 	}

@@ -2,3 +2,23 @@
 interface Node {
   id: ID!
 }
+
+type Subject implements Node {
+  id: ID!
+}
+
+type ProviderConnection implements Node {
+  id: ID!
+}
+
+type CustomProvider implements Node {
+  id: ID!
+}
+
+type SyncJob implements Node {
+  id: ID!
+}
+
+type Session implements Node {
+  id: ID!
+}

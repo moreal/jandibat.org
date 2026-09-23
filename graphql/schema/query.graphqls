@@ -1,4 +1,5 @@
 "Root of the domain API. Domain fields are added with resolver authorization."
 type Query {
   _contract: Boolean!
+  node(id: ID!): Node
 }

@@ -16,6 +16,17 @@ endpoint로 축소하는 별도 cutover에서 제거합니다.
 - Frontend: Solid 2를 유지하며 pinned relay-runtime·solid-relay 어댑터 뒤의 normalized store로 전환합니다.
 - Coordination: SDL·generated artifact drift를 CI에서 검사하고 REST 제거 시 이 로그를 갱신합니다.
 
+## 2026-09-24 — Relay Node 전역 식별자
+
+호환성: GraphQL 계약에 `node(id: ID!): Node`를 추가하는 additive 변경입니다. opaque ID는
+버전과 엔터티 종류를 구분하며, 접근 불가와 삭제된 객체는 모두 `null`로 반환합니다.
+
+- `Node` 구현은 Subject, ProviderConnection, CustomProvider, SyncJob, Session으로 제한합니다.
+  activity day·통계·설정은 값 객체이며 전역 ID를 받지 않습니다.
+- Backend: 유형별 조회는 application service/port를 사용하고 기존 공개/소유자 가시성을
+  유지합니다. Session 조회는 사용자 ID와 세션 ID를 모두 조건으로 제한합니다.
+- Frontend: Node ID는 불투명 값으로만 저장·전달하며 데이터베이스 ID로 파싱하지 않습니다.
+
 ## 2026-08-12 — 운영·보안 계약 강화 (`1.1.0`)
 
 호환성: `1.0.0` 개발 기준선 대비 breaking change. 아직 배포되지 않은 계약의 Phase 3 완료 조건을 명시적으로 고정합니다.

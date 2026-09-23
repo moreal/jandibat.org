@@ -27,4 +27,23 @@ if ! grep -q '^graphql-generate:' Makefile || ! grep -q '^graphql-check:' Makefi
   exit 1
 fi
 
+node_types=$(awk '$1 == "type" && $3 == "implements" && $4 == "Node" { print $2 }' graphql/schema.graphql | LC_ALL=C sort)
+expected_node_types='CustomProvider
+ProviderConnection
+Session
+Subject
+SyncJob'
+if [ "$node_types" != "$expected_node_types" ]; then
+  echo 'Relay Node implementations must be exactly the five durable entity types' >&2
+  exit 1
+fi
+if ! grep -q 'node(id: ID!): Node' graphql/schema.graphql; then
+  echo 'Relay node root field is missing' >&2
+  exit 1
+fi
+if grep -Eq '^type (ActivityDay|ActivityStatistics) implements Node' graphql/schema.graphql; then
+  echo 'activity days and statistics must remain value objects' >&2
+  exit 1
+fi
+
 echo 'GraphQL SDL contract and generation entry points are present'

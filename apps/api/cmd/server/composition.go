@@ -52,6 +52,7 @@ const (
 // work and cleanup stay at the process boundary.
 type application struct {
 	dependencies apihttp.Dependencies
+	graphql      apihttp.GraphQLDependencies
 	scheduler    *integrations.Scheduler
 	background   []namedBackgroundRunner
 	oauth        *oauthRegistry
@@ -272,12 +273,17 @@ func buildApplication(ctx context.Context, settings config.Config, logger *zap.L
 	if err != nil {
 		return nil, fmt.Errorf("runtime: construct connection service: %w", err)
 	}
+	graphDeps, err := buildGraphQLDependencies(settings, logger, subjectService, authService, timeline, connections, customProviders, syncService, subjectDeletions, oauthFlows.flows)
+	if err != nil {
+		return nil, err
+	}
 
 	background := append([]namedBackgroundRunner(nil), operational.background...)
 	if scheduler != nil {
 		background = append([]namedBackgroundRunner{{name: "provider scheduler", runner: scheduler}}, background...)
 	}
 	app := &application{
+		graphql: graphDeps,
 		dependencies: apihttp.Dependencies{
 			Logger:            logger,
 			Timeline:          timeline,

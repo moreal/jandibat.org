@@ -66,7 +66,11 @@ func run() (resultErr error) {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	server := newHTTPServer(settings.APIAddress, newProcessHandler(app.dependencies, operations.NewLiveness(ctx.Done())), logger)
+	processHandler, err := newProcessHandlerWithGraphQL(app, operations.NewLiveness(ctx.Done()))
+	if err != nil {
+		return fmt.Errorf("startup error: construct GraphQL route: %w", err)
+	}
+	server := newHTTPServer(settings.APIAddress, processHandler, logger)
 
 	serverErrors := make(chan error, 1)
 	go func() {

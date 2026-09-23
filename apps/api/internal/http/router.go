@@ -343,7 +343,9 @@ func auditRequests(recorder handlers.AuditRecorder, sourceKey []byte, dependenci
 					_ = transaction.Rollback()
 				}
 				if mutation {
-					auditCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 2*time.Second)
+					// A rolled-back request context still carries its closed lazy
+					// transaction. A failure outcome is a separate durable write.
+					auditCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 					event, eventErr := httpRequestAuditEvent(sourceKey, r, stdhttp.StatusServiceUnavailable)
 					if eventErr == nil {
 						eventErr = recorder.Record(auditCtx, event)
@@ -386,7 +388,9 @@ func auditRequests(recorder handlers.AuditRecorder, sourceKey []byte, dependenci
 					if transaction != nil {
 						_ = transaction.Rollback()
 					}
-					err = recorder.Record(auditCtx, event)
+					standaloneCtx, standaloneCancel := context.WithTimeout(context.Background(), 2*time.Second)
+					err = recorder.Record(standaloneCtx, event)
+					standaloneCancel()
 				}
 				cancel()
 				if err != nil {

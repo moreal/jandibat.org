@@ -68,7 +68,7 @@ FROM mutation_audit_outbox
 WHERE id = $1::UUID AND claim_token = $2::UUID AND status = 'processing'
 FOR UPDATE;
 
--- @name InsertDeliveredMutationAudit
+-- @name InsertAuditEvent
 -- @returns :exec
 INSERT INTO audit_events (
   id, occurred_at, actor_type, actor_id, action, target_type, target_id,

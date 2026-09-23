@@ -485,6 +485,73 @@ func TestCockroachMaintenanceCheckpointJoinsPGXTransaction(t *testing.T) {
 	}
 }
 
+func TestCockroachMaintenanceAuditSinkJoinsPGXTransaction(t *testing.T) {
+	adminDSN := os.Getenv("JANDIBAT_TEST_DATABASE_URL")
+	maintenanceDSN := os.Getenv("JANDIBAT_TEST_MAINTENANCE_DATABASE_URL")
+	if adminDSN == "" || maintenanceDSN == "" {
+		t.Skip("set JANDIBAT_TEST_DATABASE_URL and JANDIBAT_TEST_MAINTENANCE_DATABASE_URL")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	admin, err := sql.Open("pgx", adminDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	maintenance, err := sql.Open("pgx", maintenanceDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, err := pgxpool.New(ctx, maintenanceDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pool.Close(); _ = maintenance.Close(); _ = admin.Close() })
+	store, err := NewWithPGXPool(maintenance, pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unique := strings.ReplaceAll(time.Now().UTC().Format("150405.000000000"), ".", "")[:12]
+	event := operations.AuditEvent{
+		ID:         "a37d0f6a-04ae-4e72-b2f3-" + unique,
+		OccurredAt: time.Now().UTC().Truncate(time.Microsecond),
+		Actor:      operations.AuditActor{Type: operations.AuditActorUser, ID: "maintenance-user"},
+		Action:     "maintenance.audit.test", Target: operations.AuditTarget{Type: "database", ID: "isolated"},
+		Outcome: operations.AuditSucceeded, RequestID: "maintenance-audit-" + unique,
+		SourceIP: "127.0.0.1", Metadata: map[string]any{"api_key": "sensitive-test-value"},
+	}
+	t.Cleanup(func() {
+		_, _ = admin.ExecContext(context.Background(), `DELETE FROM audit_events WHERE id=$1`, event.ID)
+	})
+	rollback := errors.New("rollback maintenance audit")
+	err = appdb.InTx(ctx, pool, appdb.RetryOptions{}, func(txctx context.Context, _ pgx.Tx) error {
+		if err := store.WriteAuditEvent(txctx, event); err != nil {
+			return err
+		}
+		return rollback
+	})
+	if !errors.Is(err, rollback) {
+		t.Fatalf("audit rollback = %v", err)
+	}
+	var count int
+	if err := admin.QueryRowContext(ctx, `SELECT count(*) FROM audit_events WHERE id=$1`, event.ID).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("audit escaped rollback: count=%d err=%v", count, err)
+	}
+	if err := store.WriteAuditEvent(ctx, event); err != nil {
+		t.Fatal(err)
+	}
+	var metadata []byte
+	if err := admin.QueryRowContext(ctx, `SELECT metadata FROM audit_events WHERE id=$1`, event.ID).Scan(&metadata); err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(metadata, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded["api_key"] != operations.RedactedValue || decoded["source_ip"] != "127.0.0.1" {
+		t.Fatalf("audit metadata redaction failed: keys=%d", len(decoded))
+	}
+}
+
 func TestCockroachOperationsSchemaReadiness(t *testing.T) {
 	dsn := os.Getenv("JANDIBAT_TEST_DATABASE_URL")
 	if dsn == "" {

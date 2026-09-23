@@ -310,7 +310,7 @@ func (store *Store) DeliverMutationAudit(ctx context.Context, id, claim string, 
 			if err != nil {
 				return operations.ErrInvalidAuditOutbox
 			}
-			if err := generated.InsertDeliveredMutationAudit(txctx, tx, eventID, row.OccurredAt,
+			if err := generated.InsertAuditEvent(txctx, tx, eventID, row.OccurredAt,
 				row.ActorType, &row.ActorId, row.Action, row.TargetType, &row.TargetId,
 				row.Outcome, row.RequestId, row.Metadata); err != nil {
 				return err

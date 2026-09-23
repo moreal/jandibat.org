@@ -114,6 +114,16 @@ func TestConnectionServiceOAuthLifecycleAndRevocation(t *testing.T) {
 	if connection.Status != ConnectionActive {
 		t.Fatalf("CompleteOAuth status = %s", connection.Status)
 	}
+	disabled := false
+	connection, err = service.Update(ctx, UpdateConnectionInput{ID: connection.ID, Enabled: &disabled})
+	if err != nil || connection.Status != ConnectionDisabled {
+		t.Fatalf("disable completed OAuth connection = %#v, error %v", connection, err)
+	}
+	enabled := true
+	connection, err = service.Update(ctx, UpdateConnectionInput{ID: connection.ID, Enabled: &enabled})
+	if err != nil || connection.Status != ConnectionActive {
+		t.Fatalf("re-enable completed OAuth connection = %#v, error %v", connection, err)
+	}
 	connection, err = service.Revoke(ctx, connection.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -133,6 +143,34 @@ func TestConnectionServiceOAuthLifecycleAndRevocation(t *testing.T) {
 	}
 	if _, err := service.CompleteOAuth(ctx, connection.ID, TokenCredentials{AccessToken: "again"}); !errors.Is(err, ErrInvalidConnectionStatus) {
 		t.Fatalf("CompleteOAuth(revoked) error = %v", err)
+	}
+}
+
+func TestConnectionServiceCannotEnablePendingOAuthWithoutCallback(t *testing.T) {
+	t.Parallel()
+	store := NewMemoryStore()
+	service := mustConnectionService(store, &fixedClock{now: time.Date(2026, 8, 12, 1, 2, 3, 0, time.UTC)}, &sequentialIDs{})
+	ctx := context.Background()
+	connection, err := service.BeginOAuth(ctx, ConnectInput{
+		SubjectID: "subject-1", ProviderID: "gitlab", EnvironmentID: "gitlab-env", IncludePrivate: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	enabled := true
+	if _, err := service.Update(ctx, UpdateConnectionInput{ID: connection.ID, Enabled: &enabled}); !errors.Is(err, ErrInvalidConnectionStatus) {
+		t.Fatalf("Update(pending OAuth, enabled) error = %v, want ErrInvalidConnectionStatus", err)
+	}
+	disabled := false
+	if _, err := service.Update(ctx, UpdateConnectionInput{ID: connection.ID, Enabled: &disabled}); !errors.Is(err, ErrInvalidConnectionStatus) {
+		t.Fatalf("Update(pending OAuth, disabled) error = %v, want ErrInvalidConnectionStatus", err)
+	}
+	record, err := store.GetConnection(ctx, connection.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Connection.Status != ConnectionPending || len(record.Credentials.AccessToken) != 0 {
+		t.Fatalf("Update(pending OAuth) changed status or credentials: %#v", record)
 	}
 }
 

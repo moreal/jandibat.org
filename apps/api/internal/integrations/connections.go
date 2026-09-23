@@ -80,6 +80,12 @@ func (service *ConnectionService) Update(ctx context.Context, input UpdateConnec
 	if record.Connection.Status == ConnectionRevoked {
 		return ProviderConnection{}, ErrInvalidConnectionStatus
 	}
+	if input.Enabled != nil && record.Connection.Status == ConnectionPending {
+		// Pending OAuth may only become active after the callback completes.
+		// Disallow disabling it too: a disabled pending row could otherwise
+		// be re-enabled without ever completing OAuth.
+		return ProviderConnection{}, ErrInvalidConnectionStatus
+	}
 	if input.Token != nil {
 		if !record.Connection.PrivateDataEnabled {
 			// Token rotation is meaningful only for an explicitly private-data

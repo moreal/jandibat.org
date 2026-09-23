@@ -17,9 +17,11 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	graph "github.com/moreal/jandibat.org/apps/api/internal/graphql"
 	"github.com/moreal/jandibat.org/apps/api/internal/http/handlers"
 	"github.com/moreal/jandibat.org/apps/api/internal/observability"
 	"github.com/moreal/jandibat.org/apps/api/internal/operations"
+	"github.com/vektah/gqlparser/v2/ast"
 	"go.uber.org/zap"
 )
 
@@ -35,6 +37,19 @@ func NewRouter(dependencies ...Dependencies) stdhttp.Handler {
 	if len(dependencies) > 0 {
 		deps = dependencies[0]
 	}
+	return newRouter(deps, nil)
+}
+
+// NewRouterWithGraphQL mounts the domain API only when the complete trusted
+// runtime graph is available. Startup must surface a missing dependency.
+func NewRouterWithGraphQL(deps Dependencies, graphDeps GraphQLDependencies) (stdhttp.Handler, error) {
+	if err := validateGraphQLDependencies(deps, graphDeps); err != nil {
+		return nil, err
+	}
+	return newRouter(deps, &graphDeps), nil
+}
+
+func newRouter(deps Dependencies, graphDeps *GraphQLDependencies) stdhttp.Handler {
 	logger := deps.Logger
 	if logger == nil {
 		logger = zap.NewNop()
@@ -58,16 +73,37 @@ func NewRouter(dependencies ...Dependencies) stdhttp.Handler {
 	// The timeout must own the audit transaction lifetime. Its context is
 	// canceled only after auditRequests has enqueued the outcome and committed.
 	router.Use(timeoutProblems(30 * time.Second))
+	router.Use(securityHeaders)
+	router.Use(cors(deps.AllowedOrigins))
+	router.Use(csrf(deps.AllowedOrigins))
+	if graphDeps != nil {
+		router.Use(func(next stdhttp.Handler) stdhttp.Handler {
+			return graph.PreflightHTTP(next, graph.HTTPOptions{Development: graphDeps.Development})
+		})
+		router.Use(func(next stdhttp.Handler) stdhttp.Handler {
+			return graphQLOperationObserver(next, observability.Default(), logger)
+		})
+	}
 	if deps.Audit != nil {
 		router.Use(auditRequests(deps.Audit, deps.AuditSourceKey, deps.RateLimiter, deps.MutationAudits, logger))
 	}
 	router.Use(recoverProblems(logger))
-	router.Use(securityHeaders)
-	router.Use(cors(deps.AllowedOrigins))
-	router.Use(csrf(deps.AllowedOrigins))
+	if graphDeps != nil {
+		router.Use(func(next stdhttp.Handler) stdhttp.Handler {
+			return stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+				if graphQLRateLimit(w, r, deps.RateLimiter) {
+					next.ServeHTTP(w, r)
+				}
+			})
+		})
+	}
 
 	router.Get("/healthz", server.Healthz)
 	router.Handle("/metrics", loopbackMetrics(observability.Default().Handler()))
+	if graphDeps != nil {
+		graphqlHandler := graph.NewHTTPHandler(&graph.Resolver{}, graph.HTTPOptions{Development: graphDeps.Development})
+		router.Method(stdhttp.MethodPost, "/graphql", graphQLTrustedContext(deps, *graphDeps, graphqlHandler))
+	}
 	router.Route("/v1", func(r chi.Router) {
 		r.Get("/providers", server.ListProviders)
 		r.Get("/activities/{subject}", server.GetActivities)
@@ -280,8 +316,8 @@ func auditRequests(recorder handlers.AuditRecorder, sourceKey []byte, dependenci
 			// The timeout middleware below derives a child request. Install one
 			// shared actor holder on the outer request so the authenticated handler
 			// can publish its stable user ID to this middleware's outcome record.
-			*r = *r.WithContext(handlers.WithAuditActorHolder(r.Context()))
-			targetType, mutation := mutationRequestTarget(r.Method, r.URL.Path)
+			*r = *r.WithContext(withGraphQLAuditActorHolder(handlers.WithAuditActorHolder(r.Context())))
+			targetType, mutation := mutationRequestTargetForRequest(r)
 			if mutation {
 				auditRequestID, err := operations.NewAuditEventID()
 				if err != nil {
@@ -367,13 +403,16 @@ func auditRequests(recorder handlers.AuditRecorder, sourceKey []byte, dependenci
 				status = stdhttp.StatusOK
 			}
 			pattern := chi.RouteContext(r.Context()).RoutePattern()
-			if shouldAuditRequest(r.Method, pattern, status) {
+			if shouldAuditRequest(r, pattern, status) {
 				auditCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 2*time.Second)
 				event, eventErr := httpRequestAuditEvent(sourceKey, r, status)
+				if r.URL.Path == "/graphql" && mutation && graphQLMutationOutcomeFailed(r.Context()) {
+					event.Outcome = operations.AuditFailed
+				}
 				var err error
 				if eventErr != nil {
 					err = eventErr
-				} else if transaction != nil && (status < 400 || (transaction.Active() && transaction.CommitFailure())) {
+				} else if transaction != nil && ((status < 400 && !(r.URL.Path == "/graphql" && graphQLMutationOutcomeFailed(r.Context()))) || (transaction.Active() && transaction.CommitFailure())) {
 					err = transaction.Enqueue(auditCtx, event)
 					if err == nil {
 						err = transaction.Commit()
@@ -469,6 +508,17 @@ func ensureAuditRequestID(r *stdhttp.Request) error {
 func isMutationRequest(method, path string) bool {
 	_, ok := mutationRequestTarget(method, path)
 	return ok
+}
+
+func mutationRequestTargetForRequest(r *stdhttp.Request) (string, bool) {
+	if r.URL.Path == "/graphql" {
+		metadata, ok := graph.OperationMetadataFromContext(r.Context())
+		if !ok || metadata.Type != ast.Mutation {
+			return "", false
+		}
+		return "graphql", true
+	}
+	return mutationRequestTarget(r.Method, r.URL.Path)
 }
 
 func mutationRequestTarget(method, path string) (string, bool) {
@@ -607,14 +657,21 @@ func recordHTTPMutationIntent(ctx context.Context, recorder handlers.AuditRecord
 	})
 }
 
-func shouldAuditRequest(method, pattern string, _ int) bool {
+func shouldAuditRequest(r *stdhttp.Request, pattern string, _ int) bool {
 	// Every durable HTTP outcome must have passed the shared mutation-intent
 	// limiter and produced a correlated intent first. Persisting denials for
 	// ordinary reads would otherwise let repeated GET 401/403/429 responses grow
 	// audit_events without any distributed pre-gate. Authentication ceremonies
 	// and the OAuth callback are included in mutationRoutePatterns.
-	_, knownMutation := mutationRequestTarget(method, pattern)
+	_, knownMutation := mutationRequestTargetForRequest(r)
 	return knownMutation
+}
+
+// gqlgen's root-field hook reports typed payload errors before field
+// selection. The client cannot hide them by omitting or aliasing `errors`.
+func graphQLMutationOutcomeFailed(ctx context.Context) bool {
+	outcome, ok := graph.OperationOutcomeFromContext(ctx)
+	return !ok || !outcome.Executed || outcome.Failed
 }
 
 func httpRequestAuditEvent(sourceKey []byte, r *stdhttp.Request, status int) (operations.AuditEvent, error) {
@@ -628,6 +685,9 @@ func httpRequestAuditEvent(sourceKey []byte, r *stdhttp.Request, status int) (op
 	}
 	action := auditAction(r.Method, pattern)
 	actor, ok := handlers.AuditActorFromContext(r.Context())
+	if !ok {
+		actor, ok = graphqlAuditActorFromContext(r.Context())
+	}
 	if !ok {
 		actor = operations.AuditActor{Type: operations.AuditActorAnonymous}
 	}
@@ -683,6 +743,8 @@ func auditTargetType(pattern string) string {
 		return "subject"
 	case strings.Contains(pattern, "sync-jobs"):
 		return "sync_job"
+	case pattern == "/graphql":
+		return "graphql"
 	default:
 		return "http_resource"
 	}
@@ -798,7 +860,7 @@ func csrf(allowed []string) func(stdhttp.Handler) stdhttp.Handler {
 	}
 	return func(next stdhttp.Handler) stdhttp.Handler {
 		return stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
-			if r.Method == stdhttp.MethodGet || r.Method == stdhttp.MethodHead || r.Method == stdhttp.MethodOptions || r.Header.Get("Authorization") != "" {
+			if r.Method == stdhttp.MethodGet || r.Method == stdhttp.MethodHead || r.Method == stdhttp.MethodOptions || (r.URL.Path != "/graphql" && r.Header.Get("Authorization") != "") {
 				next.ServeHTTP(w, r)
 				return
 			}

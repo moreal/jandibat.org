@@ -30,3 +30,20 @@ export const updateSubject = graphql`
     }
   }
 `;
+
+// Two route-like consumers intentionally select the same durable Node through
+// distinct operations and fragments, verifying the shared normalized record.
+export const crossRouteSubjectQuery = graphql`
+  query RelayCrossRouteSubjectQuery($id: String!) {
+    subject(handleOrID: $id) {
+      ...RelayCrossRouteSubjectFragment
+    }
+  }
+`;
+
+export const crossRouteSubjectFragment = graphql`
+  fragment RelayCrossRouteSubjectFragment on Subject {
+    id
+    displayName
+  }
+`;

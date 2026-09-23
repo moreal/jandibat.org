@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/moreal/jandibat.org/apps/api/internal/subjects"
 )
@@ -59,7 +60,12 @@ VALUES ($1, $2, $3, 'active', $3, $3)`, userID, email, now); err != nil {
 	if _, err := db.ExecContext(ctx, `DELETE FROM users WHERE id = $1`, userID); err != nil {
 		t.Fatalf("commit simulated account deletion: %v", err)
 	}
-	store, err := New(db)
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	store, err := New(pool)
 	if err != nil {
 		t.Fatal(err)
 	}

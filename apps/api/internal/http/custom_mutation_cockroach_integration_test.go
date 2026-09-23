@@ -17,7 +17,6 @@ import (
 	integrationstore "github.com/moreal/jandibat.org/apps/api/internal/adapters/integrations/cockroach"
 	operationsstore "github.com/moreal/jandibat.org/apps/api/internal/adapters/operations/cockroach"
 	activitystore "github.com/moreal/jandibat.org/apps/api/internal/adapters/storage/cockroach"
-	subjectstore "github.com/moreal/jandibat.org/apps/api/internal/adapters/subjects/cockroach"
 	"github.com/moreal/jandibat.org/apps/api/internal/auth"
 	apihttp "github.com/moreal/jandibat.org/apps/api/internal/http"
 	"github.com/moreal/jandibat.org/apps/api/internal/integrations"
@@ -92,7 +91,7 @@ func TestCockroachCustomAndConnectionHTTPMutationsShareAuditTransaction(t *testi
 
 	integrationDB, _ := integrationstore.New(apiDB)
 	activityDB, _ := activitystore.New(apiDB)
-	subjectDB, _ := subjectstore.New(apiDB)
+	subjectDB := newPGXSubjectStore(t, ctx, apiDSN)
 	subjectService, _ := subjects.NewService(subjectDB, subjects.Config{})
 	cipher, _ := integrations.NewAESGCMCipher(bytes.Repeat([]byte{0x45}, 32))
 	customService, _ := integrations.NewCustomProviderService(integrationDB, cipher, activityDB, nil, nil)

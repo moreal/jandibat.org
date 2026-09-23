@@ -141,7 +141,7 @@ func buildApplication(ctx context.Context, settings config.Config, logger *zap.L
 	}
 	subjectRepository := subjects.Repository(subjects.NewMemoryRepository())
 	if stores.db != nil {
-		subjectRepository, err = subjectstore.New(stores.db)
+		subjectRepository, err = subjectstore.New(stores.pool)
 		if err != nil {
 			return nil, fmt.Errorf("runtime: construct subject store: %w", err)
 		}

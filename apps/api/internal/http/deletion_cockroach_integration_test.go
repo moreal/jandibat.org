@@ -15,7 +15,6 @@ import (
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	operationsstore "github.com/moreal/jandibat.org/apps/api/internal/adapters/operations/cockroach"
-	subjectstore "github.com/moreal/jandibat.org/apps/api/internal/adapters/subjects/cockroach"
 	"github.com/moreal/jandibat.org/apps/api/internal/auth"
 	apihttp "github.com/moreal/jandibat.org/apps/api/internal/http"
 	"github.com/moreal/jandibat.org/apps/api/internal/operations"
@@ -84,10 +83,7 @@ VALUES ($1, $2, $3, 'active', $3, $3)`, userID, email, now); err != nil {
 		_, _ = db.ExecContext(cleanupCtx, `DELETE FROM users WHERE id = $1`, userID)
 	})
 
-	subjectRepository, err := subjectstore.New(apiDB)
-	if err != nil {
-		t.Fatal(err)
-	}
+	subjectRepository := newPGXSubjectStore(t, ctx, apiDSN)
 	subjectService, err := subjects.NewService(subjectRepository, subjects.Config{})
 	if err != nil {
 		t.Fatal(err)

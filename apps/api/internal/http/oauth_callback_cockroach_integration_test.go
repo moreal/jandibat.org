@@ -25,7 +25,6 @@ import (
 	oauthstore "github.com/moreal/jandibat.org/apps/api/internal/adapters/integrations/oauth/cockroach"
 	operationsstore "github.com/moreal/jandibat.org/apps/api/internal/adapters/operations/cockroach"
 	activitystore "github.com/moreal/jandibat.org/apps/api/internal/adapters/storage/cockroach"
-	subjectstore "github.com/moreal/jandibat.org/apps/api/internal/adapters/subjects/cockroach"
 	"github.com/moreal/jandibat.org/apps/api/internal/auth"
 	apihttp "github.com/moreal/jandibat.org/apps/api/internal/http"
 	"github.com/moreal/jandibat.org/apps/api/internal/integrations"
@@ -83,10 +82,7 @@ func TestCockroachOAuthCallbackOutboxFailureConsumesStateRollsBackConnectionAndR
 	if err != nil {
 		t.Fatal(err)
 	}
-	subjectDB, err := subjectstore.New(apiDB)
-	if err != nil {
-		t.Fatal(err)
-	}
+	subjectDB := newPGXSubjectStore(t, ctx, apiDSN)
 	subjectService, err := subjects.NewService(subjectDB, subjects.Config{})
 	if err != nil {
 		t.Fatal(err)

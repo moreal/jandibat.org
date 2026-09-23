@@ -10,3 +10,13 @@ queries = ["apps/api/internal/adapters/scytheprobe/queries/probe.sql"]
 [[sql.gen]]
 backend = "go-pgx"
 output = "apps/api/internal/adapters/scytheprobe/generated"
+
+[[sql]]
+name = "subjects"
+engine = "cockroachdb"
+schema = ["db/migrations/0001_baseline.sql"]
+queries = ["apps/api/internal/adapters/subjects/cockroach/queries/subjects.sql"]
+
+[[sql.gen]]
+backend = "go-pgx"
+output = "apps/api/internal/adapters/subjects/cockroach/generated"

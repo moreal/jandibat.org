@@ -70,7 +70,7 @@ func buildWorker(ctx context.Context, settings config.Config, logger *zap.Logger
 	if err != nil {
 		return nil, fmt.Errorf("worker: construct integration store: %w", err)
 	}
-	subjects, err := subjectstore.New(db)
+	subjects, err := subjectstore.New(database.Pool)
 	if err != nil {
 		return nil, fmt.Errorf("worker: construct subject store: %w", err)
 	}

@@ -3,40 +3,36 @@ package cockroach
 
 import (
 	"context"
-	"database/sql"
 	"errors"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 	appdb "github.com/moreal/jandibat.org/apps/api/internal/database"
 	"github.com/moreal/jandibat.org/apps/api/internal/subjects"
 )
 
-var ErrNilDB = errors.New("subjects cockroach: database is required")
+var ErrNilDB = errors.New("subjects cockroach: pgx pool is required")
 
-// Store implements subjects.Repository. The caller owns the database handle.
-type Store struct {
-	db *sql.DB
-}
+// Store implements subjects.Repository. The caller owns the pool.
+type Store struct{ pool *pgxpool.Pool }
 
-func (store *Store) mutationExecutor(ctx context.Context) (appdb.Executor, error) {
-	return appdb.MutationExecutor(ctx, store.db)
-}
-
-func (store *Store) beginMutation(ctx context.Context) (context.Context, *appdb.Scope, error) {
-	return appdb.Begin(ctx, store.db, nil)
+func New(pool *pgxpool.Pool) (*Store, error) {
+	if pool == nil {
+		return nil, ErrNilDB
+	}
+	return &Store{pool: pool}, nil
 }
 
 var _ subjects.Repository = (*Store)(nil)
 
-func New(db *sql.DB) (*Store, error) {
-	if db == nil {
-		return nil, ErrNilDB
-	}
-	return &Store{db: db}, nil
+func (store *Store) executor(ctx context.Context) appdb.DBTX {
+	return appdb.PGXExecutorFor(ctx, store.pool)
 }
 
-type scanner interface {
-	Scan(dest ...any) error
+func (store *Store) inTx(ctx context.Context, callback func(context.Context, pgx.Tx) error) error {
+	return appdb.InTx(ctx, store.pool, appdb.RetryOptions{}, callback)
 }
 
 func persistenceError(err error) error {
@@ -59,13 +55,20 @@ func persistenceError(err error) error {
 	}
 }
 
-func affected(result sql.Result, err error) (int64, error) {
-	if err != nil {
-		return 0, persistenceError(err)
+func subjectFrom(id string, owner, display *string, handle, timezone string, public bool, created, updated time.Time) subjects.Subject {
+	return subjects.Subject{ID: id, OwnerUserID: value(owner), Handle: handle, DisplayName: copyString(display), Timezone: timezone, IsPublic: public, CreatedAt: created, UpdatedAt: updated}
+}
+
+func value(p *string) string {
+	if p == nil {
+		return ""
 	}
-	count, err := result.RowsAffected()
-	if err != nil {
-		return 0, err
+	return *p
+}
+func copyString(p *string) *string {
+	if p == nil {
+		return nil
 	}
-	return count, nil
+	v := *p
+	return &v
 }

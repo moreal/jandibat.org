@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	authstore "github.com/moreal/jandibat.org/apps/api/internal/adapters/auth/cockroach"
 	subjectstore "github.com/moreal/jandibat.org/apps/api/internal/adapters/subjects/cockroach"
@@ -135,7 +136,12 @@ func TestCockroachAPIRoleStateAndMutationAuditCommitOrRollbackTogether(t *testin
 		_, _ = admin.ExecContext(context.Background(), `DELETE FROM users WHERE id=$1`, userID)
 	})
 	operationStore, _ := New(api)
-	subjectStore, _ := subjectstore.New(api)
+	pool, err := pgxpool.New(ctx, apiDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	subjectStore, _ := subjectstore.New(pool)
 	txCtx, transaction, err := operationStore.BeginMutation(ctx)
 	if err != nil {
 		t.Fatal(err)

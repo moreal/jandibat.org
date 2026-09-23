@@ -60,6 +60,18 @@ type activeTransaction struct {
 	tx           pgx.Tx
 }
 
+// PGXExecutorFor returns the active transaction for pool when ctx is inside
+// InTx, otherwise it returns pool. Generated queries therefore join the same
+// transaction boundary without depending on application transaction policy.
+func PGXExecutorFor(ctx context.Context, pool DBTX) DBTX {
+	if active, ok := ctx.Value(pgxTransactionContextKey{}).(activeTransaction); ok {
+		if identity, err := transactionPoolIdentity(pool); err == nil && active.poolIdentity == identity {
+			return active.tx
+		}
+	}
+	return pool
+}
+
 // InTx owns a pgx transaction and retries CockroachDB serialization failures
 // (SQLSTATE 40001) with bounded exponential jitter. Nested calls join the
 // current transaction only when they use the same pool.
@@ -138,7 +150,7 @@ func IsRetryableSerializationFailure(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "40001"
 }
 
-func transactionPoolIdentity(pool TxBeginner) (uintptr, error) {
+func transactionPoolIdentity(pool any) (uintptr, error) {
 	if pool == nil {
 		return 0, ErrInvalidPool
 	}

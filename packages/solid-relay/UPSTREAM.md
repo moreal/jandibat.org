@@ -11,7 +11,7 @@ At the pristine-import commit, the 23 files under `src/` and `LICENSE` were copi
 
 ## Local Solid 2 port
 
-The local package export surface is deliberately limited to the environment provider, lazy query, fragment, and mutation primitives proven by the Task 6 compatibility test. Upstream's pagination, refetch, preload, query-loader, and subscription exports are omitted until each needed path has a Solid 2 and Relay 21 runtime regression test; initial subscriptions are out of scope. The official frontend is a statically served client, so this port does not support server rendering or the upstream `deferStream` behavior. The pinned upstream source remains available in this package for auditable patch review. Any changes after the pristine import are local compatibility patches, not upstream files.
+The local package export surface contains the environment provider, lazy query, fragment, mutation, pagination, and refetch primitives proven by Solid 2 / Relay 21 runtime compatibility tests. Upstream's preload, query-loader, and subscription exports remain omitted until each needed path has a runtime regression test; initial subscriptions are out of scope. The official frontend is a statically served client, so this port does not support server rendering or the upstream `deferStream` behavior. The pinned upstream source remains available in this package for auditable patch review. Any changes after the pristine import are local compatibility patches, not upstream files.
 
 To reproduce the `src` manifest digest from an upstream checkout at the recorded commit:
 

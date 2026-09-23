@@ -6,6 +6,8 @@ export {
   RelayEnvironmentProvider as RelayProvider,
   createLazyLoadQuery as createRelayQuery,
   createFragment as createRelayFragment,
+  createPaginationFragment as createRelayPaginationFragment,
+  createRefetchableFragment as createRelayRefetchableFragment,
 } from "solid-relay";
 
 export function createRelayMutation<TMutation extends MutationParameters>(mutation: GraphQLTaggedNode) {

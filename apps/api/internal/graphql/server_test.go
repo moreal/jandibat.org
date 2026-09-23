@@ -219,6 +219,23 @@ func TestGraphQLMutationOutcomeIgnoresSelectedPayloadFields(t *testing.T) {
 	}
 }
 
+func TestGraphQLMutationOutcomeCatchesChildFieldErrorAfterRootSuccess(t *testing.T) {
+	port := &subjectMutationPort{subject: mutationSubjectFixture()}
+	ctx := mutationContext(port, nil) // Intentionally lacks SubjectSettings query port.
+	var outcome OperationOutcome
+	var found bool
+	handler := PreflightHTTP(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		NewHTTPHandler(&Resolver{}, HTTPOptions{}).ServeHTTP(w, r)
+		outcome, found = OperationOutcomeFromContext(r.Context())
+	}), HTTPOptions{})
+	w := httptest.NewRecorder()
+	body := `{"query":"mutation CreateChild { createSubject(input: {handle: \"visible\", timezone: \"UTC\"}) { subject { id settings { timezone } } } }"}`
+	handler.ServeHTTP(w, graphRequest(http.MethodPost, "application/json", body).WithContext(ctx))
+	if w.Code != http.StatusOK || !found || !outcome.Executed || !outcome.Failed || !strings.Contains(w.Body.String(), `"errors"`) {
+		t.Fatalf("child error not captured: status=%d outcome=%+v found=%t body=%s", w.Code, outcome, found, w.Body.String())
+	}
+}
+
 func TestGraphQLHTTPDevelopmentAllowsUnnamedIntrospection(t *testing.T) {
 	handler := NewHTTPHandler(&Resolver{}, HTTPOptions{Development: true})
 	w := httptest.NewRecorder()

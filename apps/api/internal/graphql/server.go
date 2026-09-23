@@ -311,7 +311,10 @@ func (i *operationInspector) first(value *ast.Value) (int, error) {
 		if err := json.Unmarshal(encoded, &raw); err != nil {
 			raw = string(encoded)
 		}
-	default:
+	case ast.FloatValue, ast.StringValue, ast.BlockValue, ast.BooleanValue, ast.NullValue,
+		ast.EnumValue, ast.ListValue, ast.ObjectValue:
+		return 0, errors.New("invalid page size")
+	default: // Reject future gqlparser value kinds until explicitly reviewed.
 		return 0, errors.New("invalid page size")
 	}
 	count, err := strconv.Atoi(raw)
@@ -372,7 +375,7 @@ func NewHTTPHandler(resolver *Resolver, options HTTPOptions) http.Handler {
 	server.SetParserTokenLimit(4096)
 	server.SetErrorPresenter(presentGraphQLError)
 	server.SetRecoverFunc(func(_ context.Context, _ any) error {
-		return errors.New("Internal server error.")
+		return errors.New("internal server error")
 	})
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		server.ServeHTTP(w, r)

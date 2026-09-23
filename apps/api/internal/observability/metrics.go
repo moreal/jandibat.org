@@ -5,7 +5,6 @@ package observability
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 var durationBuckets = [...]float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30}
@@ -127,7 +128,7 @@ type Registry struct {
 	cockroachErrors   map[string]uint64
 	dbPoolWait        *histogram
 
-	db               *sql.DB
+	pgxPool          *pgxpool.Pool
 	queueProbe       QueueAgeProbe
 	deletionProbe    DeletionAgeProbe
 	freshnessProbe   ActivityFreshnessProbe
@@ -321,14 +322,14 @@ func (registry *Registry) ObserveDBPoolWait(elapsed time.Duration) {
 	registry.mu.Unlock()
 }
 
-// RegisterDBPool exposes the current database/sql in-use gauge. Acquisition
-// wait is recorded by the pgxpool tracer rather than database/sql statistics.
-func (registry *Registry) RegisterDBPool(db *sql.DB) {
+// RegisterPGXPool exposes the number of currently acquired pgx connections.
+// The existing acquisition tracer separately records checkout wait time.
+func (registry *Registry) RegisterPGXPool(pool *pgxpool.Pool) {
 	if registry == nil {
 		return
 	}
 	registry.mu.Lock()
-	registry.db = db
+	registry.pgxPool = pool
 	registry.mu.Unlock()
 }
 
@@ -373,36 +374,19 @@ func (registry *Registry) RegisterRevocationDLQProbe(probe RevocationDLQProbe) {
 	registry.mu.Unlock()
 }
 
-// SQLQueueAgeProbe returns a Cockroach/PostgreSQL compatible queue probe.
-func SQLQueueAgeProbe(db *sql.DB) QueueAgeProbe {
-	if db == nil {
-		return nil
-	}
-	return func(ctx context.Context) (float64, error) {
-		var seconds float64
-		err := db.QueryRowContext(ctx, sqlQueueAgeQuery).Scan(&seconds)
-		if err != nil {
-			return 0, err
-		}
-		return max(0, seconds), nil
-	}
-}
-
 const sqlQueueAgeQuery = `
 SELECT COALESCE(EXTRACT(EPOCH FROM (current_timestamp - MIN(available_at))), 0)
 FROM provider_sync_jobs
 WHERE status = 'queued' AND available_at <= current_timestamp`
 
-// SQLDeletionAgeProbe returns a Cockroach/PostgreSQL compatible deletion age
-// probe. Failed requests remain unfinished and continue aging.
-func SQLDeletionAgeProbe(db *sql.DB) DeletionAgeProbe {
-	if db == nil {
+// PGXQueueAgeProbe reports the oldest ready sync job using the runtime pool.
+func PGXQueueAgeProbe(pool *pgxpool.Pool) QueueAgeProbe {
+	if pool == nil {
 		return nil
 	}
 	return func(ctx context.Context) (float64, error) {
 		var seconds float64
-		err := db.QueryRowContext(ctx, sqlDeletionAgeQuery).Scan(&seconds)
-		if err != nil {
+		if err := pool.QueryRow(ctx, sqlQueueAgeQuery).Scan(&seconds); err != nil {
 			return 0, err
 		}
 		return max(0, seconds), nil
@@ -421,33 +405,17 @@ FROM (
   WHERE status <> 'completed'
 ) AS unfinished_deletion_requests`
 
-// SQLActivityFreshnessProbe derives provider identity from custom facts or the
-// durable connection metadata. Unknown legacy environments remain bounded.
-func SQLActivityFreshnessProbe(db *sql.DB) ActivityFreshnessProbe {
-	if db == nil {
+// PGXDeletionAgeProbe counts requested inbox entries and noncompleted requests.
+func PGXDeletionAgeProbe(pool *pgxpool.Pool) DeletionAgeProbe {
+	if pool == nil {
 		return nil
 	}
-	return func(ctx context.Context) ([]FreshnessSample, error) {
-		rows, err := db.QueryContext(ctx, sqlActivityFreshnessQuery)
-		if err != nil {
-			return nil, err
+	return func(ctx context.Context) (float64, error) {
+		var seconds float64
+		if err := pool.QueryRow(ctx, sqlDeletionAgeQuery).Scan(&seconds); err != nil {
+			return 0, err
 		}
-		defer rows.Close()
-		var samples []FreshnessSample
-		for rows.Next() {
-			var sample FreshnessSample
-			if err := rows.Scan(&sample.Provider, &sample.Visibility, &sample.Seconds); err != nil {
-				return nil, err
-			}
-			sample.Provider = boundedProvider(sample.Provider)
-			sample.Visibility = boundedValue(sample.Visibility, []string{"public", "private"}, "unknown")
-			sample.Seconds = max(0, sample.Seconds)
-			samples = append(samples, sample)
-		}
-		if err := rows.Err(); err != nil {
-			return nil, err
-		}
-		return samples, nil
+		return max(0, seconds), nil
 	}
 }
 
@@ -474,18 +442,32 @@ SELECT provider, visibility,
   COALESCE(EXTRACT(EPOCH FROM (current_timestamp - last_ingested_at)), 0)
 FROM subject_provider_freshness`
 
-// SQLRevocationDLQProbe reads the durable dead-letter state without claiming
-// or mutating jobs.
-func SQLRevocationDLQProbe(db *sql.DB) RevocationDLQProbe {
-	if db == nil {
+// PGXActivityFreshnessProbe groups fact ingestion by bounded provider and visibility.
+func PGXActivityFreshnessProbe(pool *pgxpool.Pool) ActivityFreshnessProbe {
+	if pool == nil {
 		return nil
 	}
-	return func(ctx context.Context) (float64, float64, error) {
-		var count, age float64
-		if err := db.QueryRowContext(ctx, sqlRevocationDLQQuery).Scan(&count, &age); err != nil {
-			return 0, 0, err
+	return func(ctx context.Context) ([]FreshnessSample, error) {
+		rows, err := pool.Query(ctx, sqlActivityFreshnessQuery)
+		if err != nil {
+			return nil, err
 		}
-		return max(0, count), max(0, age), nil
+		defer rows.Close()
+		var samples []FreshnessSample
+		for rows.Next() {
+			var sample FreshnessSample
+			if err := rows.Scan(&sample.Provider, &sample.Visibility, &sample.Seconds); err != nil {
+				return nil, err
+			}
+			sample.Provider = boundedProvider(sample.Provider)
+			sample.Visibility = boundedValue(sample.Visibility, []string{"public", "private"}, "unknown")
+			sample.Seconds = max(0, sample.Seconds)
+			samples = append(samples, sample)
+		}
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		return samples, nil
 	}
 }
 
@@ -495,6 +477,20 @@ SELECT
   COALESCE(EXTRACT(EPOCH FROM (current_timestamp - MIN(updated_at))), 0)
 FROM provider_token_revocation_jobs
 WHERE status = 'dead'`
+
+// PGXRevocationDLQProbe observes durable dead letters without changing jobs.
+func PGXRevocationDLQProbe(pool *pgxpool.Pool) RevocationDLQProbe {
+	if pool == nil {
+		return nil
+	}
+	return func(ctx context.Context) (float64, float64, error) {
+		var count, age float64
+		if err := pool.QueryRow(ctx, sqlRevocationDLQQuery).Scan(&count, &age); err != nil {
+			return 0, 0, err
+		}
+		return max(0, count), max(0, age), nil
+	}
+}
 
 // Handler serves the Prometheus 0.0.4 exposition format.
 func (registry *Registry) Handler() http.Handler {
@@ -527,7 +523,7 @@ func (registry *Registry) writePrometheus(ctx context.Context, output io.Writer)
 	credentialDecrypt := cloneMap(registry.credentialDecrypt)
 	cockroachErrors := cloneMap(registry.cockroachErrors)
 	dbPoolWait := *registry.dbPoolWait
-	db := registry.db
+	pgxPool := registry.pgxPool
 	queueProbe := registry.queueProbe
 	deletionProbe := registry.deletionProbe
 	freshnessProbe := registry.freshnessProbe
@@ -642,10 +638,10 @@ func (registry *Registry) writePrometheus(ctx context.Context, output io.Writer)
 		writer.sample("cockroach_transaction_errors_total", labels{{"outcome", outcome}}, float64(cockroachErrors[outcome]))
 	}
 
-	if db != nil {
-		stats := db.Stats()
+	if pgxPool != nil {
+		stats := pgxPool.Stat()
 		writer.family("db_pool_in_use", "Database connections currently in use.", "gauge")
-		writer.sample("db_pool_in_use", nil, float64(stats.InUse))
+		writer.sample("db_pool_in_use", nil, float64(stats.AcquiredConns()))
 	}
 	writer.family("db_pool_wait_seconds", "Cumulative time spent waiting to acquire a database connection.", "counter")
 	writer.sample("db_pool_wait_seconds", nil, dbPoolWait.sum)

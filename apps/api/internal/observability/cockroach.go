@@ -13,7 +13,7 @@ import (
 const cockroachSerializationFailure = "40001"
 
 // CockroachQueryTracer observes errors at the pgx transport boundary. This
-// covers database/sql Query, QueryRow, Exec, and transaction COMMIT calls
+// covers pgx Query, QueryRow, Exec, and transaction COMMIT calls
 // without relying on each repository to remember an instrumentation helper.
 type CockroachQueryTracer struct {
 	registry *Registry
@@ -57,8 +57,7 @@ func (tracer *CockroachQueryTracer) TraceQueryEnd(_ context.Context, _ *pgx.Conn
 }
 
 // TraceAcquireStart and TraceAcquireEnd measure the pgxpool checkout queue.
-// OpenDatabase deliberately leaves database/sql unlimited and idle-free, so
-// every logical connection checkout reaches this one, traced queue.
+// Every logical pgxpool connection checkout reaches this traced queue.
 func (*CockroachQueryTracer) TraceAcquireStart(ctx context.Context, _ *pgxpool.Pool, _ pgxpool.TraceAcquireStartData) context.Context {
 	return context.WithValue(ctx, poolAcquireStartKey{}, time.Now())
 }

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestRegistryExposesRequiredFamiliesWithResourceLabels(t *testing.T) {
@@ -97,6 +99,35 @@ func TestQueueProbeFailureIsVisibleWithoutReportingFalseZeroAge(t *testing.T) {
 	}
 	if !strings.Contains(body, `observability_collection_errors_total{collector="sync_queue",build_sha="unknown",environment="test",region="unknown"} 1`) {
 		t.Fatalf("failed queue probe must increment collection error:\n%s", body)
+	}
+}
+
+func TestPGXPoolRegistrationPreservesInUseMetricAndNilBehavior(t *testing.T) {
+	registry := NewRegistry(Resource{Environment: "test"})
+	registry.RegisterPGXPool(nil)
+	if strings.Contains(scrape(t, registry), "db_pool_in_use{") {
+		t.Fatal("nil pool must not produce a misleading in-use metric")
+	}
+
+	config, err := pgxpool.ParseConfig("postgresql://localhost:26257/test?sslmode=disable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, err := pgxpool.NewWithConfig(context.Background(), config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	registry.RegisterPGXPool(pool)
+	if !strings.Contains(scrape(t, registry), `db_pool_in_use{build_sha="unknown",environment="test",region="unknown"} 0`) {
+		t.Fatal("registered pgx pool must expose the established in-use gauge")
+	}
+}
+
+func TestPGXProbesRejectNilPool(t *testing.T) {
+	if PGXQueueAgeProbe(nil) != nil || PGXDeletionAgeProbe(nil) != nil ||
+		PGXActivityFreshnessProbe(nil) != nil || PGXRevocationDLQProbe(nil) != nil {
+		t.Fatal("nil pools must not register a probe reporting false zero gauges")
 	}
 }
 

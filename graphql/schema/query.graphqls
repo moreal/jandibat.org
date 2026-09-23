@@ -6,4 +6,6 @@ type Query {
   subject(handleOrID: String!): Subject
   "The authenticated account projection; null for anonymous requests."
   viewer: Viewer
+  "Bounded built-in provider catalog; custom providers are subject-scoped pages."
+  providerCatalog: [ProviderCatalogItem!]!
 }

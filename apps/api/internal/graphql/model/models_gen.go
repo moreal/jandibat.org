@@ -125,11 +125,30 @@ func (this CreateSubjectPayload) GetErrors() []*MutationError {
 }
 
 type CustomProvider struct {
-	ID string `json:"id"`
+	ID             string          `json:"id"`
+	EnvironmentID  string          `json:"environmentID"`
+	Slug           string          `json:"slug"`
+	Name           string          `json:"name"`
+	Description    string          `json:"description"`
+	Status         string          `json:"status"`
+	AllowedActions []string        `json:"allowedActions"`
+	AllowedMetrics []string        `json:"allowedMetrics"`
+	CreatedAt      scalar.DateTime `json:"createdAt"`
+	UpdatedAt      scalar.DateTime `json:"updatedAt"`
 }
 
 func (CustomProvider) IsNode()            {}
 func (this CustomProvider) GetID() string { return this.ID }
+
+type CustomProviderConnection struct {
+	Edges    []*CustomProviderEdge `json:"edges"`
+	PageInfo *PageInfo             `json:"pageInfo"`
+}
+
+type CustomProviderEdge struct {
+	Cursor scalar.Cursor   `json:"cursor"`
+	Node   *CustomProvider `json:"node"`
+}
 
 type DateRange struct {
 	From scalar.Date `json:"from"`
@@ -227,14 +246,47 @@ type PasskeyOptions struct {
 	ExpiresAt     scalar.DateTime `json:"expiresAt"`
 }
 
+// Only the three built-in providers; no subject-specific custom providers.
+type ProviderCatalogItem struct {
+	ID                  string `json:"id"`
+	Name                string `json:"name"`
+	Description         string `json:"description"`
+	Kind                string `json:"kind"`
+	Category            string `json:"category"`
+	SupportsOAuth       bool   `json:"supportsOAuth"`
+	SupportsToken       bool   `json:"supportsToken"`
+	SupportsPrivateData bool   `json:"supportsPrivateData"`
+}
+
 type ProviderConnection struct {
-	ID string `json:"id"`
+	ID                 string           `json:"id"`
+	ProviderID         string           `json:"providerID"`
+	EnvironmentID      string           `json:"environmentID"`
+	AuthMethod         string           `json:"authMethod"`
+	Status             string           `json:"status"`
+	ExternalAccountID  string           `json:"externalAccountID"`
+	Scopes             []string         `json:"scopes"`
+	PrivateDataEnabled bool             `json:"privateDataEnabled"`
+	TokenExpiresAt     *scalar.DateTime `json:"tokenExpiresAt,omitempty"`
+	LastSyncedAt       *scalar.DateTime `json:"lastSyncedAt,omitempty"`
+	CreatedAt          scalar.DateTime  `json:"createdAt"`
+	UpdatedAt          scalar.DateTime  `json:"updatedAt"`
 	// Forward page; first: 1..100, default 25.
 	SyncJobs *SyncJobConnection `json:"syncJobs,omitempty"`
 }
 
 func (ProviderConnection) IsNode()            {}
 func (this ProviderConnection) GetID() string { return this.ID }
+
+type ProviderConnectionConnection struct {
+	Edges    []*ProviderConnectionEdge `json:"edges"`
+	PageInfo *PageInfo                 `json:"pageInfo"`
+}
+
+type ProviderConnectionEdge struct {
+	Cursor scalar.Cursor       `json:"cursor"`
+	Node   *ProviderConnection `json:"node"`
+}
 
 // Root of the domain API. Domain fields are added with resolver authorization.
 type Query struct {
@@ -372,6 +424,10 @@ type Subject struct {
 	UpdatedAt   scalar.DateTime `json:"updatedAt"`
 	// Owner-only settings; null for anonymous or non-owner readers.
 	Settings *SubjectSettings `json:"settings,omitempty"`
+	// Owner-only forward page; null for anonymous or non-owner readers.
+	ProviderConnections *ProviderConnectionConnection `json:"providerConnections,omitempty"`
+	// Owner-only forward page; null for anonymous or non-owner readers.
+	CustomProviders *CustomProviderConnection `json:"customProviders,omitempty"`
 	// A bounded, static projection; non-owners see only public activity.
 	ActivitySnapshot *ActivitySnapshot `json:"activitySnapshot"`
 }

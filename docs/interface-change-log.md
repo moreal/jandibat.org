@@ -95,6 +95,15 @@ connection edge와 삭제 요청은 값 객체입니다.
   application service 및 삭제 workflow만 호출합니다. Task 5 전에는 공개 라우트에
   mutation을 연결하지 않습니다.
 
+## 2026-09-24 — 연동 조회 GraphQL 계약
+
+호환성: `providerCatalog`는 내장 3종만 반환하고, Subject의 provider connection·custom
+provider 목록은 소유자 전용 nullable Relay connection으로 노출합니다. 비소유자는 목록을
+열람할 수 없으며 각 목록은 서로 다른 `(createdAt,id)` 불투명 커서와 `first=1..100`을
+사용합니다. Node에는 공개 메타데이터만 두고 credential, ingest hash, 외부 로그인명과
+원문 제공자 오류는 노출하지 않습니다. OAuth callback과 custom ingest는 HTTP edge에
+남습니다.
+
 ## 2026-08-12 — 운영·보안 계약 강화 (`1.1.0`)
 
 호환성: `1.0.0` 개발 기준선 대비 breaking change. 아직 배포되지 않은 계약의 Phase 3 완료 조건을 명시적으로 고정합니다.

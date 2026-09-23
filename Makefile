@@ -53,6 +53,7 @@ graphql-check:
 	sh scripts/test-graphql-relay-connections.sh
 	sh scripts/test-graphql-auth-mutations.sh
 	sh scripts/test-graphql-subject-contract.sh
+	sh scripts/test-graphql-integration-query-contract.sh
 	sh scripts/test-graphql-generated-drift.sh
 	sh scripts/check-graphql-generated.sh
 	$(YARN) relay-compiler --validate

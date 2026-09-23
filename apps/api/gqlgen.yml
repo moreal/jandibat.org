@@ -36,6 +36,10 @@ models:
         resolver: true
       settings:
         resolver: true
+      providerConnections:
+        resolver: true
+      customProviders:
+        resolver: true
   Viewer:
     fields:
       settings:

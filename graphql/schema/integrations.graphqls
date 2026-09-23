@@ -7,3 +7,35 @@ type SyncJobConnection {
   edges: [SyncJobEdge!]!
   pageInfo: PageInfo!
 }
+
+"Only the three built-in providers; no subject-specific custom providers."
+type ProviderCatalogItem {
+  id: String!
+  name: String!
+  description: String!
+  kind: String!
+  category: String!
+  supportsOAuth: Boolean!
+  supportsToken: Boolean!
+  supportsPrivateData: Boolean!
+}
+
+type ProviderConnectionEdge {
+  cursor: Cursor!
+  node: ProviderConnection!
+}
+
+type ProviderConnectionConnection {
+  edges: [ProviderConnectionEdge!]!
+  pageInfo: PageInfo!
+}
+
+type CustomProviderEdge {
+  cursor: Cursor!
+  node: CustomProvider!
+}
+
+type CustomProviderConnection {
+  edges: [CustomProviderEdge!]!
+  pageInfo: PageInfo!
+}

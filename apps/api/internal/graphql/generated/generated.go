@@ -96,7 +96,26 @@ type ComplexityRoot struct {
 	}
 
 	CustomProvider struct {
-		ID func(childComplexity int) int
+		AllowedActions func(childComplexity int) int
+		AllowedMetrics func(childComplexity int) int
+		CreatedAt      func(childComplexity int) int
+		Description    func(childComplexity int) int
+		EnvironmentID  func(childComplexity int) int
+		ID             func(childComplexity int) int
+		Name           func(childComplexity int) int
+		Slug           func(childComplexity int) int
+		Status         func(childComplexity int) int
+		UpdatedAt      func(childComplexity int) int
+	}
+
+	CustomProviderConnection struct {
+		Edges    func(childComplexity int) int
+		PageInfo func(childComplexity int) int
+	}
+
+	CustomProviderEdge struct {
+		Cursor func(childComplexity int) int
+		Node   func(childComplexity int) int
 	}
 
 	DateRange struct {
@@ -163,16 +182,49 @@ type ComplexityRoot struct {
 		PublicKeyJSON func(childComplexity int) int
 	}
 
+	ProviderCatalogItem struct {
+		Category            func(childComplexity int) int
+		Description         func(childComplexity int) int
+		ID                  func(childComplexity int) int
+		Kind                func(childComplexity int) int
+		Name                func(childComplexity int) int
+		SupportsOAuth       func(childComplexity int) int
+		SupportsPrivateData func(childComplexity int) int
+		SupportsToken       func(childComplexity int) int
+	}
+
 	ProviderConnection struct {
-		ID       func(childComplexity int) int
-		SyncJobs func(childComplexity int, first *int, after *scalar.Cursor) int
+		AuthMethod         func(childComplexity int) int
+		CreatedAt          func(childComplexity int) int
+		EnvironmentID      func(childComplexity int) int
+		ExternalAccountID  func(childComplexity int) int
+		ID                 func(childComplexity int) int
+		LastSyncedAt       func(childComplexity int) int
+		PrivateDataEnabled func(childComplexity int) int
+		ProviderID         func(childComplexity int) int
+		Scopes             func(childComplexity int) int
+		Status             func(childComplexity int) int
+		SyncJobs           func(childComplexity int, first *int, after *scalar.Cursor) int
+		TokenExpiresAt     func(childComplexity int) int
+		UpdatedAt          func(childComplexity int) int
+	}
+
+	ProviderConnectionConnection struct {
+		Edges    func(childComplexity int) int
+		PageInfo func(childComplexity int) int
+	}
+
+	ProviderConnectionEdge struct {
+		Cursor func(childComplexity int) int
+		Node   func(childComplexity int) int
 	}
 
 	Query struct {
-		Contract func(childComplexity int) int
-		Node     func(childComplexity int, id string) int
-		Subject  func(childComplexity int, handleOrID string) int
-		Viewer   func(childComplexity int) int
+		Contract        func(childComplexity int) int
+		Node            func(childComplexity int, id string) int
+		ProviderCatalog func(childComplexity int) int
+		Subject         func(childComplexity int, handleOrID string) int
+		Viewer          func(childComplexity int) int
 	}
 
 	RequestMagicLinkPayload struct {
@@ -221,15 +273,17 @@ type ComplexityRoot struct {
 	}
 
 	Subject struct {
-		ActivitySnapshot func(childComplexity int, rangeArg model.DateRangeInput, timezone scalar.TimeZone, environmentIDs []string) int
-		CreatedAt        func(childComplexity int) int
-		DisplayName      func(childComplexity int) int
-		Handle           func(childComplexity int) int
-		ID               func(childComplexity int) int
-		IsPublic         func(childComplexity int) int
-		Settings         func(childComplexity int) int
-		Timezone         func(childComplexity int) int
-		UpdatedAt        func(childComplexity int) int
+		ActivitySnapshot    func(childComplexity int, rangeArg model.DateRangeInput, timezone scalar.TimeZone, environmentIDs []string) int
+		CreatedAt           func(childComplexity int) int
+		CustomProviders     func(childComplexity int, first *int, after *scalar.Cursor) int
+		DisplayName         func(childComplexity int) int
+		Handle              func(childComplexity int) int
+		ID                  func(childComplexity int) int
+		IsPublic            func(childComplexity int) int
+		ProviderConnections func(childComplexity int, first *int, after *scalar.Cursor) int
+		Settings            func(childComplexity int) int
+		Timezone            func(childComplexity int) int
+		UpdatedAt           func(childComplexity int) int
 	}
 
 	SubjectConnection struct {
@@ -339,9 +393,12 @@ type QueryResolver interface {
 	Node(ctx context.Context, id string) (model.Node, error)
 	Subject(ctx context.Context, handleOrID string) (*model.Subject, error)
 	Viewer(ctx context.Context) (*model.Viewer, error)
+	ProviderCatalog(ctx context.Context) ([]*model.ProviderCatalogItem, error)
 }
 type SubjectResolver interface {
 	Settings(ctx context.Context, obj *model.Subject) (*model.SubjectSettings, error)
+	ProviderConnections(ctx context.Context, obj *model.Subject, first *int, after *scalar.Cursor) (*model.ProviderConnectionConnection, error)
+	CustomProviders(ctx context.Context, obj *model.Subject, first *int, after *scalar.Cursor) (*model.CustomProviderConnection, error)
 	ActivitySnapshot(ctx context.Context, obj *model.Subject, rangeArg model.DateRangeInput, timezone scalar.TimeZone, environmentIDs []string) (*model.ActivitySnapshot, error)
 }
 type ViewerResolver interface {
@@ -562,12 +619,92 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.CreateSubjectPayload.Subject(childComplexity), true
 
+	case "CustomProvider.allowedActions":
+		if e.ComplexityRoot.CustomProvider.AllowedActions == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CustomProvider.AllowedActions(childComplexity), true
+	case "CustomProvider.allowedMetrics":
+		if e.ComplexityRoot.CustomProvider.AllowedMetrics == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CustomProvider.AllowedMetrics(childComplexity), true
+	case "CustomProvider.createdAt":
+		if e.ComplexityRoot.CustomProvider.CreatedAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CustomProvider.CreatedAt(childComplexity), true
+	case "CustomProvider.description":
+		if e.ComplexityRoot.CustomProvider.Description == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CustomProvider.Description(childComplexity), true
+	case "CustomProvider.environmentID":
+		if e.ComplexityRoot.CustomProvider.EnvironmentID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CustomProvider.EnvironmentID(childComplexity), true
 	case "CustomProvider.id":
 		if e.ComplexityRoot.CustomProvider.ID == nil {
 			break
 		}
 
 		return e.ComplexityRoot.CustomProvider.ID(childComplexity), true
+	case "CustomProvider.name":
+		if e.ComplexityRoot.CustomProvider.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CustomProvider.Name(childComplexity), true
+	case "CustomProvider.slug":
+		if e.ComplexityRoot.CustomProvider.Slug == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CustomProvider.Slug(childComplexity), true
+	case "CustomProvider.status":
+		if e.ComplexityRoot.CustomProvider.Status == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CustomProvider.Status(childComplexity), true
+	case "CustomProvider.updatedAt":
+		if e.ComplexityRoot.CustomProvider.UpdatedAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CustomProvider.UpdatedAt(childComplexity), true
+
+	case "CustomProviderConnection.edges":
+		if e.ComplexityRoot.CustomProviderConnection.Edges == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CustomProviderConnection.Edges(childComplexity), true
+	case "CustomProviderConnection.pageInfo":
+		if e.ComplexityRoot.CustomProviderConnection.PageInfo == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CustomProviderConnection.PageInfo(childComplexity), true
+
+	case "CustomProviderEdge.cursor":
+		if e.ComplexityRoot.CustomProviderEdge.Cursor == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CustomProviderEdge.Cursor(childComplexity), true
+	case "CustomProviderEdge.node":
+		if e.ComplexityRoot.CustomProviderEdge.Node == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CustomProviderEdge.Node(childComplexity), true
 
 	case "DateRange.from":
 		if e.ComplexityRoot.DateRange.From == nil {
@@ -845,12 +982,115 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.PasskeyOptions.PublicKeyJSON(childComplexity), true
 
+	case "ProviderCatalogItem.category":
+		if e.ComplexityRoot.ProviderCatalogItem.Category == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProviderCatalogItem.Category(childComplexity), true
+	case "ProviderCatalogItem.description":
+		if e.ComplexityRoot.ProviderCatalogItem.Description == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProviderCatalogItem.Description(childComplexity), true
+	case "ProviderCatalogItem.id":
+		if e.ComplexityRoot.ProviderCatalogItem.ID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProviderCatalogItem.ID(childComplexity), true
+	case "ProviderCatalogItem.kind":
+		if e.ComplexityRoot.ProviderCatalogItem.Kind == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProviderCatalogItem.Kind(childComplexity), true
+	case "ProviderCatalogItem.name":
+		if e.ComplexityRoot.ProviderCatalogItem.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProviderCatalogItem.Name(childComplexity), true
+	case "ProviderCatalogItem.supportsOAuth":
+		if e.ComplexityRoot.ProviderCatalogItem.SupportsOAuth == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProviderCatalogItem.SupportsOAuth(childComplexity), true
+	case "ProviderCatalogItem.supportsPrivateData":
+		if e.ComplexityRoot.ProviderCatalogItem.SupportsPrivateData == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProviderCatalogItem.SupportsPrivateData(childComplexity), true
+	case "ProviderCatalogItem.supportsToken":
+		if e.ComplexityRoot.ProviderCatalogItem.SupportsToken == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProviderCatalogItem.SupportsToken(childComplexity), true
+
+	case "ProviderConnection.authMethod":
+		if e.ComplexityRoot.ProviderConnection.AuthMethod == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProviderConnection.AuthMethod(childComplexity), true
+	case "ProviderConnection.createdAt":
+		if e.ComplexityRoot.ProviderConnection.CreatedAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProviderConnection.CreatedAt(childComplexity), true
+	case "ProviderConnection.environmentID":
+		if e.ComplexityRoot.ProviderConnection.EnvironmentID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProviderConnection.EnvironmentID(childComplexity), true
+	case "ProviderConnection.externalAccountID":
+		if e.ComplexityRoot.ProviderConnection.ExternalAccountID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProviderConnection.ExternalAccountID(childComplexity), true
 	case "ProviderConnection.id":
 		if e.ComplexityRoot.ProviderConnection.ID == nil {
 			break
 		}
 
 		return e.ComplexityRoot.ProviderConnection.ID(childComplexity), true
+	case "ProviderConnection.lastSyncedAt":
+		if e.ComplexityRoot.ProviderConnection.LastSyncedAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProviderConnection.LastSyncedAt(childComplexity), true
+	case "ProviderConnection.privateDataEnabled":
+		if e.ComplexityRoot.ProviderConnection.PrivateDataEnabled == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProviderConnection.PrivateDataEnabled(childComplexity), true
+	case "ProviderConnection.providerID":
+		if e.ComplexityRoot.ProviderConnection.ProviderID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProviderConnection.ProviderID(childComplexity), true
+	case "ProviderConnection.scopes":
+		if e.ComplexityRoot.ProviderConnection.Scopes == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProviderConnection.Scopes(childComplexity), true
+	case "ProviderConnection.status":
+		if e.ComplexityRoot.ProviderConnection.Status == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProviderConnection.Status(childComplexity), true
 	case "ProviderConnection.syncJobs":
 		if e.ComplexityRoot.ProviderConnection.SyncJobs == nil {
 			break
@@ -862,6 +1102,44 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.ProviderConnection.SyncJobs(childComplexity, args["first"].(*int), args["after"].(*scalar.Cursor)), true
+	case "ProviderConnection.tokenExpiresAt":
+		if e.ComplexityRoot.ProviderConnection.TokenExpiresAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProviderConnection.TokenExpiresAt(childComplexity), true
+	case "ProviderConnection.updatedAt":
+		if e.ComplexityRoot.ProviderConnection.UpdatedAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProviderConnection.UpdatedAt(childComplexity), true
+
+	case "ProviderConnectionConnection.edges":
+		if e.ComplexityRoot.ProviderConnectionConnection.Edges == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProviderConnectionConnection.Edges(childComplexity), true
+	case "ProviderConnectionConnection.pageInfo":
+		if e.ComplexityRoot.ProviderConnectionConnection.PageInfo == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProviderConnectionConnection.PageInfo(childComplexity), true
+
+	case "ProviderConnectionEdge.cursor":
+		if e.ComplexityRoot.ProviderConnectionEdge.Cursor == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProviderConnectionEdge.Cursor(childComplexity), true
+	case "ProviderConnectionEdge.node":
+		if e.ComplexityRoot.ProviderConnectionEdge.Node == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProviderConnectionEdge.Node(childComplexity), true
 
 	case "Query._contract":
 		if e.ComplexityRoot.Query.Contract == nil {
@@ -881,6 +1159,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Query.Node(childComplexity, args["id"].(string)), true
+	case "Query.providerCatalog":
+		if e.ComplexityRoot.Query.ProviderCatalog == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Query.ProviderCatalog(childComplexity), true
 	case "Query.subject":
 		if e.ComplexityRoot.Query.Subject == nil {
 			break
@@ -1050,6 +1334,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Subject.CreatedAt(childComplexity), true
+	case "Subject.customProviders":
+		if e.ComplexityRoot.Subject.CustomProviders == nil {
+			break
+		}
+
+		args, err := ec.field_Subject_customProviders_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Subject.CustomProviders(childComplexity, args["first"].(*int), args["after"].(*scalar.Cursor)), true
 	case "Subject.displayName":
 		if e.ComplexityRoot.Subject.DisplayName == nil {
 			break
@@ -1074,6 +1369,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Subject.IsPublic(childComplexity), true
+	case "Subject.providerConnections":
+		if e.ComplexityRoot.Subject.ProviderConnections == nil {
+			break
+		}
+
+		args, err := ec.field_Subject_providerConnections_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Subject.ProviderConnections(childComplexity, args["first"].(*int), args["after"].(*scalar.Cursor)), true
 	case "Subject.settings":
 		if e.ComplexityRoot.Subject.Settings == nil {
 			break
@@ -1637,6 +1943,38 @@ type SyncJobConnection {
   edges: [SyncJobEdge!]!
   pageInfo: PageInfo!
 }
+
+"Only the three built-in providers; no subject-specific custom providers."
+type ProviderCatalogItem {
+  id: String!
+  name: String!
+  description: String!
+  kind: String!
+  category: String!
+  supportsOAuth: Boolean!
+  supportsToken: Boolean!
+  supportsPrivateData: Boolean!
+}
+
+type ProviderConnectionEdge {
+  cursor: Cursor!
+  node: ProviderConnection!
+}
+
+type ProviderConnectionConnection {
+  edges: [ProviderConnectionEdge!]!
+  pageInfo: PageInfo!
+}
+
+type CustomProviderEdge {
+  cursor: Cursor!
+  node: CustomProvider!
+}
+
+type CustomProviderConnection {
+  edges: [CustomProviderEdge!]!
+  pageInfo: PageInfo!
+}
 `, BuiltIn: false},
 	{Name: "../../../../../graphql/schema/mutation.graphqls", Input: `"A stable domain validation failure returned inside mutation payloads."
 type MutationError {
@@ -1683,6 +2021,10 @@ type Subject implements Node {
   updatedAt: DateTime!
   "Owner-only settings; null for anonymous or non-owner readers."
   settings: SubjectSettings
+  "Owner-only forward page; null for anonymous or non-owner readers."
+  providerConnections(first: Int = 25, after: Cursor): ProviderConnectionConnection
+  "Owner-only forward page; null for anonymous or non-owner readers."
+  customProviders(first: Int = 25, after: Cursor): CustomProviderConnection
   "A bounded, static projection; non-owners see only public activity."
   activitySnapshot(
     range: DateRangeInput!
@@ -1693,12 +2035,32 @@ type Subject implements Node {
 
 type ProviderConnection implements Node {
   id: ID!
+  providerID: String!
+  environmentID: String!
+  authMethod: String!
+  status: String!
+  externalAccountID: String!
+  scopes: [String!]!
+  privateDataEnabled: Boolean!
+  tokenExpiresAt: DateTime
+  lastSyncedAt: DateTime
+  createdAt: DateTime!
+  updatedAt: DateTime!
   "Forward page; first: 1..100, default 25."
   syncJobs(first: Int = 25, after: Cursor): SyncJobConnection
 }
 
 type CustomProvider implements Node {
   id: ID!
+  environmentID: String!
+  slug: String!
+  name: String!
+  description: String!
+  status: String!
+  allowedActions: [String!]!
+  allowedMetrics: [String!]!
+  createdAt: DateTime!
+  updatedAt: DateTime!
 }
 
 type SyncJob implements Node {
@@ -1727,6 +2089,8 @@ type Query {
   subject(handleOrID: String!): Subject
   "The authenticated account projection; null for anonymous requests."
   viewer: Viewer
+  "Bounded built-in provider catalog; custom providers are subject-scoped pages."
+  providerCatalog: [ProviderCatalogItem!]!
 }
 `, BuiltIn: false},
 	{Name: "../../../../../graphql/schema/scalars.graphqls", Input: `"Calendar date in ISO 8601 YYYY-MM-DD form."
@@ -1974,6 +2338,52 @@ func (ec *executionContext) childFields_CreateSubjectPayload(ctx context.Context
 	return nil, fmt.Errorf("no field named %q was found under type CreateSubjectPayload", field.Name)
 }
 
+func (ec *executionContext) childFields_CustomProvider(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "id":
+		return ec.fieldContext_CustomProvider_id(ctx, field)
+	case "environmentID":
+		return ec.fieldContext_CustomProvider_environmentID(ctx, field)
+	case "slug":
+		return ec.fieldContext_CustomProvider_slug(ctx, field)
+	case "name":
+		return ec.fieldContext_CustomProvider_name(ctx, field)
+	case "description":
+		return ec.fieldContext_CustomProvider_description(ctx, field)
+	case "status":
+		return ec.fieldContext_CustomProvider_status(ctx, field)
+	case "allowedActions":
+		return ec.fieldContext_CustomProvider_allowedActions(ctx, field)
+	case "allowedMetrics":
+		return ec.fieldContext_CustomProvider_allowedMetrics(ctx, field)
+	case "createdAt":
+		return ec.fieldContext_CustomProvider_createdAt(ctx, field)
+	case "updatedAt":
+		return ec.fieldContext_CustomProvider_updatedAt(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type CustomProvider", field.Name)
+}
+
+func (ec *executionContext) childFields_CustomProviderConnection(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "edges":
+		return ec.fieldContext_CustomProviderConnection_edges(ctx, field)
+	case "pageInfo":
+		return ec.fieldContext_CustomProviderConnection_pageInfo(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type CustomProviderConnection", field.Name)
+}
+
+func (ec *executionContext) childFields_CustomProviderEdge(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "cursor":
+		return ec.fieldContext_CustomProviderEdge_cursor(ctx, field)
+	case "node":
+		return ec.fieldContext_CustomProviderEdge_node(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type CustomProviderEdge", field.Name)
+}
+
 func (ec *executionContext) childFields_DateRange(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "from":
@@ -2066,6 +2476,80 @@ func (ec *executionContext) childFields_PasskeyOptions(ctx context.Context, fiel
 		return ec.fieldContext_PasskeyOptions_expiresAt(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type PasskeyOptions", field.Name)
+}
+
+func (ec *executionContext) childFields_ProviderCatalogItem(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "id":
+		return ec.fieldContext_ProviderCatalogItem_id(ctx, field)
+	case "name":
+		return ec.fieldContext_ProviderCatalogItem_name(ctx, field)
+	case "description":
+		return ec.fieldContext_ProviderCatalogItem_description(ctx, field)
+	case "kind":
+		return ec.fieldContext_ProviderCatalogItem_kind(ctx, field)
+	case "category":
+		return ec.fieldContext_ProviderCatalogItem_category(ctx, field)
+	case "supportsOAuth":
+		return ec.fieldContext_ProviderCatalogItem_supportsOAuth(ctx, field)
+	case "supportsToken":
+		return ec.fieldContext_ProviderCatalogItem_supportsToken(ctx, field)
+	case "supportsPrivateData":
+		return ec.fieldContext_ProviderCatalogItem_supportsPrivateData(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ProviderCatalogItem", field.Name)
+}
+
+func (ec *executionContext) childFields_ProviderConnection(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "id":
+		return ec.fieldContext_ProviderConnection_id(ctx, field)
+	case "providerID":
+		return ec.fieldContext_ProviderConnection_providerID(ctx, field)
+	case "environmentID":
+		return ec.fieldContext_ProviderConnection_environmentID(ctx, field)
+	case "authMethod":
+		return ec.fieldContext_ProviderConnection_authMethod(ctx, field)
+	case "status":
+		return ec.fieldContext_ProviderConnection_status(ctx, field)
+	case "externalAccountID":
+		return ec.fieldContext_ProviderConnection_externalAccountID(ctx, field)
+	case "scopes":
+		return ec.fieldContext_ProviderConnection_scopes(ctx, field)
+	case "privateDataEnabled":
+		return ec.fieldContext_ProviderConnection_privateDataEnabled(ctx, field)
+	case "tokenExpiresAt":
+		return ec.fieldContext_ProviderConnection_tokenExpiresAt(ctx, field)
+	case "lastSyncedAt":
+		return ec.fieldContext_ProviderConnection_lastSyncedAt(ctx, field)
+	case "createdAt":
+		return ec.fieldContext_ProviderConnection_createdAt(ctx, field)
+	case "updatedAt":
+		return ec.fieldContext_ProviderConnection_updatedAt(ctx, field)
+	case "syncJobs":
+		return ec.fieldContext_ProviderConnection_syncJobs(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ProviderConnection", field.Name)
+}
+
+func (ec *executionContext) childFields_ProviderConnectionConnection(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "edges":
+		return ec.fieldContext_ProviderConnectionConnection_edges(ctx, field)
+	case "pageInfo":
+		return ec.fieldContext_ProviderConnectionConnection_pageInfo(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ProviderConnectionConnection", field.Name)
+}
+
+func (ec *executionContext) childFields_ProviderConnectionEdge(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "cursor":
+		return ec.fieldContext_ProviderConnectionEdge_cursor(ctx, field)
+	case "node":
+		return ec.fieldContext_ProviderConnectionEdge_node(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ProviderConnectionEdge", field.Name)
 }
 
 func (ec *executionContext) childFields_RequestMagicLinkPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -2176,6 +2660,10 @@ func (ec *executionContext) childFields_Subject(ctx context.Context, field graph
 		return ec.fieldContext_Subject_updatedAt(ctx, field)
 	case "settings":
 		return ec.fieldContext_Subject_settings(ctx, field)
+	case "providerConnections":
+		return ec.fieldContext_Subject_providerConnections(ctx, field)
+	case "customProviders":
+		return ec.fieldContext_Subject_customProviders(ctx, field)
 	case "activitySnapshot":
 		return ec.fieldContext_Subject_activitySnapshot(ctx, field)
 	}
@@ -2671,6 +3159,50 @@ func (ec *executionContext) field_Subject_activitySnapshot_args(ctx context.Cont
 		return nil, err
 	}
 	args["environmentIDs"] = arg2
+	return args, nil
+}
+
+func (ec *executionContext) field_Subject_customProviders_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "first",
+		func(ctx context.Context, v any) (*int, error) {
+			return ec.unmarshalOInt2ᚖint(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["first"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "after",
+		func(ctx context.Context, v any) (*scalar.Cursor, error) {
+			return ec.unmarshalOCursor2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋscalarᚐCursor(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["after"] = arg1
+	return args, nil
+}
+
+func (ec *executionContext) field_Subject_providerConnections_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "first",
+		func(ctx context.Context, v any) (*int, error) {
+			return ec.unmarshalOInt2ᚖint(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["first"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "after",
+		func(ctx context.Context, v any) (*scalar.Cursor, error) {
+			return ec.unmarshalOCursor2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋscalarᚐCursor(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["after"] = arg1
 	return args, nil
 }
 
@@ -3629,6 +4161,332 @@ func (ec *executionContext) _CustomProvider_id(ctx context.Context, field graphq
 }
 func (ec *executionContext) fieldContext_CustomProvider_id(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("CustomProvider", field, false, false, errors.New("field of type ID does not have child fields"))
+}
+
+func (ec *executionContext) _CustomProvider_environmentID(ctx context.Context, field graphql.CollectedField, obj *model.CustomProvider) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_CustomProvider_environmentID(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.EnvironmentID, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_CustomProvider_environmentID(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("CustomProvider", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _CustomProvider_slug(ctx context.Context, field graphql.CollectedField, obj *model.CustomProvider) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_CustomProvider_slug(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Slug, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_CustomProvider_slug(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("CustomProvider", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _CustomProvider_name(ctx context.Context, field graphql.CollectedField, obj *model.CustomProvider) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_CustomProvider_name(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Name, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_CustomProvider_name(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("CustomProvider", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _CustomProvider_description(ctx context.Context, field graphql.CollectedField, obj *model.CustomProvider) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_CustomProvider_description(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Description, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_CustomProvider_description(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("CustomProvider", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _CustomProvider_status(ctx context.Context, field graphql.CollectedField, obj *model.CustomProvider) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_CustomProvider_status(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Status, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_CustomProvider_status(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("CustomProvider", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _CustomProvider_allowedActions(ctx context.Context, field graphql.CollectedField, obj *model.CustomProvider) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_CustomProvider_allowedActions(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.AllowedActions, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []string) graphql.Marshaler {
+			return ec.marshalNString2ᚕstringᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_CustomProvider_allowedActions(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("CustomProvider", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _CustomProvider_allowedMetrics(ctx context.Context, field graphql.CollectedField, obj *model.CustomProvider) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_CustomProvider_allowedMetrics(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.AllowedMetrics, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []string) graphql.Marshaler {
+			return ec.marshalNString2ᚕstringᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_CustomProvider_allowedMetrics(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("CustomProvider", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _CustomProvider_createdAt(ctx context.Context, field graphql.CollectedField, obj *model.CustomProvider) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_CustomProvider_createdAt(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.CreatedAt, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v scalar.DateTime) graphql.Marshaler {
+			return ec.marshalNDateTime2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋscalarᚐDateTime(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_CustomProvider_createdAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("CustomProvider", field, false, false, errors.New("field of type DateTime does not have child fields"))
+}
+
+func (ec *executionContext) _CustomProvider_updatedAt(ctx context.Context, field graphql.CollectedField, obj *model.CustomProvider) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_CustomProvider_updatedAt(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.UpdatedAt, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v scalar.DateTime) graphql.Marshaler {
+			return ec.marshalNDateTime2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋscalarᚐDateTime(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_CustomProvider_updatedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("CustomProvider", field, false, false, errors.New("field of type DateTime does not have child fields"))
+}
+
+func (ec *executionContext) _CustomProviderConnection_edges(ctx context.Context, field graphql.CollectedField, obj *model.CustomProviderConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_CustomProviderConnection_edges(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Edges, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*model.CustomProviderEdge) graphql.Marshaler {
+			return ec.marshalNCustomProviderEdge2ᚕᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐCustomProviderEdgeᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_CustomProviderConnection_edges(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CustomProviderConnection",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_CustomProviderEdge(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _CustomProviderConnection_pageInfo(ctx context.Context, field graphql.CollectedField, obj *model.CustomProviderConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_CustomProviderConnection_pageInfo(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.PageInfo, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.PageInfo) graphql.Marshaler {
+			return ec.marshalNPageInfo2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐPageInfo(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_CustomProviderConnection_pageInfo(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CustomProviderConnection",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_PageInfo(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _CustomProviderEdge_cursor(ctx context.Context, field graphql.CollectedField, obj *model.CustomProviderEdge) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_CustomProviderEdge_cursor(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Cursor, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v scalar.Cursor) graphql.Marshaler {
+			return ec.marshalNCursor2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋscalarᚐCursor(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_CustomProviderEdge_cursor(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("CustomProviderEdge", field, false, false, errors.New("field of type Cursor does not have child fields"))
+}
+
+func (ec *executionContext) _CustomProviderEdge_node(ctx context.Context, field graphql.CollectedField, obj *model.CustomProviderEdge) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_CustomProviderEdge_node(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Node, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.CustomProvider) graphql.Marshaler {
+			return ec.marshalNCustomProvider2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐCustomProvider(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_CustomProviderEdge_node(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CustomProviderEdge",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_CustomProvider(ctx, field)
+		},
+	}
+	return fc, nil
 }
 
 func (ec *executionContext) _DateRange_from(ctx context.Context, field graphql.CollectedField, obj *model.DateRange) (ret graphql.Marshaler) {
@@ -4743,6 +5601,190 @@ func (ec *executionContext) fieldContext_PasskeyOptions_expiresAt(_ context.Cont
 	return graphql.NewScalarFieldContext("PasskeyOptions", field, false, false, errors.New("field of type DateTime does not have child fields"))
 }
 
+func (ec *executionContext) _ProviderCatalogItem_id(ctx context.Context, field graphql.CollectedField, obj *model.ProviderCatalogItem) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ProviderCatalogItem_id(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ID, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ProviderCatalogItem_id(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ProviderCatalogItem", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ProviderCatalogItem_name(ctx context.Context, field graphql.CollectedField, obj *model.ProviderCatalogItem) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ProviderCatalogItem_name(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Name, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ProviderCatalogItem_name(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ProviderCatalogItem", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ProviderCatalogItem_description(ctx context.Context, field graphql.CollectedField, obj *model.ProviderCatalogItem) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ProviderCatalogItem_description(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Description, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ProviderCatalogItem_description(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ProviderCatalogItem", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ProviderCatalogItem_kind(ctx context.Context, field graphql.CollectedField, obj *model.ProviderCatalogItem) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ProviderCatalogItem_kind(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Kind, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ProviderCatalogItem_kind(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ProviderCatalogItem", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ProviderCatalogItem_category(ctx context.Context, field graphql.CollectedField, obj *model.ProviderCatalogItem) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ProviderCatalogItem_category(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Category, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ProviderCatalogItem_category(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ProviderCatalogItem", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ProviderCatalogItem_supportsOAuth(ctx context.Context, field graphql.CollectedField, obj *model.ProviderCatalogItem) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ProviderCatalogItem_supportsOAuth(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.SupportsOAuth, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ProviderCatalogItem_supportsOAuth(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ProviderCatalogItem", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _ProviderCatalogItem_supportsToken(ctx context.Context, field graphql.CollectedField, obj *model.ProviderCatalogItem) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ProviderCatalogItem_supportsToken(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.SupportsToken, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ProviderCatalogItem_supportsToken(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ProviderCatalogItem", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _ProviderCatalogItem_supportsPrivateData(ctx context.Context, field graphql.CollectedField, obj *model.ProviderCatalogItem) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ProviderCatalogItem_supportsPrivateData(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.SupportsPrivateData, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ProviderCatalogItem_supportsPrivateData(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ProviderCatalogItem", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
 func (ec *executionContext) _ProviderConnection_id(ctx context.Context, field graphql.CollectedField, obj *model.ProviderConnection) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -4764,6 +5806,259 @@ func (ec *executionContext) _ProviderConnection_id(ctx context.Context, field gr
 }
 func (ec *executionContext) fieldContext_ProviderConnection_id(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("ProviderConnection", field, false, false, errors.New("field of type ID does not have child fields"))
+}
+
+func (ec *executionContext) _ProviderConnection_providerID(ctx context.Context, field graphql.CollectedField, obj *model.ProviderConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ProviderConnection_providerID(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ProviderID, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ProviderConnection_providerID(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ProviderConnection", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ProviderConnection_environmentID(ctx context.Context, field graphql.CollectedField, obj *model.ProviderConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ProviderConnection_environmentID(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.EnvironmentID, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ProviderConnection_environmentID(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ProviderConnection", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ProviderConnection_authMethod(ctx context.Context, field graphql.CollectedField, obj *model.ProviderConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ProviderConnection_authMethod(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.AuthMethod, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ProviderConnection_authMethod(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ProviderConnection", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ProviderConnection_status(ctx context.Context, field graphql.CollectedField, obj *model.ProviderConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ProviderConnection_status(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Status, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ProviderConnection_status(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ProviderConnection", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ProviderConnection_externalAccountID(ctx context.Context, field graphql.CollectedField, obj *model.ProviderConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ProviderConnection_externalAccountID(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ExternalAccountID, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ProviderConnection_externalAccountID(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ProviderConnection", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ProviderConnection_scopes(ctx context.Context, field graphql.CollectedField, obj *model.ProviderConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ProviderConnection_scopes(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Scopes, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []string) graphql.Marshaler {
+			return ec.marshalNString2ᚕstringᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ProviderConnection_scopes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ProviderConnection", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ProviderConnection_privateDataEnabled(ctx context.Context, field graphql.CollectedField, obj *model.ProviderConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ProviderConnection_privateDataEnabled(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.PrivateDataEnabled, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ProviderConnection_privateDataEnabled(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ProviderConnection", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _ProviderConnection_tokenExpiresAt(ctx context.Context, field graphql.CollectedField, obj *model.ProviderConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ProviderConnection_tokenExpiresAt(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.TokenExpiresAt, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *scalar.DateTime) graphql.Marshaler {
+			return ec.marshalODateTime2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋscalarᚐDateTime(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_ProviderConnection_tokenExpiresAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ProviderConnection", field, false, false, errors.New("field of type DateTime does not have child fields"))
+}
+
+func (ec *executionContext) _ProviderConnection_lastSyncedAt(ctx context.Context, field graphql.CollectedField, obj *model.ProviderConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ProviderConnection_lastSyncedAt(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.LastSyncedAt, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *scalar.DateTime) graphql.Marshaler {
+			return ec.marshalODateTime2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋscalarᚐDateTime(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_ProviderConnection_lastSyncedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ProviderConnection", field, false, false, errors.New("field of type DateTime does not have child fields"))
+}
+
+func (ec *executionContext) _ProviderConnection_createdAt(ctx context.Context, field graphql.CollectedField, obj *model.ProviderConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ProviderConnection_createdAt(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.CreatedAt, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v scalar.DateTime) graphql.Marshaler {
+			return ec.marshalNDateTime2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋscalarᚐDateTime(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ProviderConnection_createdAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ProviderConnection", field, false, false, errors.New("field of type DateTime does not have child fields"))
+}
+
+func (ec *executionContext) _ProviderConnection_updatedAt(ctx context.Context, field graphql.CollectedField, obj *model.ProviderConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ProviderConnection_updatedAt(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.UpdatedAt, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v scalar.DateTime) graphql.Marshaler {
+			return ec.marshalNDateTime2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋscalarᚐDateTime(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ProviderConnection_updatedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ProviderConnection", field, false, false, errors.New("field of type DateTime does not have child fields"))
 }
 
 func (ec *executionContext) _ProviderConnection_syncJobs(ctx context.Context, field graphql.CollectedField, obj *model.ProviderConnection) (ret graphql.Marshaler) {
@@ -4806,6 +6101,125 @@ func (ec *executionContext) fieldContext_ProviderConnection_syncJobs(ctx context
 	if fc.Args, err = ec.field_ProviderConnection_syncJobs_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ProviderConnectionConnection_edges(ctx context.Context, field graphql.CollectedField, obj *model.ProviderConnectionConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ProviderConnectionConnection_edges(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Edges, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*model.ProviderConnectionEdge) graphql.Marshaler {
+			return ec.marshalNProviderConnectionEdge2ᚕᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐProviderConnectionEdgeᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ProviderConnectionConnection_edges(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ProviderConnectionConnection",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_ProviderConnectionEdge(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ProviderConnectionConnection_pageInfo(ctx context.Context, field graphql.CollectedField, obj *model.ProviderConnectionConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ProviderConnectionConnection_pageInfo(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.PageInfo, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.PageInfo) graphql.Marshaler {
+			return ec.marshalNPageInfo2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐPageInfo(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ProviderConnectionConnection_pageInfo(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ProviderConnectionConnection",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_PageInfo(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ProviderConnectionEdge_cursor(ctx context.Context, field graphql.CollectedField, obj *model.ProviderConnectionEdge) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ProviderConnectionEdge_cursor(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Cursor, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v scalar.Cursor) graphql.Marshaler {
+			return ec.marshalNCursor2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋscalarᚐCursor(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ProviderConnectionEdge_cursor(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ProviderConnectionEdge", field, false, false, errors.New("field of type Cursor does not have child fields"))
+}
+
+func (ec *executionContext) _ProviderConnectionEdge_node(ctx context.Context, field graphql.CollectedField, obj *model.ProviderConnectionEdge) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ProviderConnectionEdge_node(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Node, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.ProviderConnection) graphql.Marshaler {
+			return ec.marshalNProviderConnection2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐProviderConnection(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ProviderConnectionEdge_node(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ProviderConnectionEdge",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_ProviderConnection(ctx, field)
+		},
 	}
 	return fc, nil
 }
@@ -4948,6 +6362,38 @@ func (ec *executionContext) fieldContext_Query_viewer(_ context.Context, field g
 		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return ec.childFields_Viewer(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_providerCatalog(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Query_providerCatalog(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Query().ProviderCatalog(ctx)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*model.ProviderCatalogItem) graphql.Marshaler {
+			return ec.marshalNProviderCatalogItem2ᚕᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐProviderCatalogItemᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Query_providerCatalog(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_ProviderCatalogItem(ctx, field)
 		},
 	}
 	return fc, nil
@@ -5809,6 +7255,94 @@ func (ec *executionContext) fieldContext_Subject_settings(_ context.Context, fie
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return ec.childFields_SubjectSettings(ctx, field)
 		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Subject_providerConnections(ctx context.Context, field graphql.CollectedField, obj *model.Subject) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Subject_providerConnections(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Subject().ProviderConnections(ctx, obj, fc.Args["first"].(*int), fc.Args["after"].(*scalar.Cursor))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.ProviderConnectionConnection) graphql.Marshaler {
+			return ec.marshalOProviderConnectionConnection2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐProviderConnectionConnection(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_Subject_providerConnections(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Subject",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_ProviderConnectionConnection(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Subject_providerConnections_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Subject_customProviders(ctx context.Context, field graphql.CollectedField, obj *model.Subject) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Subject_customProviders(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Subject().CustomProviders(ctx, obj, fc.Args["first"].(*int), fc.Args["after"].(*scalar.Cursor))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.CustomProviderConnection) graphql.Marshaler {
+			return ec.marshalOCustomProviderConnection2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐCustomProviderConnection(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_Subject_customProviders(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Subject",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_CustomProviderConnection(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Subject_customProviders_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
 	}
 	return fc, nil
 }
@@ -9099,6 +10633,137 @@ func (ec *executionContext) _CustomProvider(ctx context.Context, sel ast.Selecti
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "environmentID":
+			out.Values[i] = ec._CustomProvider_environmentID(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "slug":
+			out.Values[i] = ec._CustomProvider_slug(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "name":
+			out.Values[i] = ec._CustomProvider_name(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "description":
+			out.Values[i] = ec._CustomProvider_description(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "status":
+			out.Values[i] = ec._CustomProvider_status(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "allowedActions":
+			out.Values[i] = ec._CustomProvider_allowedActions(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "allowedMetrics":
+			out.Values[i] = ec._CustomProvider_allowedMetrics(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "createdAt":
+			out.Values[i] = ec._CustomProvider_createdAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "updatedAt":
+			out.Values[i] = ec._CustomProvider_updatedAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var customProviderConnectionImplementors = []string{"CustomProviderConnection"}
+
+func (ec *executionContext) _CustomProviderConnection(ctx context.Context, sel ast.SelectionSet, obj *model.CustomProviderConnection) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, customProviderConnectionImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("CustomProviderConnection")
+		case "edges":
+			out.Values[i] = ec._CustomProviderConnection_edges(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "pageInfo":
+			out.Values[i] = ec._CustomProviderConnection_pageInfo(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var customProviderEdgeImplementors = []string{"CustomProviderEdge"}
+
+func (ec *executionContext) _CustomProviderEdge(ctx context.Context, sel ast.SelectionSet, obj *model.CustomProviderEdge) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, customProviderEdgeImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("CustomProviderEdge")
+		case "cursor":
+			out.Values[i] = ec._CustomProviderEdge_cursor(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "node":
+			out.Values[i] = ec._CustomProviderEdge_node(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -9638,6 +11303,79 @@ func (ec *executionContext) _PasskeyOptions(ctx context.Context, sel ast.Selecti
 	return out
 }
 
+var providerCatalogItemImplementors = []string{"ProviderCatalogItem"}
+
+func (ec *executionContext) _ProviderCatalogItem(ctx context.Context, sel ast.SelectionSet, obj *model.ProviderCatalogItem) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, providerCatalogItemImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("ProviderCatalogItem")
+		case "id":
+			out.Values[i] = ec._ProviderCatalogItem_id(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "name":
+			out.Values[i] = ec._ProviderCatalogItem_name(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "description":
+			out.Values[i] = ec._ProviderCatalogItem_description(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "kind":
+			out.Values[i] = ec._ProviderCatalogItem_kind(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "category":
+			out.Values[i] = ec._ProviderCatalogItem_category(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "supportsOAuth":
+			out.Values[i] = ec._ProviderCatalogItem_supportsOAuth(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "supportsToken":
+			out.Values[i] = ec._ProviderCatalogItem_supportsToken(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "supportsPrivateData":
+			out.Values[i] = ec._ProviderCatalogItem_supportsPrivateData(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
 var providerConnectionImplementors = []string{"ProviderConnection", "Node"}
 
 func (ec *executionContext) _ProviderConnection(ctx context.Context, sel ast.SelectionSet, obj *model.ProviderConnection) graphql.Marshaler {
@@ -9652,6 +11390,61 @@ func (ec *executionContext) _ProviderConnection(ctx context.Context, sel ast.Sel
 			out.Values[i] = graphql.MarshalString("ProviderConnection")
 		case "id":
 			out.Values[i] = ec._ProviderConnection_id(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "providerID":
+			out.Values[i] = ec._ProviderConnection_providerID(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "environmentID":
+			out.Values[i] = ec._ProviderConnection_environmentID(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "authMethod":
+			out.Values[i] = ec._ProviderConnection_authMethod(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "status":
+			out.Values[i] = ec._ProviderConnection_status(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "externalAccountID":
+			out.Values[i] = ec._ProviderConnection_externalAccountID(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "scopes":
+			out.Values[i] = ec._ProviderConnection_scopes(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "privateDataEnabled":
+			out.Values[i] = ec._ProviderConnection_privateDataEnabled(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "tokenExpiresAt":
+			out.Values[i] = ec._ProviderConnection_tokenExpiresAt(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "lastSyncedAt":
+			out.Values[i] = ec._ProviderConnection_lastSyncedAt(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "createdAt":
+			out.Values[i] = ec._ProviderConnection_createdAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "updatedAt":
+			out.Values[i] = ec._ProviderConnection_updatedAt(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				atomic.AddUint32(&out.Invalids, 1)
 			}
@@ -9693,6 +11486,92 @@ func (ec *executionContext) _ProviderConnection(ctx context.Context, sel ast.Sel
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var providerConnectionConnectionImplementors = []string{"ProviderConnectionConnection"}
+
+func (ec *executionContext) _ProviderConnectionConnection(ctx context.Context, sel ast.SelectionSet, obj *model.ProviderConnectionConnection) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, providerConnectionConnectionImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("ProviderConnectionConnection")
+		case "edges":
+			out.Values[i] = ec._ProviderConnectionConnection_edges(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "pageInfo":
+			out.Values[i] = ec._ProviderConnectionConnection_pageInfo(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var providerConnectionEdgeImplementors = []string{"ProviderConnectionEdge"}
+
+func (ec *executionContext) _ProviderConnectionEdge(ctx context.Context, sel ast.SelectionSet, obj *model.ProviderConnectionEdge) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, providerConnectionEdgeImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("ProviderConnectionEdge")
+		case "cursor":
+			out.Values[i] = ec._ProviderConnectionEdge_cursor(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "node":
+			out.Values[i] = ec._ProviderConnectionEdge_node(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -9811,6 +11690,28 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 				}()
 				res = ec._Query_viewer(ctx, field)
 				if res == graphql.RequiredNull {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "providerCatalog":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_providerCatalog(ctx, field)
+				if res == graphql.Null {
 					atomic.AddUint32(&fs.Invalids, 1)
 				}
 				return res
@@ -10283,6 +12184,82 @@ func (ec *executionContext) _Subject(ctx context.Context, sel ast.SelectionSet, 
 					}
 				}()
 				res = ec._Subject_settings(ctx, field, obj)
+				if res == graphql.RequiredNull {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.IsDeferred() {
+				deferredFieldSet.AddField(field)
+				fieldIndex := len(deferredFieldSet.Values) - 1
+				deferredFieldSet.Concurrently(fieldIndex, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, deferredFieldSet)
+				})
+
+				for _, deferrable := range field.Deferrables {
+					view, ok := deferLabelToView[deferrable.Label]
+					if !ok {
+						view = deferredFieldSet.NewView()
+						deferLabelToView[deferrable.Label] = view
+					}
+					view.AddIndices(fieldIndex)
+				}
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "providerConnections":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Subject_providerConnections(ctx, field, obj)
+				if res == graphql.RequiredNull {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.IsDeferred() {
+				deferredFieldSet.AddField(field)
+				fieldIndex := len(deferredFieldSet.Values) - 1
+				deferredFieldSet.Concurrently(fieldIndex, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, deferredFieldSet)
+				})
+
+				for _, deferrable := range field.Deferrables {
+					view, ok := deferLabelToView[deferrable.Label]
+					if !ok {
+						view = deferredFieldSet.NewView()
+						deferLabelToView[deferrable.Label] = view
+					}
+					view.AddIndices(fieldIndex)
+				}
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "customProviders":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Subject_customProviders(ctx, field, obj)
 				if res == graphql.RequiredNull {
 					atomic.AddUint32(&fs.Invalids, 1)
 				}
@@ -11658,6 +13635,42 @@ func (ec *executionContext) marshalNCursor2githubᚗcomᚋmorealᚋjandibatᚗor
 	return v
 }
 
+func (ec *executionContext) marshalNCustomProvider2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐCustomProvider(ctx context.Context, sel ast.SelectionSet, v *model.CustomProvider) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._CustomProvider(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNCustomProviderEdge2ᚕᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐCustomProviderEdgeᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.CustomProviderEdge) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNCustomProviderEdge2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐCustomProviderEdge(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNCustomProviderEdge2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐCustomProviderEdge(ctx context.Context, sel ast.SelectionSet, v *model.CustomProviderEdge) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._CustomProviderEdge(ctx, sel, v)
+}
+
 func (ec *executionContext) unmarshalNDate2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋscalarᚐDate(ctx context.Context, v any) (scalar.Date, error) {
 	var res scalar.Date
 	err := res.UnmarshalGQL(v)
@@ -11827,6 +13840,68 @@ func (ec *executionContext) marshalNPageInfo2ᚖgithubᚗcomᚋmorealᚋjandibat
 		return graphql.Null
 	}
 	return ec._PageInfo(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNProviderCatalogItem2ᚕᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐProviderCatalogItemᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.ProviderCatalogItem) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNProviderCatalogItem2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐProviderCatalogItem(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNProviderCatalogItem2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐProviderCatalogItem(ctx context.Context, sel ast.SelectionSet, v *model.ProviderCatalogItem) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._ProviderCatalogItem(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNProviderConnection2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐProviderConnection(ctx context.Context, sel ast.SelectionSet, v *model.ProviderConnection) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._ProviderConnection(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNProviderConnectionEdge2ᚕᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐProviderConnectionEdgeᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.ProviderConnectionEdge) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNProviderConnectionEdge2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐProviderConnectionEdge(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNProviderConnectionEdge2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐProviderConnectionEdge(ctx context.Context, sel ast.SelectionSet, v *model.ProviderConnectionEdge) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._ProviderConnectionEdge(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalNRequestMagicLinkInput2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐRequestMagicLinkInput(ctx context.Context, v any) (model.RequestMagicLinkInput, error) {
@@ -12382,6 +14457,13 @@ func (ec *executionContext) marshalOCursor2ᚖgithubᚗcomᚋmorealᚋjandibat�
 	return v
 }
 
+func (ec *executionContext) marshalOCustomProviderConnection2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐCustomProviderConnection(ctx context.Context, sel ast.SelectionSet, v *model.CustomProviderConnection) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._CustomProviderConnection(ctx, sel, v)
+}
+
 func (ec *executionContext) unmarshalODateTime2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋscalarᚐDateTime(ctx context.Context, v any) (*scalar.DateTime, error) {
 	if v == nil {
 		return nil, nil
@@ -12474,6 +14556,13 @@ func (ec *executionContext) marshalOPasskeyOptions2ᚖgithubᚗcomᚋmorealᚋja
 		return graphql.Null
 	}
 	return ec._PasskeyOptions(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalOProviderConnectionConnection2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐProviderConnectionConnection(ctx context.Context, sel ast.SelectionSet, v *model.ProviderConnectionConnection) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._ProviderConnectionConnection(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalOSession2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐSession(ctx context.Context, sel ast.SelectionSet, v *model.Session) graphql.Marshaler {

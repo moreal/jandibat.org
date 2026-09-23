@@ -107,9 +107,24 @@ func (r *queryResolver) Viewer(ctx context.Context) (*model.Viewer, error) {
 	return r.resolveViewer(ctx)
 }
 
+// ProviderCatalog is the resolver for the providerCatalog field.
+func (r *queryResolver) ProviderCatalog(ctx context.Context) ([]*model.ProviderCatalogItem, error) {
+	return resolveProviderCatalog(ctx)
+}
+
 // Settings is the resolver for the settings field.
 func (r *subjectResolver) Settings(ctx context.Context, obj *model.Subject) (*model.SubjectSettings, error) {
 	return resolveSubjectSettings(ctx, obj)
+}
+
+// ProviderConnections is the resolver for the providerConnections field.
+func (r *subjectResolver) ProviderConnections(ctx context.Context, obj *model.Subject, first *int, after *scalar.Cursor) (*model.ProviderConnectionConnection, error) {
+	return resolveProviderConnections(ctx, obj, first, after)
+}
+
+// CustomProviders is the resolver for the customProviders field.
+func (r *subjectResolver) CustomProviders(ctx context.Context, obj *model.Subject, first *int, after *scalar.Cursor) (*model.CustomProviderConnection, error) {
+	return resolveCustomProviders(ctx, obj, first, after)
 }
 
 // ActivitySnapshot is the resolver for the activitySnapshot field.

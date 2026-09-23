@@ -120,7 +120,7 @@ func (r *queryResolver) resolveNode(ctx context.Context, id string) (model.Node,
 		if err != nil || !visible {
 			return nil, err
 		}
-		return &model.ProviderConnection{ID: relayid.Encode(relayid.ProviderConnection, connection.ID)}, nil
+		return projectProviderConnection(connection), nil
 	case relayid.CustomProvider:
 		if identity.userID == "" {
 			return nil, nil
@@ -139,7 +139,7 @@ func (r *queryResolver) resolveNode(ctx context.Context, id string) (model.Node,
 		if err != nil || !visible {
 			return nil, err
 		}
-		return &model.CustomProvider{ID: relayid.Encode(relayid.CustomProvider, provider.ID)}, nil
+		return projectCustomProvider(provider), nil
 	case relayid.SyncJob:
 		if identity.userID == "" {
 			return nil, nil

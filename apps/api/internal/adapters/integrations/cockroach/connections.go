@@ -2,7 +2,6 @@ package cockroach
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -15,23 +14,6 @@ import (
 	"github.com/moreal/jandibat.org/apps/api/internal/integrations"
 	"github.com/moreal/jandibat.org/apps/api/internal/operations"
 )
-
-const connectionColumns = `
-id::STRING, subject_id, COALESCE(sync_cursor->>'provider_id', ''), environment_id,
-auth_method, COALESCE(external_account_id, ''),
-COALESCE(sync_cursor->>'external_account_login', ''),
-COALESCE(sync_cursor->>'connection_status', status),
-COALESCE(array_to_json(scopes), '[]'::JSON), access_token_ciphertext,
-refresh_token_ciphertext, token_expires_at, last_synced_at,
-NULLIF(sync_cursor->>'last_sync_attempt_at', '')::TIMESTAMPTZ,
-NULLIF(sync_cursor->>'next_sync_attempt_at', '')::TIMESTAMPTZ,
-COALESCE((sync_cursor->>'last_sync_attempt')::INT, 0),
-COALESCE((sync_cursor->>'consecutive_failures')::INT, 0),
-COALESCE(last_error, ''), created_at, updated_at,
-EXISTS (
-  SELECT 1 FROM provider_connection_private_consents AS consent
-  WHERE consent.connection_id = provider_connections.id AND consent.enabled
-)`
 
 func (s *Store) SaveConnection(ctx context.Context, record integrations.ConnectionRecord) error {
 	connection := record.Connection
@@ -276,46 +258,4 @@ func (s *Store) PurgeConnectionData(ctx context.Context, id string) error {
 		}
 		return nil
 	})
-}
-
-func scanConnection(row scanner) (integrations.ConnectionRecord, error) {
-	var (
-		record                                                        integrations.ConnectionRecord
-		scopes                                                        []byte
-		expiresAt, lastSyncedAt, lastSyncAttemptAt, nextSyncAttemptAt sql.NullTime
-		accessToken, refreshToken                                     []byte
-	)
-	c := &record.Connection
-	if err := row.Scan(
-		&c.ID, &c.SubjectID, &c.ProviderID, &c.EnvironmentID, &c.AuthMethod,
-		&c.ExternalAccountID, &c.ExternalAccountLogin, &c.Status, &scopes, &accessToken, &refreshToken,
-		&expiresAt, &lastSyncedAt, &lastSyncAttemptAt, &nextSyncAttemptAt,
-		&c.LastSyncAttempt, &c.ConsecutiveFailures, &c.LastError, &c.CreatedAt, &c.UpdatedAt,
-		&c.PrivateDataEnabled,
-	); err != nil {
-		return integrations.ConnectionRecord{}, err
-	}
-	if len(scopes) != 0 {
-		if err := json.Unmarshal(scopes, &c.Scopes); err != nil {
-			return integrations.ConnectionRecord{}, fmt.Errorf("decode scopes: %w", err)
-		}
-	}
-	if c.Scopes == nil {
-		c.Scopes = []string{}
-	}
-	if expiresAt.Valid {
-		c.TokenExpiresAt = &expiresAt.Time
-	}
-	if lastSyncedAt.Valid {
-		c.LastSyncedAt = &lastSyncedAt.Time
-	}
-	if lastSyncAttemptAt.Valid {
-		c.LastSyncAttemptAt = &lastSyncAttemptAt.Time
-	}
-	if nextSyncAttemptAt.Valid {
-		c.NextSyncAttemptAt = &nextSyncAttemptAt.Time
-	}
-	record.Credentials.AccessToken = append([]byte(nil), accessToken...)
-	record.Credentials.RefreshToken = append([]byte(nil), refreshToken...)
-	return record, nil
 }

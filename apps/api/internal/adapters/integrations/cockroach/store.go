@@ -2,13 +2,11 @@
 package cockroach
 
 import (
-	"context"
 	"database/sql"
 	"errors"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
-	appdb "github.com/moreal/jandibat.org/apps/api/internal/database"
 	"github.com/moreal/jandibat.org/apps/api/internal/integrations"
 )
 
@@ -19,10 +17,6 @@ var ErrNilDB = errors.New("integration cockroach: database is required")
 type Store struct {
 	db   *sql.DB
 	pool *pgxpool.Pool
-}
-
-func (s *Store) beginMutation(ctx context.Context) (context.Context, *appdb.Scope, error) {
-	return appdb.Begin(ctx, s.db, nil)
 }
 
 var (
@@ -48,10 +42,6 @@ func NewWithPGXPool(db *sql.DB, pool *pgxpool.Pool) (*Store, error) {
 		return nil, ErrNilDB
 	}
 	return &Store{db: db, pool: pool}, nil
-}
-
-type scanner interface {
-	Scan(dest ...any) error
 }
 
 func persistenceError(err error, duplicate error) error {

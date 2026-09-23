@@ -2,7 +2,6 @@ package cockroach
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"reflect"
 	"testing"
@@ -28,37 +27,6 @@ func TestPersistenceErrorMapsMalformedUUIDToInvalidIdentifier(t *testing.T) {
 	err := persistenceError(&pgconn.PgError{Code: "22P02"}, nil)
 	if !errors.Is(err, integrations.ErrInvalidIdentifier) {
 		t.Fatalf("persistenceError(22P02) = %v", err)
-	}
-}
-
-func TestScanConnection(t *testing.T) {
-	created := time.Date(2026, 8, 12, 10, 0, 0, 0, time.UTC)
-	expires := created.Add(time.Hour)
-	row := valueScanner{values: []any{
-		"018f0000-0000-7000-8000-000000000001", "subject-1", "github", "github-env",
-		"oauth2", "account-1", "octocat", "pending", []byte(`["repo","user"]`),
-		[]byte{1, 2, 3}, []byte{4, 5, 6}, sql.NullTime{Time: expires, Valid: true},
-		sql.NullTime{}, sql.NullTime{}, sql.NullTime{}, int64(0), int64(0), "", created, created, true,
-	}}
-	got, err := scanConnection(row)
-	if err != nil {
-		t.Fatalf("scanConnection() error = %v", err)
-	}
-	if got.Connection.ProviderID != "github" || got.Connection.Status != integrations.ConnectionPending || got.Connection.ExternalAccountLogin != "octocat" {
-		t.Fatalf("scanConnection() identity/state = %#v", got.Connection)
-	}
-	if !got.Connection.PrivateDataEnabled {
-		t.Fatal("private data consent was not restored")
-	}
-	if !reflect.DeepEqual(got.Connection.Scopes, []string{"repo", "user"}) {
-		t.Fatalf("scopes = %#v", got.Connection.Scopes)
-	}
-	if got.Connection.TokenExpiresAt == nil || !got.Connection.TokenExpiresAt.Equal(expires) {
-		t.Fatalf("expiry = %v, want %v", got.Connection.TokenExpiresAt, expires)
-	}
-	if !reflect.DeepEqual(got.Credentials.AccessToken, []byte{1, 2, 3}) ||
-		!reflect.DeepEqual(got.Credentials.RefreshToken, []byte{4, 5, 6}) {
-		t.Fatalf("encrypted credentials changed: %#v", got.Credentials)
 	}
 }
 
@@ -102,30 +70,4 @@ func TestSyncExecutionRequiresPGXPool(t *testing.T) {
 	if err := store.ReleaseSyncExecution(context.Background(), connectionID, "claim-token"); !errors.Is(err, ErrNilDB) {
 		t.Fatalf("ReleaseSyncExecution() error = %v, want %v", err, ErrNilDB)
 	}
-}
-
-type valueScanner struct {
-	values []any
-}
-
-func (s valueScanner) Scan(dest ...any) error {
-	if len(dest) != len(s.values) {
-		return errors.New("destination count mismatch")
-	}
-	for index, target := range dest {
-		destination := reflect.ValueOf(target)
-		if destination.Kind() != reflect.Pointer || destination.IsNil() {
-			return errors.New("destination is not a pointer")
-		}
-		value := reflect.ValueOf(s.values[index])
-		field := destination.Elem()
-		if value.Type().AssignableTo(field.Type()) {
-			field.Set(value)
-		} else if value.Type().ConvertibleTo(field.Type()) {
-			field.Set(value.Convert(field.Type()))
-		} else {
-			return errors.New("value is not assignable")
-		}
-	}
-	return nil
 }

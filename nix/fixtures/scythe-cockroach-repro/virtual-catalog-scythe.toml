@@ -1,0 +1,12 @@
+[scythe]
+version = "1"
+
+[[sql]]
+name = "cockroach-virtual-catalog"
+engine = "cockroachdb"
+schema = ["schema.sql"]
+queries = ["virtual-catalog-queries.sql"]
+
+[[sql.gen]]
+backend = "go-pgx"
+output = "virtual-catalog-generated"

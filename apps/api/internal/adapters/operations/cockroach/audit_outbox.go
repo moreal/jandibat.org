@@ -21,6 +21,10 @@ var (
 
 func (store *Store) CheckMutationAuditOutboxSchema(ctx context.Context) error {
 	var columns int
+	// adapter-sql-allowlist: virtual-catalog; this fixed information_schema.columns probe reads
+	// virtual-catalog metadata, which official unpatched Scythe 0.17.0 cannot
+	// model as a source table. It accepts no caller-supplied SQL or identifiers;
+	// this limitation is not evidence of an upstream defect.
 	query := `SELECT count(*) FROM information_schema.columns
 WHERE table_schema = current_schema() AND table_name = 'mutation_audit_outbox'
 AND column_name IN (

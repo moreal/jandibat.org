@@ -25,6 +25,9 @@ type retentionSQLSpec struct {
 	auditEventExpression string
 }
 
+// adapter-sql-allowlist: sealed-dataset-identifiers; raw SQL identifiers come only from this sealed
+// RetentionDataset-to-spec map. Unknown datasets are rejected before query
+// construction; cutoff, limit, and as-of values remain bound parameters.
 var retentionSQLSpecs = map[operations.RetentionDataset]retentionSQLSpec{
 	operations.RetentionAuditEvents: {table: "audit_events", keys: []string{"id"}, timestamp: "occurred_at", auditEventExpression: "candidate.id::STRING"},
 	operations.RetentionActivityFacts: {

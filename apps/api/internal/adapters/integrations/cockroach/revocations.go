@@ -17,6 +17,10 @@ func (s *Store) CheckRevocationSchema(ctx context.Context) error {
 		return ErrNilDB
 	}
 	var columns int
+	// adapter-sql-allowlist: virtual-catalog; this fixed information_schema.columns probe reads
+	// virtual-catalog metadata, which official unpatched Scythe 0.17.0 cannot
+	// model as a source table. It accepts no caller-supplied SQL or identifiers;
+	// this limitation is not evidence of an upstream defect.
 	query := `
 SELECT count(*)
 FROM information_schema.columns

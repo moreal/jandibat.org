@@ -36,6 +36,40 @@
   검증이 원본에서 통과할 때 local patch를 제거한다. upstream issue/PR은 아직
   작성하지 않았다. 외부 저장소에 쓰기 전에 별도 조율이 필요하다.
 
+## 2026-09-24 운영 Go 수기 SQL 허용 목록
+
+`make adapter-sql-allowlist-check`는 Go AST에서 generated 파일과 테스트를 제외한
+문자열 리터럴을 검사한다. 네 예외 파일에는 근거 주석과 전체 문자열 리터럴의
+SHA-256 manifest를 요구하므로 기존 SQL을 같은 줄에서 바꾸거나 새 문자열을
+추가해도 검토 없이 통과하지 않는다. 다른 adapter 파일에서는 대소문자와 개행에
+무관하게 일반적인 SQL 문장 형태를 거부하며, 동일 파일의 전역·함수 로컬
+`const` 식별자를 어휘 범위대로 해석한 정적 `+` 연결과 SQL 블록·줄 주석도
+검사한다. 다른 파일의 `const`
+참조나 `fmt.Sprintf`처럼 문자열을 동적으로 조립한 모든 SQL을 의미론적으로
+증명하지는 못하므로 코드 리뷰와 실제 DB 테스트를 대체하지 않는다.
+
+- `integrations/cockroach/revocations.go`, `operations/cockroach/store.go`,
+  `operations/cockroach/audit_outbox.go`의 각 1개 조회: 고정된
+  `information_schema.columns` readiness 검사다. 값/식별자를 요청에서 조합하지
+  않고, 활성 pgx 트랜잭션을 따른다. 공식 무패치 Scythe 0.17.0과 현재 Nix 패치
+  바이너리는 이 Cockroach 가상 카탈로그를 `UNKNOWN_TABLE`로 거부하지만,
+  Cockroach 26.2.5는 같은 쿼리를 실행한다. Scythe의 정적 스키마 모델에 없는
+  기능이지 확인된 upstream 결함은 아니므로 이 세 조회 때문에 local patch를
+  늘리지 않는다. 앱과 무관한 최소 재현은
+  `nix/fixtures/scythe-cockroach-repro/virtual-catalog-scythe.toml`에 있다.
+  해당 디렉터리에서 `scythe check --config virtual-catalog-scythe.toml`을 실행하면
+  현재 고정된 Scythe 0.17.0에서 `SC-PARSE02 UNKNOWN_TABLE:
+  relation "information_schema.columns" does not exist`로 종료 코드 2를 반환한다.
+  실제 DB의 전체/누락 열과 트랜잭션 경계 테스트를 유지한다.
+- `operations/cockroach/retention.go`의 동적 SQL: 내부
+  `RetentionDataset`에서 닫힌 테이블·열 spec만 선택하는 동적 식별자 SQL이다.
+  cutoff·limit·as-of는 바인딩하고 미등록 dataset은 실행 전에 거부한다.
+  법적 보존 조건, 유지보수 역할, bounded fuzz를 검사한다.
+
+설명 주석은 AST 문자열 인벤토리에 포함하지 않는다. catalog 가상 테이블의
+생성 지원이 공식 Scythe에 추가되면 위 3개 예외를 생성 쿼리로 옮기고 허용
+목록을 줄인다.
+
 아래 의사결정은 이전 `database/sql` 구현의 기록이며 현재 전환 목표가 아니다.
 
 최종 갱신일: 2026-08-12

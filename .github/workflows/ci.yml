@@ -56,7 +56,7 @@ jobs:
       - name: Run tests, race detector, and static analysis
         run: nix develop --command make test-api test-api-race lint-api
       - name: Check Scythe queries and generated Go drift
-        run: nix develop --command make sql-check sql-generated-drift-test sql-generated-drift-check
+        run: nix develop --command make sql-check sql-generated-drift-test sql-generated-drift-check adapter-sql-allowlist-check
 
   migrations:
     name: CockroachDB migrations

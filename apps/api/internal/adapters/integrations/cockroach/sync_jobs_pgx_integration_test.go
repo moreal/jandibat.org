@@ -40,8 +40,12 @@ func TestCockroachSyncJobsUsePGXWithoutLegacyHandle(t *testing.T) {
 	subjectID := "it_job_subject_" + suffix
 	environmentID := "it_job_environment_" + suffix
 	connectionID := "4d9ebd00-c2c0-43b7-a341-" + suffix
+	otherConnectionID := "5d9ebd00-c2c0-43b7-a341-" + suffix
 	jobID := "af12d033-5086-4923-9d6a-" + suffix
+	otherJobID := "bd12d033-5086-4923-9d6a-" + suffix
 	replacementID := "bf12d033-5086-4923-9d6a-" + suffix
+	tiedID := "ef12d033-5086-4923-9d6a-" + suffix
+	lastTiedID := "ff12d033-5086-4923-9d6a-" + suffix
 	conflictingID := "cf12d033-5086-4923-9d6a-" + suffix
 	missingConnectionJobID := "df12d033-5086-4923-9d6a-" + suffix
 	now := time.Now().UTC().Truncate(time.Microsecond)
@@ -52,8 +56,12 @@ func TestCockroachSyncJobsUsePGXWithoutLegacyHandle(t *testing.T) {
 		cleanupCtx, done := context.WithTimeout(context.Background(), 10*time.Second)
 		defer done()
 		_, _ = admin.ExecContext(cleanupCtx, `DELETE FROM provider_sync_jobs WHERE id=$1`, jobID)
+		_, _ = admin.ExecContext(cleanupCtx, `DELETE FROM provider_sync_jobs WHERE id=$1`, otherJobID)
 		_, _ = admin.ExecContext(cleanupCtx, `DELETE FROM provider_sync_jobs WHERE id=$1`, replacementID)
+		_, _ = admin.ExecContext(cleanupCtx, `DELETE FROM provider_sync_jobs WHERE id=$1`, tiedID)
+		_, _ = admin.ExecContext(cleanupCtx, `DELETE FROM provider_sync_jobs WHERE id=$1`, lastTiedID)
 		_, _ = admin.ExecContext(cleanupCtx, `DELETE FROM provider_connections WHERE id=$1`, connectionID)
+		_, _ = admin.ExecContext(cleanupCtx, `DELETE FROM provider_connections WHERE id=$1`, otherConnectionID)
 		_, _ = admin.ExecContext(cleanupCtx, `DELETE FROM environments WHERE id=$1`, environmentID)
 		_, _ = admin.ExecContext(cleanupCtx, `DELETE FROM subjects WHERE id=$1`, subjectID)
 		_, _ = admin.ExecContext(cleanupCtx, `DELETE FROM users WHERE id=$1`, userID)
@@ -65,6 +73,9 @@ func TestCockroachSyncJobsUsePGXWithoutLegacyHandle(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := admin.ExecContext(ctx, `INSERT INTO provider_connections (id, subject_id, environment_id, auth_method, status) VALUES ($1, $2, $3, 'token', 'active')`, connectionID, subjectID, environmentID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.ExecContext(ctx, `INSERT INTO provider_connections (id, subject_id, environment_id, auth_method, status, external_account_id) VALUES ($1, $2, $3, 'token', 'active', 'another-account')`, otherConnectionID, subjectID, environmentID); err != nil {
 		t.Fatal(err)
 	}
 	makeStore := func(role string) (*integrationstore.Store, *pgxpool.Pool) {
@@ -134,6 +145,40 @@ func TestCockroachSyncJobsUsePGXWithoutLegacyHandle(t *testing.T) {
 	listed, err := apiStore.ListSyncJobs(ctx, connectionID)
 	if err != nil || len(listed) != 1 || listed[0].ID != jobID {
 		t.Fatalf("listed sync jobs = (%+v, %v)", listed, err)
+	}
+	for _, id := range []string{tiedID, lastTiedID} {
+		tied := job
+		tied.ID = id
+		tied.IdempotencyKeyHash = nil
+		tied.RequestHash = nil
+		tied.IdempotencyExpires = nil
+		if err := apiStore.SaveSyncJob(ctx, tied); err != nil {
+			t.Fatalf("save tied job: %v", err)
+		}
+	}
+	otherJob := job
+	otherJob.ID = otherJobID
+	otherJob.ConnectionID = otherConnectionID
+	otherJob.IdempotencyKeyHash = nil
+	otherJob.RequestHash = nil
+	otherJob.IdempotencyExpires = nil
+	if err := apiStore.SaveSyncJob(ctx, otherJob); err != nil {
+		t.Fatalf("save other connection job: %v", err)
+	}
+	page, err := apiStore.ListSyncJobsPage(ctx, connectionID, nil, 2)
+	if err != nil || len(page) != 2 || page[0].ID != jobID || page[1].ID != tiedID {
+		t.Fatalf("keyset first page = (%+v, %v)", page, err)
+	}
+	otherPage, err := apiStore.ListSyncJobsPage(ctx, otherConnectionID, nil, 2)
+	if err != nil || len(otherPage) != 1 || otherPage[0].ID != otherJobID {
+		t.Fatalf("keyset other connection page = (%+v, %v)", otherPage, err)
+	}
+	if _, err := admin.ExecContext(ctx, `DELETE FROM provider_sync_jobs WHERE id=$1`, tiedID); err != nil {
+		t.Fatal(err)
+	}
+	page, err = apiStore.ListSyncJobsPage(ctx, connectionID, &integrations.SyncJobCursor{CreatedAt: now, ID: tiedID}, 2)
+	if err != nil || len(page) != 1 || page[0].ID != lastTiedID {
+		t.Fatalf("keyset after deleted anchor = (%+v, %v)", page, err)
 	}
 	idempotent, found, err := apiStore.GetSyncJobByIdempotencyKey(ctx, connectionID, idempotencyHash[:], now)
 	if err != nil || !found || idempotent.ID != jobID {

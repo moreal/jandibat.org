@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
 	"github.com/moreal/jandibat.org/apps/api/internal/domain/activity"
 )
 
@@ -192,6 +193,35 @@ func (service *SyncService) ListJobs(ctx context.Context, connectionID string) (
 		return jobs[i].CreatedAt.Before(jobs[j].CreatedAt)
 	})
 	return jobs, nil
+}
+
+// ListJobsPage returns an ascending keyset page scoped to one connection.
+// The store fetches at most first+1 rows, so HasNextPage needs no count query.
+func (service *SyncService) ListJobsPage(ctx context.Context, connectionID string, after *SyncJobCursor, first int) (SyncJobPage, error) {
+	if first < 1 || first > 100 {
+		return SyncJobPage{}, ErrInvalidSyncPageSize
+	}
+	if parsed, err := uuid.Parse(connectionID); err != nil || parsed.String() != connectionID {
+		return SyncJobPage{}, ErrInvalidIdentifier
+	}
+	if after != nil {
+		parsed, err := uuid.Parse(after.ID)
+		if after.CreatedAt.IsZero() || err != nil || parsed.String() != after.ID {
+			return SyncJobPage{}, ErrInvalidIdentifier
+		}
+	}
+	jobs, err := service.jobs.ListSyncJobsPage(ctx, connectionID, after, first+1)
+	if err != nil {
+		return SyncJobPage{}, err
+	}
+	if len(jobs) > first+1 {
+		return SyncJobPage{}, fmt.Errorf("list sync jobs page: store returned more than requested")
+	}
+	page := SyncJobPage{Jobs: jobs, HasNextPage: len(jobs) > first}
+	if page.HasNextPage {
+		page.Jobs = jobs[:first]
+	}
+	return page, nil
 }
 
 // RunPending executes durable queued jobs. The connection execution lock and a

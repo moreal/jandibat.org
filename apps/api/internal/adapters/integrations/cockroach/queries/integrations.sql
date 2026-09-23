@@ -477,6 +477,18 @@ FROM provider_sync_jobs
 WHERE ($1::STRING = '' OR provider_connection_id::STRING = $1::STRING)
 ORDER BY created_at, id;
 
+-- @name ListSyncJobsPage
+-- @returns :many
+SELECT id::STRING AS id, provider_connection_id::STRING AS connection_id,
+  date_from::STRING AS date_from, date_to::STRING AS date_to,
+  status, attempt, available_at, started_at, finished_at,
+  COALESCE(last_error, '{}') AS payload, created_at, updated_at
+FROM provider_sync_jobs
+WHERE provider_connection_id = $1::UUID
+  AND (NOT $2::BOOL OR (created_at, id) > ($3::TIMESTAMPTZ, $4::UUID))
+ORDER BY created_at, id
+LIMIT $5::INT8;
+
 -- @name GetSyncJobByIdempotency
 -- @returns :opt
 SELECT id::STRING AS id, provider_connection_id::STRING AS connection_id,

@@ -7,6 +7,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // MemoryStore is a concurrency-safe reference adapter for development and
@@ -254,6 +256,43 @@ func (store *MemoryStore) ListSyncJobs(ctx context.Context, connectionID string)
 		}
 		return jobs[i].CreatedAt.Before(jobs[j].CreatedAt)
 	})
+	return jobs, nil
+}
+
+func (store *MemoryStore) ListSyncJobsPage(ctx context.Context, connectionID string, after *SyncJobCursor, limit int) ([]SyncJob, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if limit < 1 || limit > 101 {
+		return nil, ErrInvalidSyncPageSize
+	}
+	if parsed, err := uuid.Parse(connectionID); err != nil || parsed.String() != connectionID {
+		return nil, ErrInvalidIdentifier
+	}
+	if after != nil {
+		parsed, err := uuid.Parse(after.ID)
+		if after.CreatedAt.IsZero() || err != nil || parsed.String() != after.ID {
+			return nil, ErrInvalidIdentifier
+		}
+	}
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+	jobs := make([]SyncJob, 0, limit)
+	for _, job := range store.syncJobs {
+		if job.ConnectionID == connectionID && (after == nil || job.CreatedAt.After(after.CreatedAt) ||
+			(job.CreatedAt.Equal(after.CreatedAt) && job.ID > after.ID)) {
+			jobs = append(jobs, cloneSyncJob(job))
+		}
+	}
+	sort.Slice(jobs, func(i, j int) bool {
+		if jobs[i].CreatedAt.Equal(jobs[j].CreatedAt) {
+			return jobs[i].ID < jobs[j].ID
+		}
+		return jobs[i].CreatedAt.Before(jobs[j].CreatedAt)
+	})
+	if len(jobs) > limit {
+		jobs = jobs[:limit]
+	}
 	return jobs, nil
 }
 

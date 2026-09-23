@@ -28,6 +28,8 @@ func TestSyncJobOperationsRequirePGXPool(t *testing.T) {
 	check("GetSyncJob", err)
 	_, err = store.ListSyncJobs(context.Background(), job.ConnectionID)
 	check("ListSyncJobs", err)
+	_, err = store.ListSyncJobsPage(context.Background(), job.ConnectionID, nil, 2)
+	check("ListSyncJobsPage", err)
 	_, _, err = store.GetSyncJobByIdempotencyKey(context.Background(), job.ConnectionID, []byte("key"), now)
 	check("GetSyncJobByIdempotencyKey", err)
 	_, _, err = store.ClaimSyncJob(context.Background(), job.ID, now, now.Add(time.Minute))

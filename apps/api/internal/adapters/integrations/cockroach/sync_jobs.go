@@ -122,6 +122,40 @@ func (s *Store) ListSyncJobs(ctx context.Context, connectionID string) ([]integr
 	return jobs, nil
 }
 
+func (s *Store) ListSyncJobsPage(ctx context.Context, connectionID string, after *integrations.SyncJobCursor, limit int) ([]integrations.SyncJob, error) {
+	if s.pool == nil {
+		return nil, ErrNilDB
+	}
+	if limit < 1 || limit > 101 {
+		return nil, integrations.ErrInvalidSyncPageSize
+	}
+	parsedConnection, err := uuid.Parse(connectionID)
+	if err != nil || parsedConnection.String() != connectionID {
+		return nil, integrations.ErrInvalidIdentifier
+	}
+	createdAt, afterID := time.Unix(0, 0).UTC(), uuid.Nil
+	if after != nil {
+		afterID, err = uuid.Parse(after.ID)
+		if after.CreatedAt.IsZero() || err != nil || afterID.String() != after.ID {
+			return nil, integrations.ErrInvalidIdentifier
+		}
+		createdAt = after.CreatedAt
+	}
+	rows, err := generated.ListSyncJobsPage(ctx, appdb.PGXExecutorFor(ctx, s.pool), parsedConnection, after != nil, createdAt, afterID, int64(limit))
+	if err != nil {
+		return nil, fmt.Errorf("list sync jobs page: %w", err)
+	}
+	jobs := make([]integrations.SyncJob, 0, len(rows))
+	for _, row := range rows {
+		job, err := syncJobFromGenerated(generated.GetSyncJobByIdRow(row))
+		if err != nil {
+			return nil, fmt.Errorf("list sync jobs page: %w", err)
+		}
+		jobs = append(jobs, job)
+	}
+	return jobs, nil
+}
+
 func syncJobFromGenerated(row generated.GetSyncJobByIdRow) (integrations.SyncJob, error) {
 	job := integrations.SyncJob{
 		ID: row.Id, ConnectionID: row.ConnectionId, Status: applicationSyncJobStatus(row.Status),

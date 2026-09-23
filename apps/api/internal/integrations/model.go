@@ -222,3 +222,15 @@ type SyncJob struct {
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
 }
+
+// SyncJobCursor is the stable ascending (created_at, id) sort tuple. It is
+// independent of the row's continued existence.
+type SyncJobCursor struct {
+	CreatedAt time.Time
+	ID        string
+}
+
+type SyncJobPage struct {
+	Jobs        []SyncJob
+	HasNextPage bool
+}

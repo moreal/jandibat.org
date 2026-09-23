@@ -119,6 +119,7 @@ type SyncJobStore interface {
 	SaveSyncJob(ctx context.Context, job SyncJob) error
 	GetSyncJob(ctx context.Context, id string) (SyncJob, error)
 	ListSyncJobs(ctx context.Context, connectionID string) ([]SyncJob, error)
+	ListSyncJobsPage(ctx context.Context, connectionID string, after *SyncJobCursor, limit int) ([]SyncJob, error)
 }
 
 // SyncIdempotencyStore is an optional durable capability of SyncJobStore.

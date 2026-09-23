@@ -70,6 +70,7 @@ var (
 	ErrInvalidSyncInterval         = errors.New("integrations: sync interval must be positive")
 	ErrInvalidSyncTimezone         = errors.New("integrations: sync timezone is invalid")
 	ErrInvalidSyncClaim            = errors.New("integrations: invalid sync job claim")
+	ErrInvalidSyncPageSize         = errors.New("integrations: sync job page size must be between 1 and 100")
 	ErrInvalidSchedulerConcurrency = errors.New("integrations: scheduler concurrency must be positive")
 	ErrInvalidRetryPolicy          = errors.New("integrations: invalid retry policy")
 	ErrInvalidRevocationConfig     = errors.New("integrations: invalid OAuth token revocation configuration")

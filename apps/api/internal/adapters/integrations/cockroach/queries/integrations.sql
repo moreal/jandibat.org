@@ -186,6 +186,28 @@ SET environment_id = $3::STRING, slug = $4::STRING, name = $5::STRING,
   created_at = $10::TIMESTAMPTZ, updated_at = $11::TIMESTAMPTZ
 WHERE id = $1::UUID AND subject_id = $2::STRING;
 
+-- @name UpsertCustomProvider
+-- @returns :exec_result
+INSERT INTO custom_providers (
+  id, owner_user_id, subject_id, environment_id, slug, name, description,
+  status, configuration, created_at, updated_at
+)
+SELECT $1::UUID, owner_user_id, $2::STRING, $3::STRING, $4::STRING, $5::STRING,
+  NULLIF($6::STRING, ''), $7::STRING,
+  jsonb_build_object('allowed_actions', $8::JSONB, 'allowed_metrics', $9::JSONB),
+  $10::TIMESTAMPTZ, $11::TIMESTAMPTZ
+FROM subjects WHERE id = $2::STRING AND owner_user_id IS NOT NULL
+ON CONFLICT (id) DO UPDATE SET
+  environment_id = excluded.environment_id,
+  slug = excluded.slug,
+  name = excluded.name,
+  description = excluded.description,
+  status = excluded.status,
+  configuration = COALESCE(custom_providers.configuration, '{}'::JSONB)
+    || excluded.configuration,
+  created_at = excluded.created_at,
+  updated_at = excluded.updated_at;
+
 -- @name ReserveIngestKey
 -- @returns :exec_result
 INSERT INTO ingest_idempotency_keys (

@@ -66,24 +66,35 @@ VALUES ($1::UUID, $2::BYTES)
 ON CONFLICT (provider_id) DO UPDATE SET ingest_token_hash = excluded.ingest_token_hash`
 
 func (s *Store) SaveCustomProvider(ctx context.Context, record integrations.CustomProviderRecord) error {
+	if s.pool != nil {
+		return s.saveCustomProviderPGX(ctx, record, providerWriteUpsert)
+	}
 	return s.saveCustomProvider(ctx, upsertCustomProviderQuery, record)
 }
 
+type providerWriteMode uint8
+
+const (
+	providerWriteCreate providerWriteMode = iota
+	providerWriteUpdate
+	providerWriteUpsert
+)
+
 func (s *Store) CreateCustomProvider(ctx context.Context, record integrations.CustomProviderRecord) error {
 	if s.pool != nil {
-		return s.saveCustomProviderPGX(ctx, record, true)
+		return s.saveCustomProviderPGX(ctx, record, providerWriteCreate)
 	}
 	return s.saveCustomProvider(ctx, createCustomProviderQuery, record)
 }
 
 func (s *Store) UpdateCustomProvider(ctx context.Context, record integrations.CustomProviderRecord) error {
 	if s.pool != nil {
-		return s.saveCustomProviderPGX(ctx, record, false)
+		return s.saveCustomProviderPGX(ctx, record, providerWriteUpdate)
 	}
 	return s.saveCustomProvider(ctx, updateCustomProviderQuery, record)
 }
 
-func (s *Store) saveCustomProviderPGX(ctx context.Context, record integrations.CustomProviderRecord, create bool) error {
+func (s *Store) saveCustomProviderPGX(ctx context.Context, record integrations.CustomProviderRecord, mode providerWriteMode) error {
 	provider := record.Provider
 	if provider.ID == "" {
 		return integrations.ErrInvalidProvider
@@ -103,20 +114,27 @@ func (s *Store) saveCustomProviderPGX(ctx context.Context, record integrations.C
 	return appdb.InTx(ctx, s.pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
 		var count int64
 		var err error
-		if create {
+		switch mode {
+		case providerWriteCreate:
 			count, err = generated.InsertCustomProvider(txctx, tx, id, provider.SubjectID,
 				provider.EnvironmentID, provider.Slug, provider.Name, provider.Description,
 				string(provider.Status), actions, metrics, provider.CreatedAt, provider.UpdatedAt)
-		} else {
+		case providerWriteUpdate:
 			count, err = generated.UpdateCustomProvider(txctx, tx, id, provider.SubjectID,
 				provider.EnvironmentID, provider.Slug, provider.Name, provider.Description,
 				string(provider.Status), actions, metrics, provider.CreatedAt, provider.UpdatedAt)
+		case providerWriteUpsert:
+			count, err = generated.UpsertCustomProvider(txctx, tx, id, provider.SubjectID,
+				provider.EnvironmentID, provider.Slug, provider.Name, provider.Description,
+				string(provider.Status), actions, metrics, provider.CreatedAt, provider.UpdatedAt)
+		default:
+			return integrations.ErrInvalidProvider
 		}
 		if err != nil {
 			return persistenceError(err, integrations.ErrDuplicateProviderSlug)
 		}
 		if count == 0 {
-			if create {
+			if mode != providerWriteUpdate {
 				return notFound("owned subject", provider.SubjectID)
 			}
 			return notFound("custom provider", provider.ID)

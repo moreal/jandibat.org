@@ -611,6 +611,28 @@ VALUES ($1, $2, $3, 'UTC', true, now(), now())`, subjectID, userID, handle); err
 	if err != nil || outsideUpdate.Provider.Name != provider.Name {
 		t.Fatalf("provider after update rollback = (%+v, %v)", outsideUpdate.Provider, err)
 	}
+	genericRecord, err := integrationDB.GetCustomProvider(ctx, provider.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	genericRecord.Provider.Name = "generic transaction probe"
+	err = appdb.InTx(ctx, activityPool, appdb.RetryOptions{}, func(txctx context.Context, _ pgx.Tx) error {
+		if err := integrationDB.SaveCustomProvider(txctx, genericRecord); err != nil {
+			return err
+		}
+		inside, err := integrationDB.GetCustomProvider(txctx, provider.ID)
+		if err != nil || inside.Provider.Name != genericRecord.Provider.Name {
+			return fmt.Errorf("transactional generic provider save = (%+v, %v)", inside.Provider, err)
+		}
+		return readRollback
+	})
+	if !errors.Is(err, readRollback) {
+		t.Fatalf("rollback generic provider save = %v", err)
+	}
+	genericOutside, err := integrationDB.GetCustomProvider(ctx, provider.ID)
+	if err != nil || genericOutside.Provider.Name != provider.Name {
+		t.Fatalf("generic provider after rollback = (%+v, %v)", genericOutside.Provider, err)
+	}
 	deleteCandidate, err := service.Create(ctx, integrations.CreateCustomProviderInput{
 		SubjectID: subjectID, Slug: "delete_" + suffix, Name: "Delete probe",
 		AllowedActions: []string{"read"}, AllowedMetrics: []string{"count"}, IngestSecret: secret + "-delete",

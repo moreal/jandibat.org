@@ -249,6 +249,34 @@ func (store *Store) ClaimDeletions(ctx context.Context, now, leaseUntil time.Tim
 	if now.IsZero() || !leaseUntil.After(now) || limit <= 0 {
 		return nil, operations.ErrInvalidDeletionRequest
 	}
+	if store.pool != nil {
+		var claimed []operations.DeletionRequest
+		err := appdb.InTx(ctx, store.pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
+			if err := promoteDeletionInboxPGX(txctx, tx, now, limit); err != nil {
+				return err
+			}
+			if err := generated.BootstrapPendingDeletionClaims(txctx, tx, now.UTC()); err != nil {
+				return fmt.Errorf("claim deletion requests: bootstrap: %w", err)
+			}
+			rows, err := generated.ListClaimableDeletionRequests(txctx, tx, now.UTC(), int64(limit))
+			if err != nil {
+				return fmt.Errorf("claim deletion requests: select: %w", err)
+			}
+			claimed = make([]operations.DeletionRequest, 0, len(rows))
+			for _, row := range rows {
+				request, err := store.ClaimDeletion(txctx, row.RequestId, now, leaseUntil)
+				if err != nil {
+					return fmt.Errorf("claim deletion request %s: %w", row.RequestId, err)
+				}
+				claimed = append(claimed, request)
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		return claimed, nil
+	}
 	tx, err := store.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("claim deletion requests: begin: %w", err)
@@ -316,6 +344,49 @@ FROM deletion_requests WHERE request_id = $1`, requestID))
 		return nil, fmt.Errorf("claim deletion requests: commit: %w", err)
 	}
 	return claimed, nil
+}
+
+func promoteDeletionInboxPGX(ctx context.Context, tx pgx.Tx, now time.Time, limit int) error {
+	rows, err := generated.ListDeletionInboxForPromotion(ctx, tx, int64(limit))
+	if err != nil {
+		return fmt.Errorf("promote deletion inbox: select: %w", err)
+	}
+	for _, row := range rows {
+		inboxID, err := uuid.Parse(row.Id)
+		if err != nil {
+			return fmt.Errorf("promote deletion inbox: invalid ID: %w", err)
+		}
+		if err := generated.PromoteDeletionInboxRequest(ctx, tx, row.RequestId, row.TargetType,
+			row.TargetId, row.RequestedAt.UTC(), now.UTC()); err != nil {
+			return fmt.Errorf("promote deletion inbox %s: %w", row.RequestId, err)
+		}
+		promoted, err := generated.GetDeletionIdForExactTarget(ctx, tx, row.RequestId, row.TargetType, row.TargetId)
+		if err != nil {
+			return fmt.Errorf("promote deletion inbox %s: %w", row.RequestId, err)
+		}
+		if promoted == nil {
+			// An existing incomplete request owns the target uniqueness key.
+			if err := generated.AcknowledgeDuplicateDeletionInbox(ctx, tx, inboxID, now.UTC()); err != nil {
+				return fmt.Errorf("acknowledge duplicate deletion inbox %s: %w", row.RequestId, err)
+			}
+			continue
+		}
+		deletionID, err := uuid.Parse(promoted.Id)
+		if err != nil {
+			return fmt.Errorf("promote deletion inbox: invalid request ID: %w", err)
+		}
+		if err := generated.BootstrapDeletionClaim(ctx, tx, deletionID, now.UTC()); err != nil {
+			return fmt.Errorf("promote deletion inbox claim %s: %w", row.RequestId, err)
+		}
+		count, err := generated.DeletePromotedDeletionInboxById(ctx, tx, inboxID)
+		if err != nil {
+			return fmt.Errorf("promote deletion inbox cleanup %s: %w", row.RequestId, err)
+		}
+		if count != 1 {
+			return operations.ErrDeletionLeaseLost
+		}
+	}
+	return nil
 }
 
 func (store *Store) ClaimDeletion(ctx context.Context, requestID string, now, leaseUntil time.Time) (operations.DeletionRequest, error) {

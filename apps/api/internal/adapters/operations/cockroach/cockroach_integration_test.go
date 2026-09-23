@@ -637,6 +637,19 @@ func TestCockroachMaintenanceDeletionRequestJoinsPGXTransaction(t *testing.T) {
 	if err := admin.QueryRowContext(ctx, `SELECT count(*) FROM deletion_request_claims WHERE deletion_request_id=$1::UUID`, stored.ID).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("deletion claim escaped rollback: count=%d err=%v", count, err)
 	}
+	err = appdb.InTx(ctx, pool, appdb.RetryOptions{}, func(txctx context.Context, _ pgx.Tx) error {
+		batch, err := store.ClaimDeletions(txctx, now.Add(2*time.Second), now.Add(time.Minute), 1)
+		if err != nil || len(batch) != 1 || batch[0].RequestID != request.RequestID || batch[0].ClaimToken == "" {
+			return fmt.Errorf("transactional deletion batch=%+v err=%v", batch, err)
+		}
+		return rollback
+	})
+	if !errors.Is(err, rollback) {
+		t.Fatalf("deletion batch rollback = %v", err)
+	}
+	if err := admin.QueryRowContext(ctx, `SELECT count(*) FROM deletion_request_claims WHERE deletion_request_id=$1::UUID`, stored.ID).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("deletion batch escaped rollback: count=%d err=%v", count, err)
+	}
 }
 
 func TestCockroachDeletionResidualsSeeUncommittedPGXState(t *testing.T) {
@@ -680,6 +693,84 @@ func TestCockroachDeletionResidualsSeeUncommittedPGXState(t *testing.T) {
 	})
 	if !errors.Is(err, rollback) {
 		t.Fatalf("residual fixture rollback = %v", err)
+	}
+}
+
+func TestCockroachMaintenanceBatchClaimPromotesInboxAtomically(t *testing.T) {
+	adminDSN := os.Getenv("JANDIBAT_TEST_DATABASE_URL")
+	maintenanceDSN := os.Getenv("JANDIBAT_TEST_MAINTENANCE_DATABASE_URL")
+	if adminDSN == "" || maintenanceDSN == "" {
+		t.Skip("set JANDIBAT_TEST_DATABASE_URL and JANDIBAT_TEST_MAINTENANCE_DATABASE_URL")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	admin, err := sql.Open("pgx", adminDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	maintenance, err := sql.Open("pgx", maintenanceDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, err := pgxpool.New(ctx, maintenanceDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pool.Close(); _ = maintenance.Close(); _ = admin.Close() })
+	store, err := NewWithPGXPool(maintenance, pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unique := strings.ReplaceAll(time.Now().UTC().Format("150405.000000000"), ".", "")
+	requestID := "scythe-batch-" + unique
+	requestedAt := time.Date(1601, 1, 1, 0, 0, 0, 0, time.UTC)
+	claimAt := requestedAt.Add(time.Second)
+	if _, err := admin.ExecContext(ctx, `INSERT INTO deletion_request_inbox (request_id,target_type,target_id,requested_at) VALUES ($1,'subject',$2,$3)`, requestID, "scythe-batch-target-"+unique, requestedAt); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = admin.ExecContext(context.Background(), `DELETE FROM deletion_requests WHERE request_id=$1`, requestID)
+		_, _ = admin.ExecContext(context.Background(), `DELETE FROM deletion_request_inbox WHERE request_id=$1`, requestID)
+	})
+	rollback := errors.New("rollback batch promotion")
+	err = appdb.InTx(ctx, pool, appdb.RetryOptions{}, func(txctx context.Context, _ pgx.Tx) error {
+		batch, err := store.ClaimDeletions(txctx, claimAt, claimAt.Add(time.Minute), 1)
+		if err != nil || len(batch) != 1 || batch[0].RequestID != requestID {
+			return fmt.Errorf("transactional promoted batch=%+v err=%v", batch, err)
+		}
+		return rollback
+	})
+	if !errors.Is(err, rollback) {
+		t.Fatalf("batch promotion rollback=%v", err)
+	}
+	var inboxCount, durableCount int
+	if err := admin.QueryRowContext(ctx, `SELECT count(*) FROM deletion_request_inbox WHERE request_id=$1`, requestID).Scan(&inboxCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := admin.QueryRowContext(ctx, `SELECT count(*) FROM deletion_requests WHERE request_id=$1`, requestID).Scan(&durableCount); err != nil {
+		t.Fatal(err)
+	}
+	if inboxCount != 1 || durableCount != 0 {
+		t.Fatalf("batch promotion escaped rollback: inbox=%d durable=%d", inboxCount, durableCount)
+	}
+	batch, err := store.ClaimDeletions(ctx, claimAt, claimAt.Add(time.Minute), 1)
+	if err != nil || len(batch) != 1 || batch[0].RequestID != requestID || batch[0].ClaimToken == "" {
+		t.Fatalf("committed promoted batch=%+v err=%v", batch, err)
+	}
+	duplicateID := requestID + "-duplicate"
+	if _, err := admin.ExecContext(ctx, `INSERT INTO deletion_request_inbox (request_id,target_type,target_id,requested_at) VALUES ($1,'subject',$2,$3)`, duplicateID, "scythe-batch-target-"+unique, requestedAt.Add(time.Microsecond)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = admin.ExecContext(context.Background(), `DELETE FROM deletion_request_inbox WHERE request_id=$1`, duplicateID)
+	})
+	batch, err = store.ClaimDeletions(ctx, claimAt.Add(2*time.Second), claimAt.Add(2*time.Minute), 1)
+	if err != nil || len(batch) != 0 {
+		t.Fatalf("duplicate-target batch=%+v err=%v", batch, err)
+	}
+	var duplicateStatus string
+	if err := admin.QueryRowContext(ctx, `SELECT status FROM deletion_request_inbox WHERE request_id=$1`, duplicateID).Scan(&duplicateStatus); err != nil || duplicateStatus != "promoted" {
+		t.Fatalf("duplicate-target inbox status=%q err=%v", duplicateStatus, err)
 	}
 }
 

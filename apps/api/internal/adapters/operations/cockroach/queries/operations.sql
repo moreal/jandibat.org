@@ -221,6 +221,47 @@ WHERE deletion_request_id = $4::UUID
   AND attempts < 100 AND available_at <= $1::TIMESTAMPTZ
   AND (lease_until IS NULL OR lease_until <= $1::TIMESTAMPTZ);
 
+-- @name ListDeletionInboxForPromotion
+-- @returns :many
+SELECT id::STRING AS id, request_id, target_type, target_id, requested_at
+FROM deletion_request_inbox
+WHERE status = 'requested'
+ORDER BY requested_at, id
+LIMIT $1::INT8
+FOR UPDATE SKIP LOCKED;
+
+-- @name AcknowledgeDuplicateDeletionInbox
+-- @returns :exec
+UPDATE deletion_request_inbox
+SET status = 'promoted', promoted_at = $2::TIMESTAMPTZ
+WHERE id = $1::UUID AND status = 'requested';
+
+-- @name DeletePromotedDeletionInboxByID
+-- @returns :exec_result
+DELETE FROM deletion_request_inbox
+WHERE id = $1::UUID AND status = 'requested';
+
+-- @name BootstrapPendingDeletionClaims
+-- @returns :exec
+INSERT INTO deletion_request_claims (deletion_request_id, available_at, updated_at)
+SELECT request.id, LEAST(request.requested_at, $1::TIMESTAMPTZ), $1::TIMESTAMPTZ
+FROM deletion_requests AS request
+WHERE request.status <> 'completed'
+ON CONFLICT (deletion_request_id) DO NOTHING;
+
+-- @name ListClaimableDeletionRequests
+-- @returns :many
+SELECT request.request_id AS request_id
+FROM deletion_request_claims AS claim
+JOIN deletion_requests AS request ON request.id = claim.deletion_request_id
+WHERE request.status <> 'completed'
+  AND claim.attempts < 100
+  AND claim.available_at <= $1::TIMESTAMPTZ
+  AND (claim.lease_until IS NULL OR claim.lease_until <= $1::TIMESTAMPTZ)
+ORDER BY claim.available_at, claim.updated_at, claim.deletion_request_id
+LIMIT $2::INT8
+FOR UPDATE OF claim SKIP LOCKED;
+
 -- @name GetMaintenanceCheckpoint
 -- @returns :opt
 SELECT operation, scope, payload, updated_at

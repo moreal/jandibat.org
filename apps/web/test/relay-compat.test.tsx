@@ -161,3 +161,42 @@ it("settles a failed query and recovers when its variables change", async () => 
   view.unmount();
   expect(activeNetworkSubscriptions).toBe(0);
 });
+
+it("retries the same normalized query when its fetch key changes", async () => {
+  let attempts = 0;
+  let activeNetworkSubscriptions = 0;
+  const environment = new Environment({
+    network: Network.create(() => Observable.create((sink) => {
+      attempts += 1;
+      activeNetworkSubscriptions += 1;
+      if (attempts === 1) {
+        sink.error(new Error("offline"));
+      } else {
+        sink.next({ data: { subject: { __typename: "Subject", id: subjectID, displayName: "Retried" } } });
+        sink.complete();
+      }
+      return () => { activeNetworkSubscriptions -= 1; };
+    })),
+    store: new Store(new RecordSource()),
+  });
+  let result!: ReturnType<typeof createRelayQuery<RelayCompatQuery>>;
+  let retry!: () => void;
+  function TestApp() {
+    const [fetchKey, setFetchKey] = createSignal(0);
+    retry = () => setFetchKey((value) => value + 1);
+    result = createRelayQuery<RelayCompatQuery>(query, { id: subjectID }, {
+      fetchKey,
+      fetchPolicy: "network-only",
+    });
+    return <SubjectName subject={() => result.error ? null : result()?.subject ?? null} />;
+  }
+
+  const view = render(() => <RelayProvider environment={environment}><TestApp /></RelayProvider>);
+  await waitFor(() => expect(result.error).toBeInstanceOf(Error));
+  expect(activeNetworkSubscriptions).toBe(0);
+  retry();
+  await waitFor(() => expect(view.getByTestId("subject-name").textContent).toBe("Retried"));
+  expect(attempts).toBe(2);
+  view.unmount();
+  expect(activeNetworkSubscriptions).toBe(0);
+});

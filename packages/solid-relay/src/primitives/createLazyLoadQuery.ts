@@ -50,6 +50,7 @@ type QueryResult<T> =
  * @param gqlQuery - GraphQL query document.
  * @param variables - Query variables or an accessor for reactive variables.
  * @param options.fetchPolicy - Query fetch policy.
+ * @param options.fetchKey - Change this key to retry the same query and variables.
  * @param options.networkCacheConfig - Network cache configuration.
  * @param options.deferStream - Reserved for API compatibility; this browser build does not stream SSR.
  * @returns A `DataStore` containing the query data state.
@@ -59,6 +60,7 @@ export function createLazyLoadQuery<TQuery extends OperationType>(
 	variables: MaybeAccessor<VariablesOf<TQuery>>,
 	options?: {
 		fetchPolicy?: MaybeAccessor<FetchPolicy | undefined>;
+		fetchKey?: MaybeAccessor<string | number | null | undefined>;
 		networkCacheConfig?: MaybeAccessor<CacheConfig | undefined>;
 		deferStream?: boolean;
 	},
@@ -76,6 +78,7 @@ export function createLazyLoadQuery<TQuery extends OperationType>(
 		query: operation,
 		fragment: () => getRequest(access(gqlQuery)).fragment,
 		fetchObservable,
+		fetchKey: () => access(options?.fetchKey),
 		fetchPolicy: () => access(options?.fetchPolicy),
 		deferStream: options?.deferStream,
 	});

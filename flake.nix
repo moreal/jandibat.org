@@ -99,6 +99,20 @@
               tag = "@yarnpkg/cli/4.18.0";
               hash = "sha256-pO89wh17cW9/RGKjo70yiefr+9nlJAQs4ZEdUnzdgQM=";
             };
+            # The exact upstream tag already includes its release bundle.
+            # Rebuilding it here invokes esbuild-wasm and can stall on Darwin;
+            # keep the nixpkgs Yarn derivation and its Berry dependency hooks.
+            dontBuild = true;
+            installPhase = ''
+              runHook preInstall
+              install -Dm755 packages/yarnpkg-cli/bin/yarn.js "$out/bin/yarn"
+              substituteInPlace "$out/bin/yarn" \
+                --replace-fail '#!/usr/bin/env node' '#!${nodejs}/bin/node'
+              # The upstream source tree redirects Yarn through .yarnrc.yml;
+              # validate the installed bundle itself, not that dev launcher.
+              test "$(YARN_IGNORE_PATH=1 "$out/bin/yarn" --version)" = 4.18.0
+              runHook postInstall
+            '';
           });
 
           buildGoModule = pkgs.buildGoModule.override { inherit go; };

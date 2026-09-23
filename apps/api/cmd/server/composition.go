@@ -282,6 +282,14 @@ func buildApplication(ctx context.Context, settings config.Config, logger *zap.L
 	if scheduler != nil {
 		background = append([]namedBackgroundRunner{{name: "provider scheduler", runner: scheduler}}, background...)
 	}
+	var mutationAudits operations.MutationAuditCoordinator
+	if stores.operations != nil {
+		mutationAudits = stores.operations
+	}
+	var httpSubjectDeletions handlers.SubjectDeletionWorkflow
+	if subjectDeletions != nil {
+		httpSubjectDeletions = subjectDeletions
+	}
 	app := &application{
 		graphql: graphDeps,
 		dependencies: apihttp.Dependencies{
@@ -289,7 +297,7 @@ func buildApplication(ctx context.Context, settings config.Config, logger *zap.L
 			Timeline:          timeline,
 			Readiness:         readiness,
 			Audit:             operational.audit,
-			MutationAudits:    stores.operations,
+			MutationAudits:    mutationAudits,
 			AuditSourceKey:    append([]byte(nil), settings.SessionSigningKey...),
 			Catalog:           catalog,
 			Auth:              authService,
@@ -305,7 +313,7 @@ func buildApplication(ctx context.Context, settings config.Config, logger *zap.L
 			SubjectVisibility: subjectService,
 			SubjectResolver:   subjectService,
 			Subjects:          subjectService,
-			SubjectDeletions:  subjectDeletions,
+			SubjectDeletions:  httpSubjectDeletions,
 			AllowedOrigins:    []string{origin(settings.WebURL)},
 			SecureCookies:     settings.WebURL.Scheme == "https",
 			TrustProxyHeaders: settings.TrustProxyHeaders,

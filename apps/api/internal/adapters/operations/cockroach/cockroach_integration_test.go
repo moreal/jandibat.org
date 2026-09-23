@@ -1757,8 +1757,9 @@ id, subject_id, environment_id, auth_method, status, access_token_ciphertext, ac
 
 func TestCockroachRetentionDryRunAndExecuteRespectLegalHoldBoundary(t *testing.T) {
 	dsn := os.Getenv("JANDIBAT_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("set JANDIBAT_TEST_DATABASE_URL to a migrated CockroachDB")
+	maintenanceDSN := os.Getenv("JANDIBAT_TEST_MAINTENANCE_DATABASE_URL")
+	if dsn == "" || maintenanceDSN == "" {
+		t.Skip("set JANDIBAT_TEST_DATABASE_URL and JANDIBAT_TEST_MAINTENANCE_DATABASE_URL")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -1766,8 +1767,19 @@ func TestCockroachRetentionDryRunAndExecuteRespectLegalHoldBoundary(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = db.Close() })
-	store, _ := New(db)
+	maintenance, err := sql.Open("pgx", maintenanceDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, err := pgxpool.New(ctx, maintenanceDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pool.Close(); _ = maintenance.Close(); _ = db.Close() })
+	store, err := NewWithPGXPool(maintenance, pool)
+	if err != nil {
+		t.Fatal(err)
+	}
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	oldEventTime := time.Date(1800, 1, 1, 0, 0, 0, 0, time.UTC)
 	cutoff := time.Date(1900, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -1834,7 +1846,12 @@ func TestCockroachMagicLinkMailOutboxRetentionIsTerminalBoundedAndHeld(t *testin
 	if maintenanceUser != "jandibat_maintenance" {
 		t.Fatalf("maintenance database role = %q, want jandibat_maintenance", maintenanceUser)
 	}
-	store, err := New(maintenanceDB)
+	pool, err := pgxpool.New(ctx, maintenanceDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	store, err := NewWithPGXPool(maintenanceDB, pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1942,7 +1959,12 @@ func TestCockroachMutationAuditOutboxRetentionUsesMaintenanceRoleAndLegalHoldBou
 	if maintenanceUser != "jandibat_maintenance" {
 		t.Fatalf("maintenance database role = %q, want jandibat_maintenance", maintenanceUser)
 	}
-	store, err := New(maintenanceDB)
+	pool, err := pgxpool.New(ctx, maintenanceDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	store, err := NewWithPGXPool(maintenanceDB, pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2052,7 +2074,12 @@ func TestCockroachOrphanedPrivateEnvironmentRetentionUsesMaintenanceRoleAndAllRe
 	if maintenanceUser != "jandibat_maintenance" {
 		t.Fatalf("maintenance database role = %q, want jandibat_maintenance", maintenanceUser)
 	}
-	store, err := New(maintenanceDB)
+	pool, err := pgxpool.New(ctx, maintenanceDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	store, err := NewWithPGXPool(maintenanceDB, pool)
 	if err != nil {
 		t.Fatal(err)
 	}

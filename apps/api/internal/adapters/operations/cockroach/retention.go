@@ -12,6 +12,7 @@ import (
 )
 
 var ErrInvalidPurgeRequest = errors.New("operations cockroach: invalid purge request")
+var errRetentionPGXPoolRequired = errors.New("operations cockroach: retention requires a pgx pool")
 
 type retentionSQLSpec struct {
 	table                string
@@ -133,27 +134,19 @@ func (store *Store) PurgeExpired(ctx context.Context, request operations.Retenti
 	if err != nil {
 		return 0, err
 	}
-	if store.pool != nil {
-		var deleted int64
-		err := appdb.InTx(ctx, store.pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
-			result, err := tx.Exec(txctx, query, request.Before.UTC(), request.Limit, asOf)
-			if err != nil {
-				return fmt.Errorf("purge %s: %w", request.Dataset, err)
-			}
-			deleted = result.RowsAffected()
-			return nil
-		})
-		return deleted, err
+	if store.pool == nil {
+		return 0, errRetentionPGXPoolRequired
 	}
-	result, err := store.db.ExecContext(ctx, query, request.Before.UTC(), request.Limit, asOf)
-	if err != nil {
-		return 0, fmt.Errorf("purge %s: %w", request.Dataset, err)
-	}
-	deleted, err := result.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("purge %s rows affected: %w", request.Dataset, err)
-	}
-	return deleted, nil
+	var deleted int64
+	err = appdb.InTx(ctx, store.pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
+		result, err := tx.Exec(txctx, query, request.Before.UTC(), request.Limit, asOf)
+		if err != nil {
+			return fmt.Errorf("purge %s: %w", request.Dataset, err)
+		}
+		deleted = result.RowsAffected()
+		return nil
+	})
+	return deleted, err
 }
 
 func (store *Store) CountExpired(ctx context.Context, request operations.RetentionPurgeRequest) (int64, error) {
@@ -164,14 +157,11 @@ func (store *Store) CountExpired(ctx context.Context, request operations.Retenti
 	if err != nil {
 		return 0, err
 	}
-	var count int64
-	if store.pool != nil {
-		if err := appdb.PGXExecutorFor(ctx, store.pool).QueryRow(ctx, query, request.Before.UTC(), request.AsOf.UTC()).Scan(&count); err != nil {
-			return 0, fmt.Errorf("count expired %s: %w", request.Dataset, err)
-		}
-		return count, nil
+	if store.pool == nil {
+		return 0, errRetentionPGXPoolRequired
 	}
-	if err := store.db.QueryRowContext(ctx, query, request.Before.UTC(), request.AsOf.UTC()).Scan(&count); err != nil {
+	var count int64
+	if err := appdb.PGXExecutorFor(ctx, store.pool).QueryRow(ctx, query, request.Before.UTC(), request.AsOf.UTC()).Scan(&count); err != nil {
 		return 0, fmt.Errorf("count expired %s: %w", request.Dataset, err)
 	}
 	return count, nil

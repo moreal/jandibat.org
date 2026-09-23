@@ -36,7 +36,7 @@ func TestDeletionMethodsRequirePGXPool(t *testing.T) {
 	}
 	event := operations.AuditEvent{
 		ID: "018f0000-0000-7000-8000-000000000001", OccurredAt: now,
-		Actor: operations.AuditActor{Type: operations.AuditActorSystem},
+		Actor:  operations.AuditActor{Type: operations.AuditActorSystem},
 		Action: "deletion.completed", Target: operations.AuditTarget{Type: "subject", ID: request.TargetID},
 		Outcome: operations.AuditSucceeded, RequestID: request.RequestID,
 	}
@@ -61,7 +61,10 @@ func TestDeletionMethodsRequirePGXPool(t *testing.T) {
 			return err
 		}},
 		{"delete", func() error { _, err := store.DeletePrimaryData(context.Background(), request, now); return err }},
-		{"complete", func() error { _, err := store.CompleteDeletionWithAudit(context.Background(), request, event, now, now.Add(time.Hour)); return err }},
+		{"complete", func() error {
+			_, err := store.CompleteDeletionWithAudit(context.Background(), request, event, now, now.Add(time.Hour))
+			return err
+		}},
 		{"fail", func() error { return store.FailDeletion(context.Background(), request, "failed", now) }},
 		{"defer", func() error { return store.DeferDeletionForLegalHold(context.Background(), request, now) }},
 	}
@@ -240,38 +243,17 @@ func TestAuditSinkRedactsAndEncodesSourceIP(t *testing.T) {
 	}
 }
 
-func TestCockroachRetentionPort(t *testing.T) {
-	script := fakedb.New(fakedb.Step{Operation: fakedb.Exec, Affected: 2})
-	db := script.Open()
-	defer db.Close()
-	store, _ := New(db)
-	deleted, err := store.PurgeExpired(context.Background(), operations.RetentionPurgeRequest{
-		Dataset: operations.RetentionAuditEvents, Before: time.Now(), Limit: 100,
-	})
-	if err != nil || deleted != 2 {
-		t.Fatalf("PurgeExpired() = %d, %v", deleted, err)
-	}
-}
-
 func TestRetentionDryRunUsesSameLegalHoldPredicateWithoutDelete(t *testing.T) {
-	script := fakedb.New(fakedb.Step{Operation: fakedb.Query, Columns: []string{"count"}, Rows: [][]driver.Value{{int64(3)}}})
-	db := script.Open()
-	defer db.Close()
-	store, _ := New(db)
-	asOf := time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC)
-	count, err := store.CountExpired(context.Background(), operations.RetentionPurgeRequest{
-		Dataset: operations.RetentionActivityFacts, Before: asOf.Add(-400 * 24 * time.Hour), AsOf: asOf,
-	})
-	if err != nil || count != 3 {
-		t.Fatalf("CountExpired() = %d, %v", count, err)
+	query, err := buildRetentionCountQuery(operations.RetentionActivityFacts)
+	if err != nil {
+		t.Fatal(err)
 	}
-	calls := script.Calls()
-	if len(calls) != 1 || calls[0].Operation != fakedb.Query || strings.Contains(calls[0].Query, "DELETE") {
-		t.Fatalf("dry run calls = %#v", calls)
+	if strings.Contains(query, "DELETE") {
+		t.Fatalf("dry run contains DELETE: %s", query)
 	}
 	for _, fragment := range []string{"SELECT count(*)", "legal_holds", "hold.expires_at > $2", "candidate.subject_id", "held_subject.owner_user_id"} {
-		if !strings.Contains(calls[0].Query, fragment) {
-			t.Errorf("dry-run query missing %q: %s", fragment, calls[0].Query)
+		if !strings.Contains(query, fragment) {
+			t.Errorf("dry-run query missing %q: %s", fragment, query)
 		}
 	}
 }

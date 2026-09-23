@@ -264,3 +264,22 @@ SELECT custom_provider_id::STRING AS provider_id, subject_id,
 FROM custom_activity_events
 WHERE custom_provider_id = $1::UUID
 ORDER BY activity_date, event_id;
+
+-- @name LockCustomProviderAggregate
+-- @returns :opt
+SELECT subject_id, environment_id FROM custom_providers
+WHERE id = $1::UUID FOR UPDATE;
+
+-- @name DeleteCustomProviderRefreshCache
+-- @returns :exec
+DELETE FROM activity_refresh_cache
+WHERE subject_id = $1::STRING AND environment_id = $2::STRING;
+
+-- @name DeleteCustomProviderFacts
+-- @returns :exec
+DELETE FROM activity_facts
+WHERE custom_provider_id = $1::UUID OR (subject_id = $2::STRING AND environment_id = $3::STRING);
+
+-- @name DeleteCustomProviderByID
+-- @returns :exec_result
+DELETE FROM custom_providers WHERE id = $1::UUID;

@@ -400,6 +400,40 @@ VALUES ($1, $2, $3, 'UTC', true, now(), now())`, subjectID, userID, handle); err
 	if err != nil || outsideUpdate.Provider.Name != provider.Name {
 		t.Fatalf("provider after update rollback = (%+v, %v)", outsideUpdate.Provider, err)
 	}
+	deleteCandidate, err := service.Create(ctx, integrations.CreateCustomProviderInput{
+		SubjectID: subjectID, Slug: "delete_" + suffix, Name: "Delete probe",
+		AllowedActions: []string{"read"}, AllowedMetrics: []string{"count"}, IngestSecret: secret + "-delete",
+	})
+	if err != nil {
+		t.Fatalf("create deletion probe: %v", err)
+	}
+	deleteCtx, doneDelete := context.WithTimeout(ctx, 3*time.Second)
+	defer doneDelete()
+	err = appdb.InTx(deleteCtx, activityPool, appdb.RetryOptions{}, func(txctx context.Context, _ pgx.Tx) error {
+		if err := service.Delete(txctx, deleteCandidate.ID); err != nil {
+			return err
+		}
+		if _, err := integrationDB.GetCustomProvider(txctx, deleteCandidate.ID); !errors.Is(err, integrations.ErrNotFound) {
+			return fmt.Errorf("provider visible after transactional delete: %v", err)
+		}
+		return readRollback
+	})
+	if !errors.Is(err, readRollback) {
+		t.Fatalf("rollback provider delete = %v", err)
+	}
+	if _, err := integrationDB.GetCustomProvider(ctx, deleteCandidate.ID); err != nil {
+		t.Fatalf("provider missing after delete rollback: %v", err)
+	}
+	if err := service.Delete(ctx, deleteCandidate.ID); err != nil {
+		t.Fatalf("delete provider: %v", err)
+	}
+	if _, err := integrationDB.GetCustomProvider(ctx, deleteCandidate.ID); !errors.Is(err, integrations.ErrNotFound) {
+		t.Fatalf("deleted provider lookup = %v", err)
+	}
+	var environmentTombstone int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM environments WHERE id=$1`, deleteCandidate.EnvironmentID).Scan(&environmentTombstone); err != nil || environmentTombstone != 1 {
+		t.Fatalf("environment tombstone = (%d, %v)", environmentTombstone, err)
+	}
 	observedAt := time.Now().UTC().Add(-time.Minute).Truncate(time.Microsecond)
 	input := integrations.IngestCustomActivitiesInput{
 		ProviderID: provider.ID, IngestSecret: secret, IdempotencyKey: "idem-" + suffix,

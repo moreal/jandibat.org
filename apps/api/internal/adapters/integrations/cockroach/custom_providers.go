@@ -166,6 +166,31 @@ func (s *Store) saveCustomProvider(ctx context.Context, query string, record int
 }
 
 func (s *Store) DeleteCustomProviderAggregate(ctx context.Context, id string) error {
+	if s.pool != nil {
+		parsed, err := uuid.Parse(id)
+		if err != nil {
+			return integrations.ErrInvalidIdentifier
+		}
+		return appdb.InTx(ctx, s.pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
+			row, err := generated.LockCustomProviderAggregate(txctx, tx, parsed)
+			if err != nil {
+				return fmt.Errorf("delete custom provider aggregate: load: %w", err)
+			}
+			if row == nil {
+				return notFound("custom provider", id)
+			}
+			if err := generated.DeleteCustomProviderRefreshCache(txctx, tx, row.SubjectId, row.EnvironmentId); err != nil {
+				return fmt.Errorf("delete custom provider aggregate: refresh cache: %w", err)
+			}
+			if err := generated.DeleteCustomProviderFacts(txctx, tx, parsed, row.SubjectId, row.EnvironmentId); err != nil {
+				return fmt.Errorf("delete custom provider aggregate: facts: %w", err)
+			}
+			if _, err := generated.DeleteCustomProviderById(txctx, tx, parsed); err != nil {
+				return fmt.Errorf("delete custom provider aggregate: provider: %w", err)
+			}
+			return nil
+		})
+	}
 	ctx, scope, err := s.beginMutation(ctx)
 	if err != nil {
 		return fmt.Errorf("delete custom provider aggregate: begin: %w", err)
@@ -289,6 +314,20 @@ func buildListCustomProvidersQuery(subjectID string) (string, []any) {
 }
 
 func (s *Store) DeleteCustomProvider(ctx context.Context, id string) error {
+	if s.pool != nil {
+		parsed, err := uuid.Parse(id)
+		if err != nil {
+			return integrations.ErrInvalidIdentifier
+		}
+		count, err := generated.DeleteCustomProviderById(ctx, appdb.PGXExecutorFor(ctx, s.pool), parsed)
+		if err != nil {
+			return fmt.Errorf("delete custom provider: %w", err)
+		}
+		if count == 0 {
+			return notFound("custom provider", id)
+		}
+		return nil
+	}
 	executor, err := s.mutationExecutor(ctx)
 	if err != nil {
 		return err

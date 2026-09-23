@@ -600,7 +600,7 @@ WHERE id = $1::UUID AND status = 'requested'`, request.id)
 }
 
 func (store *Store) RevokeDeletionCredentials(ctx context.Context, request operations.DeletionRequest, now time.Time) (operations.DeletionRequest, error) {
-	if store.pool != nil && request.TargetType == operations.DeletionTargetSubject {
+	if store.pool != nil {
 		var updated operations.DeletionRequest
 		err := appdb.InTx(ctx, store.pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
 			if err := lockDeletionLeasePGX(txctx, tx, request); err != nil {
@@ -609,16 +609,61 @@ func (store *Store) RevokeDeletionCredentials(ctx context.Context, request opera
 			if err := rejectActiveDeletionHoldPGX(txctx, tx, request, now); err != nil {
 				return err
 			}
-			subject, err := generated.GetSubjectForDeletion(txctx, tx, request.TargetID)
-			if err != nil {
-				return fmt.Errorf("freeze subject: %w", err)
+			var subjectIDs []string
+			var primaryEmail string
+			switch request.TargetType {
+			case operations.DeletionTargetAccount:
+				account, err := generated.GetAccountEmailForDeletion(txctx, tx, request.TargetID)
+				if err != nil {
+					return fmt.Errorf("lock account for deletion: %w", err)
+				}
+				if account == nil {
+					return operations.ErrDeletionNotFound
+				}
+				primaryEmail = account.PrimaryEmail
+				count, err := generated.MarkAccountDeletionPending(txctx, tx, request.TargetID, now.UTC())
+				if err != nil {
+					return fmt.Errorf("mark account deletion pending: %w", err)
+				}
+				if count != 1 {
+					return operations.ErrDeletionNotFound
+				}
+				rows, err := generated.ListAccountSubjectsForDeletion(txctx, tx, request.TargetID)
+				if err != nil {
+					return fmt.Errorf("freeze account subjects: %w", err)
+				}
+				subjectIDs = make([]string, 0, len(rows))
+				for _, row := range rows {
+					subjectIDs = append(subjectIDs, row.Id)
+				}
+			case operations.DeletionTargetSubject:
+				subject, err := generated.GetSubjectForDeletion(txctx, tx, request.TargetID)
+				if err != nil {
+					return fmt.Errorf("freeze subject: %w", err)
+				}
+				if subject == nil {
+					return operations.ErrDeletionNotFound
+				}
+				subjectIDs = []string{subject.Id}
+			default:
+				return operations.ErrInvalidDeletionRequest
 			}
-			if subject == nil {
-				return operations.ErrDeletionNotFound
-			}
-			subjectIDs := []string{subject.Id}
 			if err := generated.EnqueueDeletionTokenRevocations(txctx, tx, subjectIDs, now.UTC()); err != nil {
 				return fmt.Errorf("enqueue deletion token revocations: %w", err)
+			}
+			if request.TargetType == operations.DeletionTargetAccount {
+				if err := store.persistDeletionIdentityTombstonePGX(txctx, tx, request.RequestID, primaryEmail, now); err != nil {
+					return err
+				}
+				if err := generated.DeleteAccountSessionsForDeletion(txctx, tx, request.TargetID); err != nil {
+					return fmt.Errorf("revoke account sessions: %w", err)
+				}
+				if err := generated.DeleteAccountMagicLinksForDeletion(txctx, tx, request.TargetID, primaryEmail); err != nil {
+					return fmt.Errorf("revoke account magic links: %w", err)
+				}
+				if err := generated.DeleteAccountAuthChallengesForDeletion(txctx, tx, request.TargetID, subjectIDs); err != nil {
+					return fmt.Errorf("revoke account auth challenges: %w", err)
+				}
 			}
 			count, err := generated.MarkDeletionCredentialsRevoked(txctx, tx, request.RequestID, subjectIDs, now.UTC())
 			if err != nil {
@@ -768,6 +813,32 @@ func rejectActiveDeletionHoldPGX(ctx context.Context, tx pgx.Tx, request operati
 	}
 	if row.Active {
 		return operations.ErrLegalHoldActive
+	}
+	return nil
+}
+
+func (store *Store) persistDeletionIdentityTombstonePGX(ctx context.Context, tx pgx.Tx, requestID, primaryEmail string, now time.Time) error {
+	expiresAt := now.UTC().Add(operations.BackupRetentionWindow)
+	count, err := generated.ExtendDeletedIdentityHmacTombstone(ctx, tx, requestID, expiresAt)
+	if err != nil {
+		return fmt.Errorf("extend existing deleted identity HMAC tombstone: %w", err)
+	}
+	if count == 1 {
+		return nil
+	}
+	if count != 0 {
+		return fmt.Errorf("%w: multiple account identity tombstones", operations.ErrDeletionResiduals)
+	}
+	keyID, digest, err := store.deletedIdentityHMAC(primaryEmail)
+	if err != nil {
+		return fmt.Errorf("persist deleted identity HMAC tombstone: %w", err)
+	}
+	count, err = generated.InsertDeletedIdentityHmacTombstone(ctx, tx, requestID, keyID, digest, now.UTC(), expiresAt)
+	if err != nil {
+		return fmt.Errorf("persist deleted identity HMAC tombstone: %w", err)
+	}
+	if count != 1 {
+		return fmt.Errorf("%w: identity is already tombstoned by another deletion request", operations.ErrDeletionResiduals)
 	}
 	return nil
 }

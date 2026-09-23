@@ -38,6 +38,48 @@ SELECT deletion_requests.id::STRING AS id, request_id, target_type, target_id, s
 FROM deletion_requests
 WHERE request_id = $1::STRING;
 
+-- @name GetAccountEmailForDeletion
+-- @returns :opt
+SELECT primary_email FROM users WHERE id = $1::STRING FOR UPDATE;
+
+-- @name MarkAccountDeletionPending
+-- @returns :exec_result
+UPDATE users SET status = 'deletion_pending', updated_at = $2::TIMESTAMPTZ
+WHERE id = $1::STRING;
+
+-- @name ListAccountSubjectsForDeletion
+-- @returns :many
+SELECT id FROM subjects WHERE owner_user_id = $1::STRING ORDER BY id;
+
+-- @name ExtendDeletedIdentityHMACTombstone
+-- @returns :exec_result
+UPDATE deleted_identity_tombstones_v2
+SET expires_at = GREATEST(expires_at, $2::TIMESTAMPTZ)
+WHERE deletion_request_id = (SELECT id FROM deletion_requests WHERE request_id = $1::STRING);
+
+-- @name InsertDeletedIdentityHMACTombstone
+-- @returns :exec_result
+INSERT INTO deleted_identity_tombstones_v2 (
+  identity_key_id, identity_digest, deletion_request_id, created_at, expires_at
+)
+SELECT $2::STRING, $3::BYTES, id, $4::TIMESTAMPTZ, $5::TIMESTAMPTZ
+FROM deletion_requests
+WHERE request_id = $1::STRING
+ON CONFLICT (identity_key_id, identity_digest) DO NOTHING;
+
+-- @name DeleteAccountSessionsForDeletion
+-- @returns :exec
+DELETE FROM user_sessions WHERE user_id = $1::STRING;
+
+-- @name DeleteAccountMagicLinksForDeletion
+-- @returns :exec
+DELETE FROM magic_link_tokens WHERE user_id = $1::STRING OR email = $2::STRING;
+
+-- @name DeleteAccountAuthChallengesForDeletion
+-- @returns :exec
+DELETE FROM auth_challenges
+WHERE user_id = $1::STRING OR payload->>'SubjectID' = ANY($2::STRING[]);
+
 -- @name ListEncryptedSecretsForReencryption
 -- @returns :many
 WITH encrypted_secrets (kind, id, key_id, ciphertext) AS (

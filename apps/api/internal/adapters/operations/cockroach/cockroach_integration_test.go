@@ -834,6 +834,102 @@ func TestCockroachMaintenanceBatchClaimPromotesInboxAtomically(t *testing.T) {
 	}
 }
 
+func TestCockroachMaintenanceAccountCredentialRevocationIsAtomic(t *testing.T) {
+	adminDSN := os.Getenv("JANDIBAT_TEST_DATABASE_URL")
+	maintenanceDSN := os.Getenv("JANDIBAT_TEST_MAINTENANCE_DATABASE_URL")
+	if adminDSN == "" || maintenanceDSN == "" {
+		t.Skip("set JANDIBAT_TEST_DATABASE_URL and JANDIBAT_TEST_MAINTENANCE_DATABASE_URL")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	admin, err := sql.Open("pgx", adminDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	maintenance, err := sql.Open("pgx", maintenanceDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, err := pgxpool.New(ctx, maintenanceDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pool.Close(); _ = maintenance.Close(); _ = admin.Close() })
+	store, err := NewWithPGXPool(maintenance, pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configureTestDeletedIdentityHMAC(t, store)
+	unique := strings.ReplaceAll(time.Now().UTC().Format("150405.000000000"), ".", "")
+	userID, subjectID := "scythe-account-"+unique, "scythe-account-subject-"+unique
+	requestID, email := "scythe-account-delete-"+unique, unique+"-account@example.invalid"
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	if _, err := admin.ExecContext(ctx, `INSERT INTO users (id,primary_email,status) VALUES ($1,$2,'active')`, userID, email); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.ExecContext(ctx, `INSERT INTO subjects (id,owner_user_id,handle,timezone) VALUES ($1,$2,$3,'UTC')`, subjectID, userID, "account-"+unique); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.ExecContext(ctx, `INSERT INTO magic_link_tokens (email,token_hash,purpose,expires_at) VALUES ($1,$2,'signin',$3)`, email, []byte("synthetic-hash-"+unique), now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = admin.ExecContext(context.Background(), `DELETE FROM deleted_identity_tombstones_v2 WHERE deletion_request_id=(SELECT id FROM deletion_requests WHERE request_id=$1)`, requestID)
+		_, _ = admin.ExecContext(context.Background(), `DELETE FROM deletion_requests WHERE request_id=$1`, requestID)
+		_, _ = admin.ExecContext(context.Background(), `DELETE FROM magic_link_tokens WHERE email=$1`, email)
+		_, _ = admin.ExecContext(context.Background(), `DELETE FROM users WHERE id=$1`, userID)
+	})
+	request, err := store.CreateOrLoadDeletion(ctx, operations.DeletionRequest{
+		RequestID: requestID, TargetType: operations.DeletionTargetAccount, TargetID: userID,
+		Status: operations.DeletionRequested, LastCompletedStage: operations.DeletionStageRequested,
+		RequestedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err = store.ClaimDeletion(ctx, requestID, now.Add(time.Second), now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rollback := errors.New("rollback account credential revocation")
+	err = appdb.InTx(ctx, pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
+		updated, err := store.RevokeDeletionCredentials(txctx, request, now.Add(2*time.Second))
+		if err != nil || updated.Status != operations.DeletionDeletingPrimary || len(updated.SubjectIDs) != 1 || updated.SubjectIDs[0] != subjectID {
+			return fmt.Errorf("transactional account revocation status=%s subjects=%d err=%v", updated.Status, len(updated.SubjectIDs), err)
+		}
+		var tombstones, magicLinks int
+		if err := tx.QueryRow(txctx, `SELECT count(*) FROM deleted_identity_tombstones_v2 WHERE deletion_request_id=(SELECT id FROM deletion_requests WHERE request_id=$1)`, requestID).Scan(&tombstones); err != nil {
+			return err
+		}
+		if err := tx.QueryRow(txctx, `SELECT count(*) FROM magic_link_tokens WHERE email=$1`, email).Scan(&magicLinks); err != nil || tombstones != 1 || magicLinks != 0 {
+			return fmt.Errorf("transactional account cleanup tombstones=%d magic_links=%d err=%v", tombstones, magicLinks, err)
+		}
+		return rollback
+	})
+	if !errors.Is(err, rollback) {
+		t.Fatalf("account revocation rollback=%v", err)
+	}
+	var status string
+	if err := admin.QueryRowContext(ctx, `SELECT status FROM users WHERE id=$1`, userID).Scan(&status); err != nil || status != "active" {
+		t.Fatalf("account status escaped rollback=%q err=%v", status, err)
+	}
+	var magicLinks int
+	if err := admin.QueryRowContext(ctx, `SELECT count(*) FROM magic_link_tokens WHERE email=$1`, email).Scan(&magicLinks); err != nil || magicLinks != 1 {
+		t.Fatalf("magic link cleanup escaped rollback=%d err=%v", magicLinks, err)
+	}
+	committed, err := store.RevokeDeletionCredentials(ctx, request, now.Add(3*time.Second))
+	if err != nil || committed.Status != operations.DeletionDeletingPrimary || len(committed.SubjectIDs) != 1 || committed.SubjectIDs[0] != subjectID {
+		t.Fatalf("committed account revocation status=%s subjects=%d err=%v", committed.Status, len(committed.SubjectIDs), err)
+	}
+	var tombstones int
+	if err := admin.QueryRowContext(ctx, `SELECT count(*) FROM deleted_identity_tombstones_v2 WHERE deletion_request_id=(SELECT id FROM deletion_requests WHERE request_id=$1)`, requestID).Scan(&tombstones); err != nil || tombstones != 1 {
+		t.Fatalf("committed HMAC tombstone count=%d err=%v", tombstones, err)
+	}
+	if err := admin.QueryRowContext(ctx, `SELECT count(*) FROM magic_link_tokens WHERE email=$1`, email).Scan(&magicLinks); err != nil || magicLinks != 0 {
+		t.Fatalf("committed magic link count=%d err=%v", magicLinks, err)
+	}
+}
+
 func TestCockroachReencryptionListSeesUncommittedPGXSecret(t *testing.T) {
 	dsn := os.Getenv("JANDIBAT_TEST_DATABASE_URL")
 	if dsn == "" {
@@ -936,7 +1032,12 @@ func TestCockroachDeletionRevokesEmailOnlyMagicLinksAndPreservesValidOAuthRevoca
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	store, err := New(db)
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	store, err := NewWithPGXPool(db, pool)
 	if err != nil {
 		t.Fatal(err)
 	}

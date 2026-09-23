@@ -552,6 +552,80 @@ func TestCockroachMaintenanceAuditSinkJoinsPGXTransaction(t *testing.T) {
 	}
 }
 
+func TestCockroachMaintenanceDeletionRequestJoinsPGXTransaction(t *testing.T) {
+	adminDSN := os.Getenv("JANDIBAT_TEST_DATABASE_URL")
+	maintenanceDSN := os.Getenv("JANDIBAT_TEST_MAINTENANCE_DATABASE_URL")
+	if adminDSN == "" || maintenanceDSN == "" {
+		t.Skip("set JANDIBAT_TEST_DATABASE_URL and JANDIBAT_TEST_MAINTENANCE_DATABASE_URL")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	admin, err := sql.Open("pgx", adminDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	maintenance, err := sql.Open("pgx", maintenanceDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, err := pgxpool.New(ctx, maintenanceDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pool.Close(); _ = maintenance.Close(); _ = admin.Close() })
+	store, err := NewWithPGXPool(maintenance, pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unique := strings.ReplaceAll(time.Now().UTC().Format("150405.000000000"), ".", "")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	request := operations.DeletionRequest{
+		RequestID:  "scythe-delete-" + unique,
+		TargetType: operations.DeletionTargetSubject, TargetID: "scythe-target-" + unique,
+		Status: operations.DeletionRequested, LastCompletedStage: operations.DeletionStageRequested,
+		RequestedAt: now, UpdatedAt: now,
+	}
+	t.Cleanup(func() {
+		_, _ = admin.ExecContext(context.Background(), `DELETE FROM deletion_requests WHERE request_id=$1`, request.RequestID)
+	})
+	rollback := errors.New("rollback deletion request")
+	err = appdb.InTx(ctx, pool, appdb.RetryOptions{}, func(txctx context.Context, _ pgx.Tx) error {
+		stored, err := store.CreateOrLoadDeletion(txctx, request)
+		if err != nil || stored.RequestID != request.RequestID || stored.TargetID != request.TargetID {
+			return fmt.Errorf("transactional deletion request=%+v err=%v", stored, err)
+		}
+		loaded, err := store.LoadDeletion(txctx, request.RequestID)
+		if err != nil || loaded.ID != stored.ID || loaded.TargetID != request.TargetID {
+			return fmt.Errorf("transactional deletion load=%+v err=%v", loaded, err)
+		}
+		return rollback
+	})
+	if !errors.Is(err, rollback) {
+		t.Fatalf("deletion rollback = %v", err)
+	}
+	var count int
+	if err := admin.QueryRowContext(ctx, `SELECT count(*) FROM deletion_requests WHERE request_id=$1`, request.RequestID).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("deletion request escaped rollback: count=%d err=%v", count, err)
+	}
+	stored, err := store.CreateOrLoadDeletion(ctx, request)
+	if err != nil || stored.RequestID != request.RequestID || stored.TargetID != request.TargetID {
+		t.Fatalf("committed deletion request=%+v err=%v", stored, err)
+	}
+	again, err := store.CreateOrLoadDeletion(ctx, request)
+	if err != nil || again.ID != stored.ID {
+		t.Fatalf("idempotent deletion request=%+v err=%v", again, err)
+	}
+	mismatched := request
+	mismatched.TargetID += "-other"
+	if _, err := store.CreateOrLoadDeletion(ctx, mismatched); !errors.Is(err, operations.ErrInvalidDeletionRequest) {
+		t.Fatalf("conflicting deletion request error=%v", err)
+	}
+	loaded, err := store.LoadDeletion(ctx, request.RequestID)
+	if err != nil || loaded.ID != stored.ID || loaded.Status != operations.DeletionRequested || loaded.AvailableAt.IsZero() {
+		t.Fatalf("committed deletion load=%+v err=%v", loaded, err)
+	}
+}
+
 func TestCockroachOperationsSchemaReadiness(t *testing.T) {
 	dsn := os.Getenv("JANDIBAT_TEST_DATABASE_URL")
 	if dsn == "" {

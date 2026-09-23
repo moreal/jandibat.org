@@ -19,6 +19,25 @@ WHERE request_id = $1::STRING OR (target_type = $2::STRING AND target_id = $3::S
 ORDER BY (request_id = $1::STRING) DESC, requested_at
 LIMIT 1;
 
+-- @name GetDeletionRequestByID
+-- @returns :opt
+SELECT deletion_requests.id::STRING AS id, request_id, target_type, target_id, status,
+  COALESCE(last_completed_stage, '') AS last_completed_stage,
+  COALESCE(error_code, '') AS error_code,
+  COALESCE(array_to_json(subject_ids), '[]'::JSON) AS subject_ids,
+  requested_at, updated_at, completed_at, backup_expiry_at,
+  COALESCE(audit_event_id::STRING, '') AS audit_event_id,
+  COALESCE((SELECT claim.attempts FROM deletion_request_claims AS claim
+    WHERE claim.deletion_request_id = deletion_requests.id), 0) AS attempts,
+  COALESCE((SELECT claim.available_at FROM deletion_request_claims AS claim
+    WHERE claim.deletion_request_id = deletion_requests.id), requested_at) AS available_at,
+  (SELECT claim.lease_until FROM deletion_request_claims AS claim
+    WHERE claim.deletion_request_id = deletion_requests.id) AS lease_until,
+  COALESCE((SELECT claim.claim_token::STRING FROM deletion_request_claims AS claim
+    WHERE claim.deletion_request_id = deletion_requests.id), '') AS claim_token
+FROM deletion_requests
+WHERE request_id = $1::STRING;
+
 -- @name InsertDeletionInboxIfAbsent
 -- @returns :exec
 INSERT INTO deletion_request_inbox (request_id, target_type, target_id, requested_at)
@@ -112,3 +131,26 @@ ON CONFLICT (operation, scope) DO UPDATE SET
 -- @returns :exec
 DELETE FROM maintenance_checkpoints
 WHERE operation = $1::STRING AND scope = $2::STRING;
+
+-- @name InsertDeletionRequestIfAbsent
+-- @returns :exec
+INSERT INTO deletion_requests (
+  request_id, target_type, target_id, status, last_completed_stage,
+  subject_ids, requested_at, updated_at
+) VALUES ($1::STRING, $2::STRING, $3::STRING, 'requested', 'requested',
+  ARRAY[]::STRING[], $4::TIMESTAMPTZ, $4::TIMESTAMPTZ)
+ON CONFLICT DO NOTHING;
+
+-- @name GetDeletionRequestForRequester
+-- @returns :opt
+SELECT id::STRING AS id, request_id, target_type, target_id, status,
+  COALESCE(last_completed_stage, '') AS last_completed_stage,
+  COALESCE(error_code, '') AS error_code,
+  COALESCE(array_to_json(subject_ids), '[]'::JSON) AS subject_ids,
+  requested_at, updated_at, completed_at, backup_expiry_at,
+  COALESCE(audit_event_id::STRING, '') AS audit_event_id
+FROM deletion_requests
+WHERE request_id = $1::STRING
+  OR (target_type = $2::STRING AND target_id = $3::STRING AND status <> 'completed')
+ORDER BY (request_id = $1::STRING) DESC, requested_at
+LIMIT 1;

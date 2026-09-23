@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	generated "github.com/moreal/jandibat.org/apps/api/internal/adapters/operations/cockroach/generated"
 	appdb "github.com/moreal/jandibat.org/apps/api/internal/database"
 	"github.com/moreal/jandibat.org/apps/api/internal/operations"
@@ -72,6 +73,35 @@ func (store *Store) CreateOrLoadDeletion(ctx context.Context, request operations
 	if err := operations.ValidateDeletionRequest(request); err != nil {
 		return operations.DeletionRequest{}, err
 	}
+	if store.pool != nil {
+		var stored operations.DeletionRequest
+		err := appdb.InTx(ctx, store.pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
+			if err := generated.InsertDeletionRequestIfAbsent(txctx, tx, request.RequestID,
+				string(request.TargetType), request.TargetID, request.RequestedAt.UTC()); err != nil {
+				return fmt.Errorf("create deletion request: %w", err)
+			}
+			row, err := generated.GetDeletionRequestForRequester(txctx, tx, request.RequestID,
+				string(request.TargetType), request.TargetID)
+			if err != nil {
+				return fmt.Errorf("load deletion request: %w", err)
+			}
+			if row == nil {
+				return operations.ErrDeletionNotFound
+			}
+			stored, err = requesterDeletionFromGenerated(*row)
+			if err != nil {
+				return err
+			}
+			if stored.TargetType != request.TargetType || stored.TargetID != request.TargetID {
+				return fmt.Errorf("%w: request ID is already bound to another target", operations.ErrInvalidDeletionRequest)
+			}
+			return nil
+		})
+		if err != nil {
+			return operations.DeletionRequest{}, err
+		}
+		return stored, nil
+	}
 	_, err := store.db.ExecContext(ctx, `
 INSERT INTO deletion_requests (
   request_id, target_type, target_id, status, last_completed_stage,
@@ -93,6 +123,21 @@ LIMIT 1`, request.RequestID, request.TargetType, request.TargetID))
 		return operations.DeletionRequest{}, fmt.Errorf("%w: request ID is already bound to another target", operations.ErrInvalidDeletionRequest)
 	}
 	return stored, nil
+}
+
+func requesterDeletionFromGenerated(row generated.GetDeletionRequestForRequesterRow) (operations.DeletionRequest, error) {
+	request := operations.DeletionRequest{
+		ID: row.Id, RequestID: row.RequestId,
+		TargetType: operations.DeletionTargetType(row.TargetType), TargetID: row.TargetId,
+		Status: operations.DeletionStatus(row.Status), LastCompletedStage: operations.DeletionStage(row.LastCompletedStage),
+		ErrorCode: row.ErrorCode, RequestedAt: row.RequestedAt, UpdatedAt: row.UpdatedAt,
+		CompletedAt: row.CompletedAt, BackupExpiryAt: row.BackupExpiryAt, AuditEventID: row.AuditEventId,
+		AvailableAt: row.RequestedAt,
+	}
+	if err := json.Unmarshal(row.SubjectIds, &request.SubjectIDs); err != nil {
+		return operations.DeletionRequest{}, fmt.Errorf("scan deletion request subject IDs: %w", err)
+	}
+	return request, nil
 }
 
 func (store *Store) EnqueueDeletion(ctx context.Context, request operations.DeletionRequest) (operations.DeletionRequest, error) {
@@ -174,6 +219,27 @@ func inboxDeletionFromGenerated(row generated.GetDeletionInboxForRequestRow) ope
 func (store *Store) LoadDeletion(ctx context.Context, requestID string) (operations.DeletionRequest, error) {
 	if strings.TrimSpace(requestID) == "" {
 		return operations.DeletionRequest{}, operations.ErrInvalidDeletionRequest
+	}
+	if store.pool != nil {
+		row, err := generated.GetDeletionRequestById(ctx, appdb.PGXExecutorFor(ctx, store.pool), requestID)
+		if err != nil {
+			return operations.DeletionRequest{}, fmt.Errorf("load deletion request: %w", err)
+		}
+		if row == nil {
+			return operations.DeletionRequest{}, operations.ErrDeletionNotFound
+		}
+		request := operations.DeletionRequest{
+			ID: row.Id, RequestID: row.RequestId,
+			TargetType: operations.DeletionTargetType(row.TargetType), TargetID: row.TargetId,
+			Status: operations.DeletionStatus(row.Status), LastCompletedStage: operations.DeletionStage(row.LastCompletedStage),
+			ErrorCode: row.ErrorCode, RequestedAt: row.RequestedAt, UpdatedAt: row.UpdatedAt,
+			CompletedAt: row.CompletedAt, BackupExpiryAt: row.BackupExpiryAt, AuditEventID: row.AuditEventId,
+			Attempts: row.Attempts, AvailableAt: row.AvailableAt, LeaseUntil: row.LeaseUntil, ClaimToken: row.ClaimToken,
+		}
+		if err := json.Unmarshal(row.SubjectIds, &request.SubjectIDs); err != nil {
+			return operations.DeletionRequest{}, fmt.Errorf("scan deletion request subject IDs: %w", err)
+		}
+		return request, nil
 	}
 	return scanDeletion(store.db.QueryRowContext(ctx, `SELECT `+deletionColumns+` FROM deletion_requests WHERE request_id = $1`, requestID))
 }

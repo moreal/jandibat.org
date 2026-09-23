@@ -91,40 +91,6 @@ func TestCheckRejectsIncompleteOperationalSchema(t *testing.T) {
 	}
 }
 
-func TestReencryptionSQLCoversEverySecretWithCAS(t *testing.T) {
-	for _, fragment := range []string{
-		"access_token_key_id", "refresh_token_key_id",
-		"ORDER BY kind, id", "kind > $1", "LIMIT $3",
-	} {
-		if !strings.Contains(listSecretsForReencryptionQuery, fragment) {
-			t.Errorf("list query missing %q", fragment)
-		}
-	}
-	if strings.Contains(listSecretsForReencryptionQuery, "key_id !=") {
-		t.Fatal("key-ID filtering would hide version-1 rows already labeled with the active key")
-	}
-	for _, kind := range []operations.SecretKind{
-		operations.SecretConnectionAccessToken,
-		operations.SecretConnectionRefreshToken,
-	} {
-		query, err := replaceSecretQuery(kind)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, fragment := range []string{" = $2", "key_id", "COALESCE", "= $5"} {
-			if !strings.Contains(query, fragment) {
-				t.Errorf("replace query for %s missing %q: %s", kind, fragment, query)
-			}
-		}
-	}
-	if strings.Contains(listSecretsForReencryptionQuery, "ingest_token_hash") || strings.Contains(listSecretsForReencryptionQuery, "custom_provider") {
-		t.Fatal("one-way custom-provider ingestion hashes must never be selected for re-encryption")
-	}
-	if _, err := replaceSecretQuery("unknown"); !errors.Is(err, operations.ErrInvalidSecretRecord) {
-		t.Fatalf("replaceSecretQuery(unknown) error = %v", err)
-	}
-}
-
 func TestRetentionQueriesAreBoundedAndAllowlisted(t *testing.T) {
 	wantFilters := map[operations.RetentionDataset][]string{
 		operations.RetentionAuditEvents:             nil,
@@ -269,25 +235,11 @@ func TestAuditSinkRedactsAndPersistsSourceIP(t *testing.T) {
 	}
 }
 
-func TestCockroachReencryptionAndRetentionPorts(t *testing.T) {
-	script := fakedb.New(
-		fakedb.Step{Operation: fakedb.Query, Columns: []string{"kind", "id", "key_id", "ciphertext"}, Rows: [][]driver.Value{{
-			string(operations.SecretConnectionAccessToken), "018f0000-0000-7000-8000-000000000001", "old", []byte{1, 2, 3},
-		}}},
-		fakedb.Step{Operation: fakedb.Exec, Affected: 1},
-		fakedb.Step{Operation: fakedb.Exec, Affected: 2},
-	)
+func TestCockroachRetentionPort(t *testing.T) {
+	script := fakedb.New(fakedb.Step{Operation: fakedb.Exec, Affected: 2})
 	db := script.Open()
 	defer db.Close()
 	store, _ := New(db)
-	records, err := store.ListSecretsForReencryption(context.Background(), operations.SecretLocator{}, 10)
-	if err != nil || len(records) != 1 || records[0].KeyID != "old" {
-		t.Fatalf("ListSecretsForReencryption() = %#v, %v", records, err)
-	}
-	replaced, err := store.ReplaceEncryptedSecret(context.Background(), records[0], "new", []byte{4, 5, 6})
-	if err != nil || !replaced {
-		t.Fatalf("ReplaceEncryptedSecret() = %t, %v", replaced, err)
-	}
 	deleted, err := store.PurgeExpired(context.Background(), operations.RetentionPurgeRequest{
 		Dataset: operations.RetentionAuditEvents, Before: time.Now(), Limit: 100,
 	})

@@ -1,167 +1,225 @@
-// Package database provides the request transaction boundary shared by SQL
-// adapters. It deliberately carries only database/sql primitives; domain
-// packages remain unaware of the transport that opened the transaction.
+// Package database contains the pgx transaction boundary shared by generated
+// queries and application services. It keeps CockroachDB retries outside
+// generated SQL and gives nested services one transaction for a pool.
 package database
 
 import (
 	"context"
-	"database/sql"
 	"errors"
-	"sync"
+	"fmt"
+	"math/rand"
+	"reflect"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
-var ErrTransactionDatabaseMismatch = errors.New("database: transaction belongs to another database")
+var (
+	ErrTransactionPoolMismatch = errors.New("database: transaction belongs to another pool")
+	ErrInvalidPool             = errors.New("database: transaction pool must be a non-nil pointer")
+	ErrCallbackRequired        = errors.New("database: transaction callback is required")
+)
 
-type transactionContextKey struct{}
+const (
+	defaultMaxAttempts = 5
+	defaultBackoffMin  = 10 * time.Millisecond
+	defaultBackoffMax  = 250 * time.Millisecond
+	rollbackTimeout    = 5 * time.Second
+)
 
-type transactionContext struct {
-	db *sql.DB
-	tx *sql.Tx
+// DBTX matches the Scythe Go pgx backend so generated queries accept either a
+// pool or the pgx.Tx supplied to an application transaction callback.
+type DBTX interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+	QueryRow(context.Context, string, ...any) pgx.Row
+	Begin(context.Context) (pgx.Tx, error)
 }
 
-type lazyTransactionContextKey struct{}
-
-// LazyTransaction delays BEGIN until a participating write adapter calls
-// Begin. Reads and external provider/WebAuthn/SMTP work therefore do not hold
-// an idle Cockroach transaction open.
-type LazyTransaction struct {
-	db *sql.DB
-	mu sync.Mutex
-	tx *sql.Tx
+// TxBeginner is implemented by *pgxpool.Pool and keeps the transaction runner
+// testable without substituting SQL behavior inside its transaction logic.
+type TxBeginner interface {
+	BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, error)
 }
 
-func WithLazyTransaction(ctx context.Context, db *sql.DB) (context.Context, *LazyTransaction) {
-	lazy := &LazyTransaction{db: db}
-	return context.WithValue(ctx, lazyTransactionContextKey{}, lazy), lazy
+// RetryOptions configures transaction isolation and bounded serialization
+// retries. The callback may execute more than once and must contain database
+// work only; external side effects belong after InTx returns successfully.
+type RetryOptions struct {
+	TxOptions   pgx.TxOptions
+	MaxAttempts int
+	BackoffMin  time.Duration
+	BackoffMax  time.Duration
 }
 
-func (lazy *LazyTransaction) Transaction() (*sql.Tx, bool) {
-	if lazy == nil {
-		return nil, false
+type pgxTransactionContextKey struct{}
+
+type activeTransaction struct {
+	poolIdentity uintptr
+	tx           pgx.Tx
+}
+
+// InTx owns a pgx transaction and retries CockroachDB serialization failures
+// (SQLSTATE 40001) with bounded exponential jitter. Nested calls join the
+// current transaction only when they use the same pool.
+func InTx(
+	ctx context.Context,
+	pool TxBeginner,
+	options RetryOptions,
+	callback func(context.Context, pgx.Tx) error,
+) error {
+	if ctx == nil {
+		return errors.New("database: transaction context is required")
 	}
-	lazy.mu.Lock()
-	defer lazy.mu.Unlock()
-	return lazy.tx, lazy.tx != nil
-}
-
-func (lazy *LazyTransaction) begin(ctx context.Context, db *sql.DB, options *sql.TxOptions) (*sql.Tx, error) {
-	if lazy == nil || lazy.db != db {
-		return nil, ErrTransactionDatabaseMismatch
+	if callback == nil {
+		return ErrCallbackRequired
 	}
-	lazy.mu.Lock()
-	defer lazy.mu.Unlock()
-	if lazy.tx != nil {
-		return lazy.tx, nil
-	}
-	tx, err := db.BeginTx(ctx, options)
+	identity, err := transactionPoolIdentity(pool)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	lazy.tx = tx
-	return tx, nil
-}
-
-func (lazy *LazyTransaction) Commit() error {
-	tx, ok := lazy.Transaction()
-	if !ok {
-		return ErrTransactionDatabaseMismatch
-	}
-	return tx.Commit()
-}
-
-func (lazy *LazyTransaction) Rollback() error {
-	tx, ok := lazy.Transaction()
-	if !ok {
-		return nil
-	}
-	return tx.Rollback()
-}
-
-// WithTransaction binds tx to ctx for adapters backed by db.
-func WithTransaction(ctx context.Context, db *sql.DB, tx *sql.Tx) context.Context {
-	return context.WithValue(ctx, transactionContextKey{}, transactionContext{db: db, tx: tx})
-}
-
-// Transaction returns the request transaction only when it belongs to db.
-func Transaction(ctx context.Context, db *sql.DB) (*sql.Tx, bool) {
-	value, ok := ctx.Value(transactionContextKey{}).(transactionContext)
-	if ok && value.db == db && value.tx != nil {
-		return value.tx, true
-	}
-	if lazy, lazyOK := ctx.Value(lazyTransactionContextKey{}).(*LazyTransaction); lazyOK && lazy.db == db {
-		return lazy.Transaction()
-	}
-	return nil, false
-}
-
-// HasLazyTransaction reports whether ctx carries the audited request boundary
-// for db, even before its first mutation has started the SQL transaction.
-func HasLazyTransaction(ctx context.Context, db *sql.DB) bool {
-	lazy, ok := ctx.Value(lazyTransactionContextKey{}).(*LazyTransaction)
-	return ok && lazy != nil && lazy.db == db
-}
-
-// Executor is implemented by both *sql.DB and *sql.Tx.
-type Executor interface {
-	ExecContext(context.Context, string, ...any) (sql.Result, error)
-	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-	QueryRowContext(context.Context, string, ...any) *sql.Row
-}
-
-func ExecutorFor(ctx context.Context, db *sql.DB) Executor {
-	if tx, ok := Transaction(ctx, db); ok {
-		return tx
-	}
-	return db
-}
-
-// MutationExecutor joins (and lazily starts) a request transaction when one
-// is installed. Outside an audited request it preserves the adapter's normal
-// single-statement autocommit behavior.
-func MutationExecutor(ctx context.Context, db *sql.DB) (Executor, error) {
-	if tx, ok := Transaction(ctx, db); ok {
-		return tx, nil
-	}
-	if lazy, ok := ctx.Value(lazyTransactionContextKey{}).(*LazyTransaction); ok {
-		return lazy.begin(ctx, db, nil)
-	}
-	return db, nil
-}
-
-// Scope joins an existing request transaction or owns a new local one.
-type Scope struct {
-	Tx    *sql.Tx
-	owned bool
-}
-
-func Begin(ctx context.Context, db *sql.DB, options *sql.TxOptions) (context.Context, *Scope, error) {
-	if tx, ok := Transaction(ctx, db); ok {
-		return ctx, &Scope{Tx: tx}, nil
-	}
-	if lazy, ok := ctx.Value(lazyTransactionContextKey{}).(*LazyTransaction); ok {
-		tx, err := lazy.begin(ctx, db, options)
-		if err != nil {
-			return ctx, nil, err
+	if active, ok := ctx.Value(pgxTransactionContextKey{}).(activeTransaction); ok {
+		if active.poolIdentity != identity {
+			return ErrTransactionPoolMismatch
 		}
-		return WithTransaction(ctx, db, tx), &Scope{Tx: tx}, nil
+		return callback(ctx, active.tx)
 	}
-	tx, err := db.BeginTx(ctx, options)
+	options = options.withDefaults()
+	for attempt := 1; attempt <= options.MaxAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		tx, beginErr := pool.BeginTx(ctx, options.TxOptions)
+		if beginErr != nil {
+			if !IsRetryableSerializationFailure(beginErr) || attempt == options.MaxAttempts {
+				return beginErr
+			}
+			if err := waitForRetry(ctx, retryDelay(options, attempt)); err != nil {
+				return err
+			}
+			continue
+		}
+
+		txContext := context.WithValue(ctx, pgxTransactionContextKey{}, activeTransaction{
+			poolIdentity: identity,
+			tx:           tx,
+		})
+		attemptErr := invokeCallback(txContext, tx, callback)
+		if attemptErr == nil {
+			attemptErr = tx.Commit(ctx)
+		}
+		retryable := IsRetryableSerializationFailure(attemptErr)
+		if attemptErr != nil {
+			if rollbackErr := rollback(tx); rollbackErr != nil {
+				attemptErr = errors.Join(attemptErr, rollbackErr)
+			}
+		}
+		if attemptErr == nil {
+			return nil
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !retryable || attempt == options.MaxAttempts {
+			return attemptErr
+		}
+		if err := waitForRetry(ctx, retryDelay(options, attempt)); err != nil {
+			return err
+		}
+	}
+	return errors.New("database: transaction retry loop ended unexpectedly")
+}
+
+// IsRetryableSerializationFailure classifies wrapped Cockroach/PostgreSQL
+// serialization errors without coupling generated query code to retry policy.
+func IsRetryableSerializationFailure(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "40001"
+}
+
+func transactionPoolIdentity(pool TxBeginner) (uintptr, error) {
+	if pool == nil {
+		return 0, ErrInvalidPool
+	}
+	value := reflect.ValueOf(pool)
+	if value.Kind() != reflect.Pointer || value.IsNil() {
+		return 0, ErrInvalidPool
+	}
+	return value.Pointer(), nil
+}
+
+func (options RetryOptions) withDefaults() RetryOptions {
+	if options.MaxAttempts < 1 {
+		options.MaxAttempts = defaultMaxAttempts
+	}
+	if options.BackoffMin <= 0 {
+		options.BackoffMin = defaultBackoffMin
+	}
+	if options.BackoffMax <= 0 {
+		options.BackoffMax = defaultBackoffMax
+	}
+	if options.BackoffMax < options.BackoffMin {
+		options.BackoffMax = options.BackoffMin
+	}
+	return options
+}
+
+func retryDelay(options RetryOptions, attempt int) time.Duration {
+	delay := options.BackoffMin
+	for step := 1; step < attempt && delay < options.BackoffMax; step++ {
+		if delay > options.BackoffMax/2 {
+			delay = options.BackoffMax
+			break
+		}
+		delay *= 2
+	}
+	if delay > options.BackoffMax {
+		delay = options.BackoffMax
+	}
+	if delay <= 1 {
+		return delay
+	}
+	return time.Duration(rand.Int63n(int64(delay) + 1))
+}
+
+func waitForRetry(ctx context.Context, delay time.Duration) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func rollback(tx pgx.Tx) error {
+	ctx, cancel := context.WithTimeout(context.Background(), rollbackTimeout)
+	defer cancel()
+	err := tx.Rollback(ctx)
+	if errors.Is(err, pgx.ErrTxClosed) {
+		return nil
+	}
 	if err != nil {
-		return ctx, nil, err
+		return fmt.Errorf("database: rollback transaction: %w", err)
 	}
-	return WithTransaction(ctx, db, tx), &Scope{Tx: tx, owned: true}, nil
+	return nil
 }
 
-func (scope *Scope) Commit() error {
-	if scope == nil || !scope.owned {
-		return nil
-	}
-	return scope.Tx.Commit()
-}
-
-func (scope *Scope) Rollback() error {
-	if scope == nil || !scope.owned {
-		return nil
-	}
-	return scope.Tx.Rollback()
+func invokeCallback(
+	ctx context.Context,
+	tx pgx.Tx,
+	callback func(context.Context, pgx.Tx) error,
+) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			_ = rollback(tx)
+			panic(recovered)
+		}
+	}()
+	return callback(ctx, tx)
 }

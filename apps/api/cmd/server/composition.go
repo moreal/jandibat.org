@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	authstore "github.com/moreal/jandibat.org/apps/api/internal/adapters/auth/cockroach"
 	webauthnadapter "github.com/moreal/jandibat.org/apps/api/internal/adapters/auth/webauthn"
@@ -108,6 +109,7 @@ func (registry *oauthRegistry) RevokeOAuthToken(ctx context.Context, providerID 
 
 type databaseStores struct {
 	db           *sql.DB
+	pool         *pgxpool.Pool
 	activity     activityapp.Store
 	integrations *integrationstore.Store
 	operations   *operationsstore.Store
@@ -325,6 +327,11 @@ func buildReadinessChecker(stores databaseStores) (*operations.ReadinessChecker,
 	if stores.db != nil {
 		name = "database"
 		probe = stores.operations
+		if stores.pool != nil {
+			dependencies = append(dependencies, operations.ReadinessDependency{
+				Name: "database-pool", Probe: operations.DependencyProbeFunc(stores.pool.Ping),
+			})
+		}
 	}
 	dependencies = append(dependencies, operations.ReadinessDependency{Name: name, Probe: probe})
 	if stores.integrations != nil {
@@ -427,6 +434,7 @@ func buildStores(ctx context.Context, settings config.Config) (databaseStores, e
 	}
 	return databaseStores{
 		db:           db,
+		pool:         database.Pool,
 		activity:     activityPersistence,
 		integrations: integrationPersistence,
 		operations:   operationalPersistence,

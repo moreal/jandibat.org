@@ -174,9 +174,12 @@ func buildMaintenance(ctx context.Context, settings config.Config, logger *zap.L
 			},
 		}},
 	}
-	readiness, err := operations.NewReadinessChecker(2*time.Second, operations.ReadinessDependency{
-		Name: "maintenance-database", Probe: store,
-	})
+	readiness, err := operations.NewReadinessChecker(2*time.Second,
+		operations.ReadinessDependency{
+			Name: "maintenance-database-pool", Probe: operations.DependencyProbeFunc(database.Pool.Ping),
+		},
+		operations.ReadinessDependency{Name: "maintenance-schema", Probe: store},
+	)
 	if err != nil {
 		return nil, fmt.Errorf("maintenance: construct readiness: %w", err)
 	}

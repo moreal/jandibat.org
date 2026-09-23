@@ -25,13 +25,12 @@ const (
 	databaseMaxOpen = 20
 )
 
-// RuntimeDatabase owns both the database/sql compatibility handle consumed by
-// repositories and the pgx pool that performs physical connection checkout.
-// Call Close instead of closing DB directly so the underlying pool is released.
+// RuntimeDatabase exposes pgxpool as the primary runtime boundary and keeps a
+// database/sql view during the adapter migration. Call Close to release both.
 type RuntimeDatabase struct {
 	DB *sql.DB
 
-	pool     *pgxpool.Pool
+	Pool     *pgxpool.Pool
 	close    sync.Once
 	closeErr error
 }
@@ -45,8 +44,8 @@ func (database *RuntimeDatabase) Close() error {
 		if database.DB != nil {
 			database.closeErr = database.DB.Close()
 		}
-		if database.pool != nil {
-			database.pool.Close()
+		if database.Pool != nil {
+			database.Pool.Close()
 		}
 	})
 	return database.closeErr
@@ -106,7 +105,7 @@ func OpenDatabase(ctx context.Context, databaseURL string) (*RuntimeDatabase, er
 	if err != nil {
 		return nil, fmt.Errorf("runtime: open database pool: %w", err)
 	}
-	database := &RuntimeDatabase{DB: stdlib.OpenDBFromPool(pool), pool: pool}
+	database := &RuntimeDatabase{DB: stdlib.OpenDBFromPool(pool), Pool: pool}
 	// OpenDBFromPool sets MaxIdleConns(0). Leaving MaxOpenConns unlimited is
 	// intentional: pgxpool is the sole bounded checkout queue, so its acquire
 	// tracer measures the complete wait rather than missing a database/sql queue.

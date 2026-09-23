@@ -155,7 +155,7 @@ func buildWorker(ctx context.Context, settings config.Config, logger *zap.Logger
 		return nil, err
 	}
 	readiness, err := operations.NewReadinessChecker(2*time.Second,
-		operations.ReadinessDependency{Name: "worker-database", Probe: operations.DependencyProbeFunc(db.PingContext)},
+		operations.ReadinessDependency{Name: "worker-database-pool", Probe: operations.DependencyProbeFunc(database.Pool.Ping)},
 		operations.ReadinessDependency{Name: "provider-revocation-schema", Probe: operations.DependencyProbeFunc(integration.CheckRevocationSchema)},
 		operations.ReadinessDependency{Name: "magic-link-delivery-schema", Probe: operations.DependencyProbeFunc(authRepository.CheckMagicLinkDeliverySchema)},
 		operations.ReadinessDependency{Name: "mutation-audit-outbox-schema", Probe: operations.DependencyProbeFunc(operationStore.CheckMutationAuditOutboxSchema)},

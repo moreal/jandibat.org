@@ -71,6 +71,8 @@ var (
 	ErrInvalidSyncTimezone         = errors.New("integrations: sync timezone is invalid")
 	ErrInvalidSyncClaim            = errors.New("integrations: invalid sync job claim")
 	ErrInvalidSyncPageSize         = errors.New("integrations: sync job page size must be between 1 and 100")
+	ErrInvalidIntegrationPageSize  = errors.New("integrations: integration page size must be between 1 and 100")
+	ErrPaginationUnsupported       = errors.New("integrations: store does not support keyset pagination")
 	ErrInvalidSchedulerConcurrency = errors.New("integrations: scheduler concurrency must be positive")
 	ErrInvalidRetryPolicy          = errors.New("integrations: invalid retry policy")
 	ErrInvalidRevocationConfig     = errors.New("integrations: invalid OAuth token revocation configuration")

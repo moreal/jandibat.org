@@ -29,6 +29,8 @@ func TestConnectionOperationsRequirePGXPool(t *testing.T) {
 	check("GetConnection", err)
 	_, err = store.ListConnections(context.Background(), "subject-1")
 	check("ListConnections", err)
+	_, err = store.ListConnectionsPage(context.Background(), "subject-1", nil, 1)
+	check("ListConnectionsPage", err)
 	check("UpdateConnectionAfterSync", store.UpdateConnectionAfterSync(context.Background(), record, id))
 	check("PurgeConnectionData", store.PurgeConnectionData(context.Background(), id))
 }

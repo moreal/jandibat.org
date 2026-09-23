@@ -81,6 +81,32 @@ func (store *MemoryStore) ListConnections(ctx context.Context, subjectID string)
 	return records, nil
 }
 
+func (store *MemoryStore) ListConnectionsPage(ctx context.Context, subjectID string, after *ConnectionCursor, limit int) ([]ProviderConnection, error) {
+	if err := validateIntegrationPage(subjectID, after, limit, 101); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+	items := make([]ProviderConnection, 0)
+	for _, record := range store.connections {
+		connection := record.Connection
+		if connection.SubjectID != subjectID || connection.Status == ConnectionRevoked || !afterIntegrationCursor(connection.CreatedAt, connection.ID, after) {
+			continue
+		}
+		items = append(items, cloneConnection(connection))
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return lessIntegrationTuple(items[i].CreatedAt, items[i].ID, items[j].CreatedAt, items[j].ID)
+	})
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	return items, nil
+}
+
 func (store *MemoryStore) PurgeConnectionData(ctx context.Context, id string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -154,6 +180,43 @@ func (store *MemoryStore) ListCustomProviders(ctx context.Context, subjectID str
 		return records[i].Provider.Slug < records[j].Provider.Slug
 	})
 	return records, nil
+}
+
+func (store *MemoryStore) ListCustomProvidersPage(ctx context.Context, subjectID string, after *CustomProviderCursor, limit int) ([]CustomProvider, error) {
+	if err := validateIntegrationPage(subjectID, after, limit, 101); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+	items := make([]CustomProvider, 0)
+	for _, record := range store.customProviders {
+		provider := record.Provider
+		if provider.SubjectID != subjectID || !afterIntegrationCursor(provider.CreatedAt, provider.ID, after) {
+			continue
+		}
+		items = append(items, cloneCustomProvider(provider))
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return lessIntegrationTuple(items[i].CreatedAt, items[i].ID, items[j].CreatedAt, items[j].ID)
+	})
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	return items, nil
+}
+
+func lessIntegrationTuple(leftTime time.Time, leftID string, rightTime time.Time, rightID string) bool {
+	if leftTime.Equal(rightTime) {
+		return leftID < rightID
+	}
+	return leftTime.Before(rightTime)
+}
+
+func afterIntegrationCursor(createdAt time.Time, id string, after *ConnectionCursor) bool {
+	return after == nil || lessIntegrationTuple(after.CreatedAt, after.ID, createdAt, id)
 }
 
 func (store *MemoryStore) DeleteCustomProvider(ctx context.Context, id string) error {

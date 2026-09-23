@@ -19,7 +19,9 @@ type Store struct {
 
 var (
 	_ integrations.ConnectionStore          = (*Store)(nil)
+	_ integrations.ConnectionPageStore      = (*Store)(nil)
 	_ integrations.CustomProviderStore      = (*Store)(nil)
+	_ integrations.CustomProviderPageStore  = (*Store)(nil)
 	_ integrations.SyncJobStore             = (*Store)(nil)
 	_ integrations.SyncIdempotencyStore     = (*Store)(nil)
 	_ integrations.SyncExecutionStore       = (*Store)(nil)

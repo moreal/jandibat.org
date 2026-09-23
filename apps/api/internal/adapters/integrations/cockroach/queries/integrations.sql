@@ -66,6 +66,31 @@ FROM provider_connections
 WHERE ($1::STRING = '' OR subject_id = $1::STRING)
 ORDER BY subject_id, id;
 
+-- @name ListConnectionsPage
+-- @returns :many
+SELECT provider_connections.id::STRING AS id, subject_id,
+  COALESCE(sync_cursor->>'provider_id', '') AS provider_id,
+  environment_id, auth_method, COALESCE(external_account_id, '') AS external_account_id,
+  COALESCE(sync_cursor->>'external_account_login', '') AS external_account_login,
+  COALESCE(sync_cursor->>'connection_status', status) AS connection_status,
+  COALESCE(array_to_json(scopes), '[]'::JSON) AS scopes_json,
+  token_expires_at, last_synced_at,
+  NULLIF(sync_cursor->>'last_sync_attempt_at', '')::TIMESTAMPTZ AS last_sync_attempt_at,
+  NULLIF(sync_cursor->>'next_sync_attempt_at', '')::TIMESTAMPTZ AS next_sync_attempt_at,
+  COALESCE((sync_cursor->>'last_sync_attempt')::INT, 0) AS last_sync_attempt,
+  COALESCE((sync_cursor->>'consecutive_failures')::INT, 0) AS consecutive_failures,
+  COALESCE(last_error, '') AS last_error, created_at, updated_at,
+  EXISTS (
+    SELECT 1 FROM provider_connection_private_consents AS consent
+    WHERE consent.connection_id = provider_connections.id AND consent.enabled
+  ) AS private_data_enabled
+FROM provider_connections
+WHERE subject_id = $1::STRING
+  AND COALESCE(sync_cursor->>'connection_status', status) != 'revoked'
+  AND (NOT $2::BOOL OR (created_at, id) > ($3::TIMESTAMPTZ, $4::UUID))
+ORDER BY created_at, id
+LIMIT $5::INT8;
+
 -- @name UpsertConnection
 -- @returns :exec_result
 INSERT INTO provider_connections (
@@ -157,6 +182,17 @@ FROM custom_providers AS provider
 JOIN custom_provider_secrets AS secrets ON secrets.provider_id = provider.id
 WHERE ($1::STRING = '' OR provider.subject_id = $1::STRING)
 ORDER BY provider.subject_id, provider.slug, provider.id;
+
+-- @name ListCustomProvidersPage
+-- @returns :many
+SELECT provider.id::STRING AS id, provider.subject_id, provider.environment_id,
+  provider.slug, provider.name, COALESCE(provider.description, '') AS description,
+  provider.status, provider.configuration, provider.created_at, provider.updated_at
+FROM custom_providers AS provider
+WHERE provider.subject_id = $1::STRING
+  AND (NOT $2::BOOL OR (provider.created_at, provider.id) > ($3::TIMESTAMPTZ, $4::UUID))
+ORDER BY provider.created_at, provider.id
+LIMIT $5::INT8;
 
 -- @name InsertCustomProvider
 -- @returns :exec_result

@@ -38,6 +38,7 @@ func TestCustomProviderOperationsRequirePGXPool(t *testing.T) {
 		{"delete provider aggregate", func() error { return store.DeleteCustomProviderAggregate(ctx, id) }},
 		{"get provider", func() error { _, err := store.GetCustomProvider(ctx, id); return err }},
 		{"list providers", func() error { _, err := store.ListCustomProviders(ctx, "subject-1"); return err }},
+		{"page providers", func() error { _, err := store.ListCustomProvidersPage(ctx, "subject-1", nil, 1); return err }},
 		{"delete provider", func() error { return store.DeleteCustomProvider(ctx, id) }},
 		{"save activities", func() error {
 			_, err := store.SaveIngestedActivities(ctx, []integrations.IngestedActivity{activity})

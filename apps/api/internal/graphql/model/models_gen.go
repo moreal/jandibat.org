@@ -778,6 +778,8 @@ type UserSettings struct {
 type Viewer struct {
 	User     *UserProfile  `json:"user"`
 	Settings *UserSettings `json:"settings"`
+	// The verified request session, independent of sessions page position.
+	CurrentSession *Session `json:"currentSession"`
 	// Forward page; first: 1..100, default 25.
 	Subjects *SubjectConnection `json:"subjects"`
 	// Forward page; first: 1..100, default 25.

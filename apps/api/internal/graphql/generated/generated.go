@@ -410,10 +410,11 @@ type ComplexityRoot struct {
 	}
 
 	Viewer struct {
-		Sessions func(childComplexity int, first *int, after *scalar.Cursor) int
-		Settings func(childComplexity int) int
-		Subjects func(childComplexity int, first *int, after *scalar.Cursor) int
-		User     func(childComplexity int) int
+		CurrentSession func(childComplexity int) int
+		Sessions       func(childComplexity int, first *int, after *scalar.Cursor) int
+		Settings       func(childComplexity int) int
+		Subjects       func(childComplexity int, first *int, after *scalar.Cursor) int
+		User           func(childComplexity int) int
 	}
 }
 
@@ -463,6 +464,7 @@ type SubjectResolver interface {
 }
 type ViewerResolver interface {
 	Settings(ctx context.Context, obj *model.Viewer) (*model.UserSettings, error)
+	CurrentSession(ctx context.Context, obj *model.Viewer) (*model.Session, error)
 	Subjects(ctx context.Context, obj *model.Viewer, first *int, after *scalar.Cursor) (*model.SubjectConnection, error)
 	Sessions(ctx context.Context, obj *model.Viewer, first *int, after *scalar.Cursor) (*model.SessionConnection, error)
 }
@@ -1914,6 +1916,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.UserSettings.UpdatedAt(childComplexity), true
 
+	case "Viewer.currentSession":
+		if e.ComplexityRoot.Viewer.CurrentSession == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Viewer.CurrentSession(childComplexity), true
 	case "Viewer.sessions":
 		if e.ComplexityRoot.Viewer.Sessions == nil {
 			break
@@ -2107,6 +2115,8 @@ type ActivitySnapshot {
 type Viewer {
   user: UserProfile!
   settings: UserSettings!
+  "The verified request session, independent of sessions page position."
+  currentSession: Session!
   "Forward page; first: 1..100, default 25."
   subjects(first: Int = 25, after: Cursor): SubjectConnection!
   "Forward page; first: 1..100, default 25."
@@ -3317,6 +3327,8 @@ func (ec *executionContext) childFields_Viewer(ctx context.Context, field graphq
 		return ec.fieldContext_Viewer_user(ctx, field)
 	case "settings":
 		return ec.fieldContext_Viewer_settings(ctx, field)
+	case "currentSession":
+		return ec.fieldContext_Viewer_currentSession(ctx, field)
 	case "subjects":
 		return ec.fieldContext_Viewer_subjects(ctx, field)
 	case "sessions":
@@ -9986,6 +9998,38 @@ func (ec *executionContext) fieldContext_Viewer_settings(_ context.Context, fiel
 	return fc, nil
 }
 
+func (ec *executionContext) _Viewer_currentSession(ctx context.Context, field graphql.CollectedField, obj *model.Viewer) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Viewer_currentSession(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Viewer().CurrentSession(ctx, obj)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.Session) graphql.Marshaler {
+			return ec.marshalNSession2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐSession(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Viewer_currentSession(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Viewer",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Session(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Viewer_subjects(ctx context.Context, field graphql.CollectedField, obj *model.Viewer) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -15384,6 +15428,44 @@ func (ec *executionContext) _Viewer(ctx context.Context, sel ast.SelectionSet, o
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "currentSession":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Viewer_currentSession(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.IsDeferred() {
+				deferredFieldSet.AddField(field)
+				fieldIndex := len(deferredFieldSet.Values) - 1
+				deferredFieldSet.Concurrently(fieldIndex, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, deferredFieldSet)
+				})
+
+				for _, deferrable := range field.Deferrables {
+					view, ok := deferLabelToView[deferrable.Label]
+					if !ok {
+						view = deferredFieldSet.NewView()
+						deferLabelToView[deferrable.Label] = view
+					}
+					view.AddIndices(fieldIndex)
+				}
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		case "subjects":
 			field := field
 
@@ -16526,6 +16608,10 @@ func (ec *executionContext) marshalNRotateCustomProviderKeyPayload2ᚖgithubᚗc
 		return graphql.Null
 	}
 	return ec._RotateCustomProviderKeyPayload(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNSession2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐSession(ctx context.Context, sel ast.SelectionSet, v model.Session) graphql.Marshaler {
+	return ec._Session(ctx, sel, &v)
 }
 
 func (ec *executionContext) marshalNSession2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐSession(ctx context.Context, sel ast.SelectionSet, v *model.Session) graphql.Marshaler {

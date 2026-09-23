@@ -55,6 +55,8 @@ type ActivitySnapshot {
 type Viewer {
   user: UserProfile!
   settings: UserSettings!
+  "The verified request session, independent of sessions page position."
+  currentSession: Session!
   "Forward page; first: 1..100, default 25."
   subjects(first: Int = 25, after: Cursor): SubjectConnection!
   "Forward page; first: 1..100, default 25."

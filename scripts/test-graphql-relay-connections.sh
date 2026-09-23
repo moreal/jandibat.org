@@ -17,6 +17,7 @@ require_field() {
 }
 
 require_field Query 'viewer: Viewer'
+require_field Viewer 'currentSession: Session!'
 require_field Viewer 'sessions(first: Int = 25, after: Cursor): SessionConnection!'
 require_field ProviderConnection 'syncJobs(first: Int = 25, after: Cursor): SyncJobConnection'
 for owner in Viewer ProviderConnection; do

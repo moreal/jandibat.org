@@ -44,6 +44,8 @@ models:
     fields:
       settings:
         resolver: true
+      currentSession:
+        resolver: true
       subjects:
         resolver: true
       sessions:

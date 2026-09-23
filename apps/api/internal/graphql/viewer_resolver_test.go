@@ -41,6 +41,76 @@ type viewerSessionPagePort struct {
 	calls int
 }
 
+type viewerCurrentSessionPort struct {
+	value auth.Session
+	err   error
+	actor string
+	id    string
+	calls int
+}
+
+func (port *viewerCurrentSessionPort) GetSessionByID(_ context.Context, actor, id string) (auth.Session, error) {
+	port.actor, port.id, port.calls = actor, id, port.calls+1
+	return port.value, port.err
+}
+
+func TestViewerCurrentSessionUsesVerifiedIDWithoutSessionPagination(t *testing.T) {
+	const sessionID = "00000000-0000-4000-8000-000000000001"
+	now := time.Now().UTC().Truncate(time.Second)
+	users := &viewerUserPort{value: subjects.User{ID: "owner", Status: subjects.UserStatusActive}}
+	sessions := &viewerCurrentSessionPort{value: auth.Session{ID: sessionID, UserID: "owner", CreatedAt: now.Add(-time.Hour), ExpiresAt: now.Add(time.Hour), TokenHash: auth.Digest{1}}}
+	ctx := ContextWithVerifiedSessionID(ContextWithVerifiedViewer(context.Background(), "owner"), sessionID)
+	response, err := viewerGraphQLClient(ctx, NodeServices{ViewerUsers: users, Sessions: sessions}).RawPost(`query { viewer { currentSession { id createdAt expiresAt revokedAt } } }`)
+	if err != nil || len(response.Errors) != 0 {
+		t.Fatalf("current session response = (%#v, %v)", response, err)
+	}
+	data, _ := json.Marshal(response.Data)
+	if !strings.Contains(string(data), relayid.Encode(relayid.Session, sessionID)) || strings.Contains(string(data), "TokenHash") || sessions.calls != 1 || sessions.actor != "owner" || sessions.id != sessionID {
+		t.Fatalf("current session = %s, lookup=%#v", data, sessions)
+	}
+}
+
+func TestViewerCurrentSessionRejectsUnverifiedOrInvalidMetadata(t *testing.T) {
+	const sessionID = "00000000-0000-4000-8000-000000000001"
+	const otherID = "00000000-0000-4000-8000-000000000002"
+	now := time.Now().UTC().Truncate(time.Second)
+	valid := auth.Session{ID: sessionID, UserID: "owner", CreatedAt: now.Add(-time.Hour), ExpiresAt: now.Add(time.Hour)}
+	revoked := now.Add(-time.Minute)
+	for _, tc := range []struct {
+		name     string
+		verified string
+		session  auth.Session
+		err      error
+		calls    int
+	}{
+		{name: "missing trusted session", session: valid},
+		{name: "invalid trusted session", verified: "forged", session: valid},
+		{name: "foreign user", verified: sessionID, session: auth.Session{ID: sessionID, UserID: "other", ExpiresAt: now.Add(time.Hour)}, calls: 1},
+		{name: "different session", verified: sessionID, session: auth.Session{ID: otherID, UserID: "owner", ExpiresAt: now.Add(time.Hour)}, calls: 1},
+		{name: "revoked", verified: sessionID, session: auth.Session{ID: sessionID, UserID: "owner", ExpiresAt: now.Add(time.Hour), RevokedAt: &revoked}, calls: 1},
+		{name: "expired", verified: sessionID, session: auth.Session{ID: sessionID, UserID: "owner", ExpiresAt: now.Add(-time.Second)}, calls: 1},
+		{name: "not found", verified: sessionID, err: auth.ErrNotFound, calls: 1},
+		{name: "internal lookup", verified: sessionID, err: errors.New("private database detail"), calls: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := ContextWithVerifiedViewer(context.Background(), "owner")
+			if tc.verified != "" {
+				ctx = ContextWithVerifiedSessionID(ctx, tc.verified)
+			}
+			users := &viewerUserPort{value: subjects.User{ID: "owner", Status: subjects.UserStatusActive}}
+			sessions := &viewerCurrentSessionPort{value: tc.session, err: tc.err}
+			response, err := viewerGraphQLClient(ctx, NodeServices{ViewerUsers: users, Sessions: sessions}).RawPost(`query { viewer { currentSession { id } } }`)
+			if err != nil || len(response.Errors) == 0 || sessions.calls != tc.calls {
+				t.Fatalf("response = (%#v, %v), lookups=%d", response, err, sessions.calls)
+			}
+			data, _ := json.Marshal(response.Data)
+			if strings.Contains(string(data), relayid.Encode(relayid.Session, sessionID)) || strings.Contains(string(response.Errors), "private database detail") {
+				t.Fatalf("session or internal detail leaked: data=%s errors=%s", data, response.Errors)
+			}
+		})
+	}
+}
+
 func (port *viewerSessionPagePort) ListSessionsPage(_ context.Context, actor string, after *auth.SessionCursor, first int) ([]auth.Session, error) {
 	port.actor, port.after, port.first, port.calls = actor, after, first, port.calls+1
 	return port.items, port.err
@@ -82,7 +152,7 @@ func TestViewerAnonymousAndFailedAuthenticationStayDistinct(t *testing.T) {
 		{"failed authentication", ContextWithFailedAuthentication(context.Background()), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			response, err := viewerGraphQLClient(tc.ctx, NodeServices{ViewerUsers: users}).RawPost(`query { viewer { user { id } } }`)
+			response, err := viewerGraphQLClient(tc.ctx, NodeServices{ViewerUsers: users}).RawPost(`query { viewer { user { id } currentSession { id } } }`)
 			if err != nil {
 				t.Fatal(err)
 			}

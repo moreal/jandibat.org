@@ -3,6 +3,19 @@
 API 계약 변경 시 이 파일과 GraphQL SDL(도메인) 또는 `openapi/jandibat.yaml`(HTTP edge)을 같은 변경에 포함합니다.
 각 항목에는 날짜, 호환성, 영향받는 operation/schema, 백엔드·프론트엔드 후속 작업을 기록합니다.
 
+## 2026-09-24 — Viewer 현재 세션 투영
+
+호환성: GraphQL `Viewer.currentSession: Session!`을 추가하는 additive 변경입니다.
+현재 세션은 sessions cursor 페이지의 위치와 무관하게 검증된 요청 세션 ID에서 조회하며,
+다른 사용자의 세션과 폐기·만료된 세션은 반환하지 않습니다.
+
+- 세션 토큰·cookie·token hash는 이 필드나 Relay store에 포함하지 않습니다.
+- Backend: GraphQL HTTP 경계가 확인한 세션 ID와 Viewer 사용자 ID를 함께 사용해
+  owner-scoped 세션을 조회합니다.
+- Frontend: REST 현재 세션 조회를 이 필드로 이전하고, 인증 전환 시 normalized store를
+  먼저 교체한 뒤 새 Viewer를 조회합니다.
+- Coordination: SDL·gqlgen·Relay 생성물 drift 및 비소유자 회귀 테스트를 확인합니다.
+
 ## 2026-09-24 — CustomProvider HTTP 수집 식별자
 
 호환성: GraphQL `CustomProvider`에 owner-scoped `ingestProviderID: String!`을 추가하는

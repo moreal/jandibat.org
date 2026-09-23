@@ -177,6 +177,11 @@ func (r *viewerResolver) Settings(ctx context.Context, obj *model.Viewer) (*mode
 	return resolveViewerSettings(ctx, obj)
 }
 
+// CurrentSession is the resolver for the currentSession field.
+func (r *viewerResolver) CurrentSession(ctx context.Context, obj *model.Viewer) (*model.Session, error) {
+	return r.resolveCurrentSession(ctx, obj)
+}
+
 // Subjects is the resolver for the subjects field.
 func (r *viewerResolver) Subjects(ctx context.Context, obj *model.Viewer, first *int, after *scalar.Cursor) (*model.SubjectConnection, error) {
 	return resolveViewerSubjects(ctx, obj, first, after)

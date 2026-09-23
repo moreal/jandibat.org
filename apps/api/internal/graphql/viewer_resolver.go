@@ -48,6 +48,26 @@ func optionalDateTime(value *time.Time) *scalar.DateTime {
 	return &converted
 }
 
+func (r *viewerResolver) resolveCurrentSession(ctx context.Context, viewer *model.Viewer) (*model.Session, error) {
+	identity, _ := ctx.Value(viewerContextKey{}).(viewerIdentity)
+	currentID, _ := ctx.Value(verifiedSessionIDContextKey{}).(string)
+	if identity.failed || identity.userID == "" || viewer == nil || viewer.User == nil || viewer.User.ID != identity.userID || currentID == "" {
+		return nil, errNodeAuthentication
+	}
+	services, _ := ctx.Value(nodeServicesContextKey{}).(NodeServices)
+	if services.Sessions == nil {
+		return nil, errNodeLookup
+	}
+	session, err := services.Sessions.GetSessionByID(ctx, identity.userID, currentID)
+	if err != nil {
+		return nil, redactCurrentSessionMutationError(err)
+	}
+	if !ownedAccountSession(session, identity.userID, currentID) || session.RevokedAt != nil || !time.Now().UTC().Before(session.ExpiresAt) {
+		return nil, errNodeAuthentication
+	}
+	return projectSession(session), nil
+}
+
 func (r *viewerResolver) resolveSessions(ctx context.Context, viewer *model.Viewer, first *int, after *scalar.Cursor) (*model.SessionConnection, error) {
 	identity, _ := ctx.Value(viewerContextKey{}).(viewerIdentity)
 	if identity.failed || identity.userID == "" || viewer == nil || viewer.User == nil || viewer.User.ID != identity.userID {

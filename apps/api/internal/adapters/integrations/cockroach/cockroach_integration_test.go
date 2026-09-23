@@ -83,6 +83,7 @@ VALUES ($1, $1, 'Consent integration', 'subject', $2, $3, $3)`, environmentID, s
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cleanupCancel()
+		_, _ = db.ExecContext(cleanupCtx, `DELETE FROM provider_token_revocation_jobs WHERE connection_id = $1`, connectionID)
 		_, _ = db.ExecContext(cleanupCtx, `DELETE FROM provider_connections WHERE id = $1`, connectionID)
 		_, _ = db.ExecContext(cleanupCtx, `DELETE FROM environments WHERE id = $1`, environmentID)
 		_, _ = db.ExecContext(cleanupCtx, `DELETE FROM subjects WHERE id = $1`, subjectID)
@@ -253,6 +254,88 @@ FROM provider_connections WHERE id = $1`, connectionID).Scan(&credentialColumnsN
 	workerUpdated, err := generatedStore.GetConnection(ctx, connectionID)
 	if err != nil || workerUpdated.Connection.LastSyncedAt == nil || !workerUpdated.Connection.LastSyncedAt.Equal(syncedAt) {
 		t.Fatalf("worker sync state = (%+v, %v)", workerUpdated.Connection, err)
+	}
+	err = appdb.InTx(ctx, apiPool, appdb.RetryOptions{}, func(txctx context.Context, _ pgx.Tx) error {
+		revoked, err := generatedStore.RevokeConnectionAggregate(txctx, connectionID, syncedAt.Add(time.Second))
+		if err != nil || revoked.Status != integrations.ConnectionRevoked {
+			return fmt.Errorf("transactional revoke = (%+v, %v)", revoked, err)
+		}
+		inside, err := generatedStore.GetConnection(txctx, connectionID)
+		if err != nil || inside.Connection.Status != integrations.ConnectionRevoked {
+			return fmt.Errorf("revoke read in transaction = (%+v, %v)", inside.Connection, err)
+		}
+		return rollbackProbe
+	})
+	if !errors.Is(err, rollbackProbe) {
+		t.Fatalf("rollback revoke probe = %v", err)
+	}
+	outsideRevoke, err := generatedStore.GetConnection(ctx, connectionID)
+	if err != nil || outsideRevoke.Connection.Status != integrations.ConnectionActive {
+		t.Fatalf("connection after revoke rollback = (%+v, %v)", outsideRevoke.Connection, err)
+	}
+	oauthRecord := record
+	oauthRecord.Connection.AuthMethod = integrations.AuthOAuth2
+	oauthRecord.Connection.PrivateDataEnabled = true
+	oauthRecord.Connection.UpdatedAt = syncedAt.Add(2 * time.Second)
+	oauthRecord.Credentials.AccessToken = []byte("opaque-test-ciphertext")
+	if err := generatedStore.SaveConnection(ctx, oauthRecord); err != nil {
+		t.Fatalf("prepare OAuth revocation: %v", err)
+	}
+	err = appdb.InTx(ctx, apiPool, appdb.RetryOptions{}, func(txctx context.Context, _ pgx.Tx) error {
+		if _, err := generatedStore.RevokeConnectionAggregate(txctx, connectionID, syncedAt.Add(3*time.Second)); err != nil {
+			return err
+		}
+		inside, err := generatedStore.GetConnection(txctx, connectionID)
+		if err != nil || len(inside.Credentials.AccessToken) != 0 || inside.Connection.PrivateDataEnabled {
+			return fmt.Errorf("transactional OAuth sanitation = (%+v, %v)", inside.Connection, err)
+		}
+		return rollbackProbe
+	})
+	if !errors.Is(err, rollbackProbe) {
+		t.Fatalf("rollback OAuth revocation = %v", err)
+	}
+	var queuedAfterRollback int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM provider_token_revocation_jobs WHERE connection_id=$1`, connectionID).Scan(&queuedAfterRollback); err != nil || queuedAfterRollback != 0 {
+		t.Fatalf("OAuth queue after rollback = (%d, %v)", queuedAfterRollback, err)
+	}
+	if _, err := generatedStore.RevokeConnectionAggregate(ctx, connectionID, syncedAt.Add(4*time.Second)); err != nil {
+		t.Fatalf("commit OAuth revocation: %v", err)
+	}
+	var queuedAfterCommit int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM provider_token_revocation_jobs WHERE connection_id=$1 AND token_ciphertext IS NOT NULL`, connectionID).Scan(&queuedAfterCommit); err != nil || queuedAfterCommit != 1 {
+		t.Fatalf("OAuth queue after commit = (%d, %v)", queuedAfterCommit, err)
+	}
+	committedRevoke, err := generatedStore.GetConnection(ctx, connectionID)
+	if err != nil || committedRevoke.Connection.Status != integrations.ConnectionRevoked || len(committedRevoke.Credentials.AccessToken) != 0 {
+		t.Fatalf("connection after OAuth revoke = (%+v, %v)", committedRevoke.Connection, err)
+	}
+	jobID := "9f12d033-5086-4923-9d6a-" + suffix
+	if _, err := db.ExecContext(ctx, `INSERT INTO provider_sync_jobs (id, provider_connection_id, subject_id, environment_id, status) VALUES ($1, $2, $3, $4, 'queued')`, jobID, connectionID, subjectID, environmentID); err != nil {
+		t.Fatalf("prepare sync purge: %v", err)
+	}
+	err = appdb.InTx(ctx, apiPool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
+		if err := generatedStore.PurgeConnectionData(txctx, connectionID); err != nil {
+			return err
+		}
+		var insideJobs int
+		if err := tx.QueryRow(txctx, `SELECT count(*) FROM provider_sync_jobs WHERE id=$1`, jobID).Scan(&insideJobs); err != nil || insideJobs != 0 {
+			return fmt.Errorf("jobs after transactional purge = (%d, %v)", insideJobs, err)
+		}
+		return rollbackProbe
+	})
+	if !errors.Is(err, rollbackProbe) {
+		t.Fatalf("rollback connection purge = %v", err)
+	}
+	var jobsAfterRollback int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM provider_sync_jobs WHERE id=$1`, jobID).Scan(&jobsAfterRollback); err != nil || jobsAfterRollback != 1 {
+		t.Fatalf("jobs after purge rollback = (%d, %v)", jobsAfterRollback, err)
+	}
+	if err := generatedStore.PurgeConnectionData(ctx, connectionID); err != nil {
+		t.Fatalf("commit connection purge: %v", err)
+	}
+	var jobsAfterCommit int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM provider_sync_jobs WHERE id=$1`, jobID).Scan(&jobsAfterCommit); err != nil || jobsAfterCommit != 0 {
+		t.Fatalf("jobs after committed purge = (%d, %v)", jobsAfterCommit, err)
 	}
 }
 

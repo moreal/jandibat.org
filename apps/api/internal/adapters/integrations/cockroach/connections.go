@@ -392,6 +392,33 @@ func (s *Store) PurgeConnectionData(ctx context.Context, id string) error {
 	if id == "" {
 		return integrations.ErrEmptyConnectionID
 	}
+	if s.pool != nil {
+		parsed, err := uuid.Parse(id)
+		if err != nil {
+			return integrations.ErrInvalidIdentifier
+		}
+		return appdb.InTx(ctx, s.pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
+			row, err := generated.LockConnectionForRevocation(txctx, tx, parsed)
+			if err != nil {
+				return fmt.Errorf("purge connection data: load aggregate: %w", err)
+			}
+			if row == nil {
+				return notFound("connection", id)
+			}
+			if integrations.ConnectionStatus(row.ConnectionStatus) != integrations.ConnectionRevoked {
+				return integrations.ErrInvalidConnectionStatus
+			}
+			if integrations.AuthMethod(row.AuthMethod) != integrations.AuthNone {
+				if err := generated.PurgeConnectionFacts(txctx, tx, row.SubjectId, row.EnvironmentId); err != nil {
+					return fmt.Errorf("purge connection data: purge facts: %w", err)
+				}
+			}
+			if err := generated.PurgeConnectionSyncJobs(txctx, tx, parsed); err != nil {
+				return fmt.Errorf("purge connection data: purge sync jobs: %w", err)
+			}
+			return nil
+		})
+	}
 	ctx, scope, err := s.beginMutation(ctx)
 	if err != nil {
 		return fmt.Errorf("purge connection data: begin transaction: %w", err)

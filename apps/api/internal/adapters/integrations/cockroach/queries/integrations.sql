@@ -283,3 +283,50 @@ WHERE custom_provider_id = $1::UUID OR (subject_id = $2::STRING AND environment_
 -- @name DeleteCustomProviderByID
 -- @returns :exec_result
 DELETE FROM custom_providers WHERE id = $1::UUID;
+
+-- @name LockConnectionForRevocation
+-- @returns :opt
+SELECT provider_connections.id::STRING AS id, subject_id,
+  COALESCE(sync_cursor->>'provider_id', '') AS provider_id,
+  environment_id, auth_method, COALESCE(external_account_id, '') AS external_account_id,
+  COALESCE(sync_cursor->>'external_account_login', '') AS external_account_login,
+  COALESCE(sync_cursor->>'connection_status', status) AS connection_status,
+  COALESCE(array_to_json(scopes), '[]'::JSON) AS scopes_json,
+  access_token_ciphertext, refresh_token_ciphertext, token_expires_at,
+  last_synced_at,
+  NULLIF(sync_cursor->>'last_sync_attempt_at', '')::TIMESTAMPTZ AS last_sync_attempt_at,
+  NULLIF(sync_cursor->>'next_sync_attempt_at', '')::TIMESTAMPTZ AS next_sync_attempt_at,
+  COALESCE((sync_cursor->>'last_sync_attempt')::INT, 0) AS last_sync_attempt,
+  COALESCE((sync_cursor->>'consecutive_failures')::INT, 0) AS consecutive_failures,
+  COALESCE(last_error, '') AS last_error, created_at, updated_at,
+  EXISTS (
+    SELECT 1 FROM provider_connection_private_consents AS consent
+    WHERE consent.connection_id = provider_connections.id AND consent.enabled
+  ) AS private_data_enabled
+FROM provider_connections WHERE id = $1::UUID FOR UPDATE;
+
+-- @name EnqueueOAuthTokenRevocation
+-- @returns :exec
+INSERT INTO provider_token_revocation_jobs (
+  connection_id, provider_id, token_ciphertext, token_key_id,
+  status, attempts, available_at, created_at, updated_at
+) VALUES ($1::UUID, $2::STRING, $3::BYTES, NULLIF($4::STRING, ''),
+  'pending', 0, $5::TIMESTAMPTZ, $5::TIMESTAMPTZ, $5::TIMESTAMPTZ);
+
+-- @name SanitizeRevokedConnection
+-- @returns :exec
+UPDATE provider_connections
+SET status = 'revoked', access_token_ciphertext = NULL, access_token_key_id = NULL,
+  refresh_token_ciphertext = NULL, refresh_token_key_id = NULL,
+  token_expires_at = NULL, last_error = NULL, updated_at = $2::TIMESTAMPTZ,
+  sync_cursor = ((COALESCE(sync_cursor, '{}'::JSONB) - 'sync_execution_expires_at') - 'sync_execution_claim_token')
+    || jsonb_build_object('connection_status', 'revoked')
+WHERE id = $1::UUID;
+
+-- @name PurgeConnectionFacts
+-- @returns :exec
+DELETE FROM activity_facts WHERE subject_id = $1::STRING AND environment_id = $2::STRING;
+
+-- @name PurgeConnectionSyncJobs
+-- @returns :exec
+DELETE FROM provider_sync_jobs WHERE provider_connection_id = $1::UUID;

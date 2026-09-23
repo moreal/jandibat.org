@@ -6,6 +6,10 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	generated "github.com/moreal/jandibat.org/apps/api/internal/adapters/integrations/cockroach/generated"
+	appdb "github.com/moreal/jandibat.org/apps/api/internal/database"
 	"github.com/moreal/jandibat.org/apps/api/internal/integrations"
 )
 
@@ -42,6 +46,60 @@ WHERE table_schema = current_schema()
 func (s *Store) RevokeConnectionAggregate(ctx context.Context, id string, now time.Time) (integrations.ProviderConnection, error) {
 	if id == "" {
 		return integrations.ProviderConnection{}, integrations.ErrEmptyConnectionID
+	}
+	if s.pool != nil {
+		parsed, err := uuid.Parse(id)
+		if err != nil {
+			return integrations.ProviderConnection{}, integrations.ErrInvalidIdentifier
+		}
+		var revoked integrations.ProviderConnection
+		err = appdb.InTx(ctx, s.pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
+			row, err := generated.LockConnectionForRevocation(txctx, tx, parsed)
+			if err != nil {
+				return fmt.Errorf("revoke connection: load aggregate: %w", err)
+			}
+			if row == nil {
+				return notFound("connection", id)
+			}
+			record, err := connectionFromGenerated(generated.GetConnectionByIdRow(*row))
+			if err != nil {
+				return fmt.Errorf("revoke connection: load aggregate: %w", err)
+			}
+			connection := &record.Connection
+			if connection.Status != integrations.ConnectionRevoked && connection.AuthMethod == integrations.AuthOAuth2 && len(record.Credentials.AccessToken) != 0 {
+				keyID, keyErr := encryptedCredentialKeyID(record.Credentials.AccessToken)
+				if keyErr != nil {
+					keyID = ""
+				}
+				if err := generated.EnqueueOAuthTokenRevocation(txctx, tx, &parsed, connection.ProviderID, record.Credentials.AccessToken, optionalString(keyID), now); err != nil {
+					return fmt.Errorf("revoke connection: enqueue provider revocation: %w", err)
+				}
+			}
+			if connection.Status != integrations.ConnectionRevoked {
+				if err := generated.SanitizeRevokedConnection(txctx, tx, parsed, now); err != nil {
+					return fmt.Errorf("revoke connection: sanitize connection: %w", err)
+				}
+			}
+			if err := generated.DisableConnectionPrivateConsent(txctx, tx, parsed); err != nil {
+				return fmt.Errorf("revoke connection: remove private data consent: %w", err)
+			}
+			if connection.AuthMethod != integrations.AuthNone {
+				if err := generated.PurgeConnectionFacts(txctx, tx, connection.SubjectID, connection.EnvironmentID); err != nil {
+					return fmt.Errorf("revoke connection: purge facts: %w", err)
+				}
+			}
+			if err := generated.PurgeConnectionSyncJobs(txctx, tx, parsed); err != nil {
+				return fmt.Errorf("revoke connection: purge sync jobs: %w", err)
+			}
+			connection.Status = integrations.ConnectionRevoked
+			connection.LastError = ""
+			connection.TokenExpiresAt = nil
+			connection.PrivateDataEnabled = false
+			connection.UpdatedAt = now
+			revoked = *connection
+			return nil
+		})
+		return revoked, err
 	}
 	ctx, scope, err := s.beginMutation(ctx)
 	if err != nil {

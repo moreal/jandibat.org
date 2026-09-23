@@ -1,0 +1,1 @@
+CREATE TABLE probe_items (id STRING PRIMARY KEY);

@@ -124,16 +124,29 @@
 
           scythe = pkgs.rustPlatform.buildRustPackage {
             pname = "scythe";
-            version = "0.9.0";
+            version = "0.17.0";
             src = pkgs.fetchFromGitHub {
               owner = "Goldziher";
               repo = "scythe";
-              tag = "v0.9.0";
-              hash = "sha256-EfhJ9uRseSc8PDH/svhnFJNGHAPTe4uS1XgiL/SG+Fc=";
+              tag = "v0.17.0";
+              hash = "sha256-DnlaEqSQEqa79fLYF9qsV5VX/g0edevbERwdZOkrajI=";
             };
-            cargoHash = "sha256-Ry5mqeH9pbCPcsUL0GkIo2ulNSo+YaxrV6P8D+T2KlE=";
+            cargoHash = "sha256-MoHMTVUcEagJHG5TU6ugeQ5Vc+z5eY1YwfKAgvQl6zE=";
+            patches = [ ./nix/patches/scythe-cockroach.patch ];
+            nativeCheckInputs = [ pkgs.ruby ];
             cargoBuildFlags = [ "--package=scythe-cli" ];
-            cargoTestFlags = [ "--package=scythe-cli" ];
+            cargoTestFlags = [
+              "--package=scythe-cli"
+              "--package=scythe-core"
+              "--package=scythe-codegen"
+            ];
+            # These two upstream Python-output tests require Goldziher/poly,
+            # which is not part of the generator runtime. Keep all other CLI
+            # tests; this repository checks emitted Go and live SQL separately.
+            checkFlags = [
+              "--skip=report_generated_code_validation_returns_true_on_a_real_tool_failure"
+              "--skip=generate_validate_output_reports_validated_when_the_tool_is_present"
+            ];
             preCheck = ''
               cargo run --offline --package test-generator -- \
                 --fixtures testing_data \
@@ -201,6 +214,16 @@
             nativeBuildInputs = toolchain.shellPackages;
           } ''
             sh ${./nix/flake-interface-test.sh}
+            touch "$out"
+          '';
+          scythe-compatibility = toolchain.pkgs.runCommand "jandibat-scythe-compatibility" {
+            nativeBuildInputs = [ toolchain.scythe ];
+          } ''
+            cp -R ${./nix/fixtures/scythe-cockroach-repro} repro
+            chmod -R u+w repro
+            scythe generate --config repro/scythe.toml
+            grep -Fq 'UPSERT INTO probe_items' repro/generated/queries.go
+            grep -Fq 'type DBTX interface' repro/generated/queries.go
             touch "$out"
           '';
           yarn-dependencies = toolchain.yarnDeps.webDependencies;

@@ -4,6 +4,27 @@
 > 대체됨. 아래 내용은 과거 의사결정 기록이다. 새 구현은 공식 원본 Scythe의 CockroachDB +
 > Go pgx 지원을 먼저 검증하고, 확인된 결함에만 저장소 로컬 Nix patch를 적용한다.
 
+## 2026-09-23 구현 진행 기록
+
+- 단일 baseline `db/migrations/0001_baseline.sql`과 공식 Scythe v0.17.0의
+  `cockroachdb` / `go-pgx` 엔진을 기준으로 한다. 정적 SQL은 Scythe가 생성한
+  pgx 함수로 전환하며, 동적 식별자는 별도 allowlist를 적용한다.
+- 공식 원본 v0.9.0과 v0.17.0 모두 최소 `UPSERT` fixture를 파싱하지 못했다.
+  v0.17.0의 live check는 최소 단일 테이블 CockroachDB에서
+  `pg_class/schema_rank`를 int4로 읽다가 panic했다. 원본 Go 생성 함수는
+  `*pgxpool.Pool`만 받아 트랜잭션 안에서 호출할 수 없었다.
+- 이 세 결함만 `nix/patches/scythe-cockroach.patch`에서 보정한다. 파서용 SQL만
+  `UPSERT`를 `INSERT`로 해석하고 실행 SQL은 보존하며, catalog rank의 int4/int8을
+  모두 허용하고, 생성 함수는 pool과 `pgx.Tx`가 구현하는 `DBTX`를 받는다.
+- `nix/fixtures/scythe-cockroach-repro/`는 앱 코드가 없는 최소 재현이고,
+  `nix build .#checks.<system>.scythe-compatibility`가 생성 결과를 강제한다.
+  실제 DB 검증은 `make sql-check-live`와 Go integration test로 수행한다.
+- 해당 보정이 포함된 공식 Scythe release가 나오고 위 Nix check 및 실제 DB
+  검증이 원본에서 통과할 때 local patch를 제거한다. upstream issue/PR은 아직
+  작성하지 않았다. 외부 저장소에 쓰기 전에 별도 조율이 필요하다.
+
+아래 의사결정은 이전 `database/sql` 구현의 기록이며 현재 전환 목표가 아니다.
+
 최종 갱신일: 2026-08-12
 
 ## 배경

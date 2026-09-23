@@ -1,0 +1,12 @@
+[scythe]
+version = "1"
+
+[[sql]]
+name = "cockroach-upsert"
+engine = "cockroachdb"
+schema = ["schema.sql"]
+queries = ["queries.sql"]
+
+[[sql.gen]]
+backend = "go-pgx"
+output = "generated"

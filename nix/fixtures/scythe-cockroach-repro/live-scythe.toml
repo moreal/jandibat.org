@@ -1,0 +1,12 @@
+[scythe]
+version = "1"
+
+[[sql]]
+name = "cockroach-live"
+engine = "cockroachdb"
+schema = ["live-schema.sql"]
+queries = ["live-queries.sql"]
+
+[[sql.gen]]
+backend = "go-pgx"
+output = "live-generated"

@@ -1,7 +1,7 @@
 YARN ?= corepack yarn
 COCKROACH_DATABASE ?= jandibat
 
-.PHONY: install check ci nix-check ci-nix-gates-test tool-versions dev-web build-web test-web test-sdk typecheck typecheck-web typecheck-sdk dev-api dev-worker dev-maintenance test-api test-api-race test-api-integration vet-api lint-api openapi-lint openapi-types openapi-check contract-change-check ci-version-authority-check secret-scan shell-check security-review-check security-review-gate security-review-validator-test audit-verifier-test restore-verifier-test migration-atomicity-test load-check security-smoke monitoring-check staging-compose-check deploy-staging rollback-rehearsal retention-dry-run retention-execute credential-reencrypt-dry-run credential-reencrypt-execute verify-deletion verify-audit-log db-up db-down db-logs db-shell db-wait db-migrate db-migrate-url db-configure-runtime-roles db-runtime-roles-test db-backup db-backup-schedule db-restore-verify
+.PHONY: install check ci nix-check ci-nix-gates-test tool-versions sql-generate sql-check sql-check-live dev-web build-web test-web test-sdk typecheck typecheck-web typecheck-sdk dev-api dev-worker dev-maintenance test-api test-api-race test-api-integration vet-api lint-api openapi-lint openapi-types openapi-check contract-change-check ci-version-authority-check secret-scan shell-check security-review-check security-review-gate security-review-validator-test audit-verifier-test restore-verifier-test migration-atomicity-test load-check security-smoke monitoring-check staging-compose-check deploy-staging rollback-rehearsal retention-dry-run retention-execute credential-reencrypt-dry-run credential-reencrypt-execute verify-deletion verify-audit-log db-up db-down db-logs db-shell db-wait db-migrate db-migrate-url db-configure-runtime-roles db-runtime-roles-test db-backup db-backup-schedule db-restore-verify
 
 install:
 	$(YARN) install --immutable
@@ -25,6 +25,16 @@ tool-versions:
 	staticcheck -version
 	exhaustive -V=full
 	go-check-sumtype -V=full
+
+sql-generate:
+	scythe generate --config scythe.toml
+
+sql-check:
+	scythe check --config scythe.toml
+
+sql-check-live:
+	@test -n "$$SCYTHE_DATABASE_URL" || (echo "SCYTHE_DATABASE_URL is required" >&2; exit 2)
+	@scythe check --config scythe.toml --database-url "$$SCYTHE_DATABASE_URL"
 
 dev-web:
 	$(YARN) dev:web

@@ -34,3 +34,7 @@ deploy/**/.current-images*
 dist/
 build/
 coverage/
+
+# Scythe's minimized compatibility fixture output is disposable.
+nix/fixtures/scythe-cockroach-repro/generated/
+nix/fixtures/scythe-cockroach-repro/live-generated/

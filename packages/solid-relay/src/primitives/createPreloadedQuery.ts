@@ -1,5 +1,5 @@
 import { __internal, type GraphQLTaggedNode, getRequest, type OperationType } from "relay-runtime";
-import { createEffect, createResource, onCleanup } from "solid-js";
+import { createEffect, createMemo, createSignal } from "solid-js";
 import invariant from "tiny-invariant";
 import type { PreloadedQuery } from "../loadQuery";
 import { useRelayEnvironment } from "../RelayEnvironment";
@@ -32,32 +32,54 @@ export function createPreloadedQuery<TQuery extends OperationType>(
 	preloadedQuery: MaybeAccessor<MaybePromise<PreloadedQuery<TQuery> | null | undefined>>,
 ): DataStore<TQuery["response"] | null | undefined> {
 	const environment = useRelayEnvironment();
-	const [maybePreloaded] = createResource(
+	const [maybePreloaded, setMaybePreloaded] = createSignal<PreloadedQuery<TQuery> | null | undefined>();
+	const [preloadError, setPreloadError] = createSignal<{ value: unknown } | undefined>();
+	createEffect(
 		() => access(preloadedQuery),
-		(v) => v,
+		(value) => {
+			let active = true;
+			let current: PreloadedQuery<TQuery> | null | undefined;
+			setMaybePreloaded(undefined);
+			setPreloadError(undefined);
+			const accept = (resolved: PreloadedQuery<TQuery> | null | undefined) => {
+				if (!active) {
+					resolved?.controls?.value.dispose();
+					return;
+				}
+				current = resolved;
+				setMaybePreloaded(() => resolved);
+			};
+			if (value instanceof Promise) {
+				void value.then(accept, (error: unknown) => {
+					if (active) setPreloadError({ value: error });
+				});
+			} else {
+				accept(value);
+			}
+			return () => {
+				active = false;
+				current?.controls?.value.dispose();
+			};
+		},
 	);
+	const resolvedPreloaded = createMemo(() => {
+		const error = preloadError();
+		if (error) throw error.value;
+		return maybePreloaded();
+	});
 	const operation = createMemoOperationDescriptor(
 		query,
-		() => maybePreloaded.latest?.variables,
-		() => maybePreloaded.latest?.networkCacheConfig ?? undefined,
+		() => resolvedPreloaded()?.variables,
+		() => resolvedPreloaded()?.networkCacheConfig ?? undefined,
 	);
-
-	createEffect(() => {
-		const preloaded = maybePreloaded.latest;
-		if (preloaded) {
-			onCleanup(() => {
-				preloaded.controls?.value.dispose();
-			});
-		}
-	});
 
 	return createLazyLoadQueryInternal({
 		query: operation,
 		fragment: () => getRequest(query).fragment,
-		fetchKey: () => maybePreloaded.latest?.fetchKey,
-		fetchPolicy: () => maybePreloaded.latest?.fetchPolicy,
+		fetchKey: () => resolvedPreloaded()?.fetchKey,
+		fetchPolicy: () => resolvedPreloaded()?.fetchPolicy,
 		fetchObservable: () => {
-			const preloaded = maybePreloaded.latest;
+			const preloaded = resolvedPreloaded();
 			const op = operation();
 			if (!preloaded || !op) return;
 

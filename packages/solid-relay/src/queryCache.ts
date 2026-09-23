@@ -1,8 +1,9 @@
 import type { Disposable, IEnvironment } from "relay-runtime";
-import type { Resource } from "solid-js";
+import type { Accessor } from "solid-js";
 
 export type QueryCacheEntry = {
-	resource: Resource<unknown>;
+	resource: object;
+	error?: Accessor<unknown>;
 	retain: (environment: IEnvironment) => Disposable;
 };
 

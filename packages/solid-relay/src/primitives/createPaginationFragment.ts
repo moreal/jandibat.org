@@ -17,8 +17,8 @@ import {
 	type SingularReaderSelector,
 	type VariablesOf,
 } from "relay-runtime";
-import { KeyType, KeyTypeData } from "relay-runtime/lib/store/FragmentTypes";
-import { type Accessor, batch, createEffect, createMemo, createSignal, untrack } from "solid-js";
+import type { KeyType, KeyTypeData } from "relay-runtime/store/RelayStoreTypes.js";
+import { type Accessor, createEffect, createMemo, createSignal, untrack } from "solid-js";
 import invariant from "tiny-invariant";
 import { useRelayEnvironment } from "../RelayEnvironment";
 import { createFetchTracker } from "../utils/createFetchTracker";
@@ -157,14 +157,7 @@ function createLoadMore<TQuery extends OperationType, TKey extends KeyType>({
 	const environment = useRelayEnvironment();
 	const [isLoadingMore, reallySetIsLoadingMore] = createSignal(false);
 	const setIsLoadingMore = (value: boolean) => {
-		const schedule = untrack(environment).getScheduler()?.schedule;
-		if (schedule) {
-			schedule(() => {
-				reallySetIsLoadingMore(value);
-			});
-		} else {
-			reallySetIsLoadingMore(value);
-		}
+		reallySetIsLoadingMore(value);
 	};
 	const { isFetching, startFetch, disposeFetch, completeFetch } = createFetchTracker();
 	const { identifierInfo } = getRefetchMetadata(fragmentNode, componentDisplayName);
@@ -175,9 +168,11 @@ function createLoadMore<TQuery extends OperationType, TKey extends KeyType>({
 	);
 
 	const isMounted = useIsMounted();
-	const [mirroredEnvironment, setMirroredEnvironment] = createSignal(environment());
+	const [mirroredEnvironment, setMirroredEnvironment] = createSignal(untrack(environment), {
+		ownedWrite: true,
+	});
 	const [mirroredFragmentIdentifier, setMirroredFragmentIdentifier] =
-		createSignal(fragmentIdentifier());
+		createSignal(untrack(fragmentIdentifier), { ownedWrite: true });
 
 	const isParentQueryActive = useIsOperationNodeActive(fragmentNode, fragmentRef);
 
@@ -186,16 +181,20 @@ function createLoadMore<TQuery extends OperationType, TKey extends KeyType>({
 			environment() !== mirroredEnvironment() ||
 			fragmentIdentifier() !== mirroredFragmentIdentifier(),
 	);
-	createEffect(() => {
-		if (shouldReset()) {
-			batch(() => {
-				disposeFetch();
-				setIsLoadingMore(false);
-				setMirroredEnvironment(untrack(environment));
-				setMirroredFragmentIdentifier(untrack(fragmentIdentifier));
-			});
-		}
-	});
+	createEffect(
+		() => ({
+			shouldReset: shouldReset(),
+			environment: environment(),
+			fragmentIdentifier: fragmentIdentifier(),
+		}),
+		({ shouldReset, environment, fragmentIdentifier }) => {
+			if (!shouldReset) return;
+			disposeFetch();
+			setIsLoadingMore(false);
+			setMirroredEnvironment(environment);
+			setMirroredFragmentIdentifier(fragmentIdentifier);
+		},
+	);
 
 	const connectionState = createMemo(() =>
 		getConnectionState(direction, fragmentNode, fragmentData.latest, connectionPathInFragmentData),

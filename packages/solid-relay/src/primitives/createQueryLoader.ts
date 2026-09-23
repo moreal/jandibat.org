@@ -7,7 +7,7 @@ import {
 	type PreloadableConcreteRequest,
 	type VariablesOf,
 } from "relay-runtime";
-import { type Accessor, createEffect, createSignal, onCleanup, untrack } from "solid-js";
+import { type Accessor, createEffect, createSignal, untrack } from "solid-js";
 import { type LoadQueryOptions, loadQuery, type PreloadedQuery } from "../loadQuery";
 import { useRelayEnvironment } from "../RelayEnvironment";
 import { useIsMounted } from "../utils/useIsMounted";
@@ -51,9 +51,8 @@ export function createQueryLoader<TQuery extends OperationType>(
 		PreloadedQuery<TQuery> | NullQueryReference
 	>(initialQueryReferenceInternal);
 
-	createEffect(() => {
-		const ref = queryReference();
-		onCleanup(() => {
+	createEffect(queryReference, (ref) => {
+		return () => {
 			if ("controls" in ref) {
 				if (requestIsLiveQuery(preloadableRequest)) {
 					ref.controls?.value.dispose();
@@ -61,7 +60,7 @@ export function createQueryLoader<TQuery extends OperationType>(
 					ref.controls?.value.releaseQuery();
 				}
 			}
-		});
+		};
 	});
 
 	return [

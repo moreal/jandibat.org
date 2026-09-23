@@ -1,6 +1,10 @@
-import { type Accessor, type Resource, untrack } from "solid-js";
-import { createStore, type SetStoreFunction } from "solid-js/store";
+import { type Accessor, createStore, untrack } from "solid-js";
 import { useDataStores } from "../RelayEnvironment";
+
+export type FieldSetter<T> = <K extends keyof T>(
+	key: K,
+	value: T[K] | ((previous: T[K]) => T[K]),
+) => void;
 
 /**
  * A reactive data store containing the result of a query or fragment.
@@ -37,16 +41,14 @@ export const createDataStore = <
 	},
 >(
 	init: T,
-	resourceAccessor: Accessor<Resource<unknown> | undefined>,
-): [DataStore<T>, SetStoreFunction<T>] => {
+	identityAccessor?: Accessor<object | undefined>,
+): [DataStore<T>, FieldSetter<T>] => {
 	const [store, setStore] = createStableStore(
 		init,
-		untrack(() => resourceAccessor()),
+		untrack(() => identityAccessor?.()),
 	);
 
 	const readData = () => {
-		const resource = resourceAccessor();
-		void resource?.();
 		const error = Reflect.get(store, "error");
 		if (error) throw error;
 		return Reflect.get(store, "data");
@@ -73,13 +75,20 @@ function createStableStore<
 		readonly error: unknown;
 		readonly pending: boolean;
 	},
->(init: T, resource: Resource<unknown> | undefined) {
+>(init: T, identity: object | undefined): [T, FieldSetter<T>] {
 	const stores = useDataStores();
-	if (resource) {
-		const existing = stores?.get(resource);
-		if (existing) return existing as [T, SetStoreFunction<T>];
+	if (identity) {
+		const existing = stores?.get(identity);
+		if (existing) return existing as [T, FieldSetter<T>];
 	}
-	const store = createStore(init);
-	if (resource) stores?.set(resource, store);
-	return store;
+	const store = createStore<T>(init as never);
+	const setField: FieldSetter<T> = (key, value) => {
+		store[1]((current) => ({
+			...current,
+			[key]: typeof value === "function" ? (value as (previous: T[typeof key]) => T[typeof key])(current[key]) : value,
+		}));
+	};
+	const result: [T, FieldSetter<T>] = [store[0] as T, setField];
+	if (identity) stores?.set(identity, result);
+	return result;
 }

@@ -4,20 +4,19 @@ import {
 	createComponent,
 	createContext,
 	createMemo,
-	type JSXElement,
-	type Resource,
+	type Element,
 	useContext,
 } from "solid-js";
 import invariant from "tiny-invariant";
 
 interface Props {
-	children?: JSXElement;
+	children?: Element;
 	environment: IEnvironment;
 }
 
 const RelayContext = createContext<{
 	environment: Accessor<IEnvironment>;
-	dataStores: WeakMap<Resource<unknown>, unknown>;
+	dataStores: WeakMap<object, unknown>;
 }>();
 
 /**
@@ -26,14 +25,15 @@ const RelayContext = createContext<{
  * Wrap your application (or route subtree) with this provider before calling
  * primitives such as `createLazyLoadQuery`, `createFragment`, or `createMutation`.
  */
-export function RelayEnvironmentProvider(props: Props): JSXElement {
+export function RelayEnvironmentProvider(props: Props): Element {
 	const environment = createMemo(() => props.environment);
+	const dataStores = new WeakMap<object, unknown>();
 
-	return createComponent(RelayContext.Provider, {
+	return createComponent(RelayContext, {
 		get value() {
 			return {
 				environment,
-				dataStores: new WeakMap<Resource<unknown>, unknown>(),
+				dataStores,
 			};
 		},
 		get children() {
@@ -63,7 +63,7 @@ export function useRelayEnvironment(): () => IEnvironment {
 	return context.environment;
 }
 
-export function useDataStores(): WeakMap<Resource<unknown>, unknown> | undefined {
+export function useDataStores(): WeakMap<object, unknown> | undefined {
 	const context = useContext(RelayContext);
 	return context?.dataStores;
 }

@@ -11,7 +11,7 @@ let
 
   yarnOfflineCache = yarn.fetchYarnBerryDeps {
     yarnLock = ../yarn.lock;
-    hash = "sha256-CBjZ3YaSwelIuOzi03bxl3yvq6w1hSHNCWOeojDzJDo=";
+    hash = "sha256-UmV5dKLWeLMwo6fRGkkyGNR6PTi42W0vD5g9YIfVzF8=";
     inherit missingHashes;
   };
 in
@@ -31,6 +31,7 @@ in
         ../apps/web/tools/openapi-typescript-cli
         ../packages/contracts/package.json
         ../packages/custom-provider-sdk/package.json
+        ../packages/solid-relay/package.json
       ];
     };
     inherit yarnOfflineCache;

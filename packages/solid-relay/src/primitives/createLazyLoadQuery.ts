@@ -10,23 +10,12 @@ import {
 	type OperationDescriptor,
 	type OperationType,
 	type ReaderFragment,
-	ReplaySubject,
+	type Subscription,
 	type VariablesOf,
 } from "relay-runtime";
 import { observeFragment } from "relay-runtime/experimental.js";
-import {
-	type Accessor,
-	batch,
-	createComputed,
-	createMemo,
-	createResource,
-	createSignal,
-	onCleanup,
-	Setter,
-	Signal,
-	untrack,
-} from "solid-js";
-import { reconcile } from "solid-js/store";
+import type { KeyType } from "relay-runtime/store/RelayStoreTypes.js";
+import { type Accessor, createEffect, createMemo, createSignal } from "solid-js";
 import { getQueryCache, type QueryCacheEntry } from "../queryCache";
 import { useRelayEnvironment } from "../RelayEnvironment";
 import { access, type MaybeAccessor } from "../utils/access";
@@ -62,7 +51,7 @@ type QueryResult<T> =
  * @param variables - Query variables or an accessor for reactive variables.
  * @param options.fetchPolicy - Query fetch policy.
  * @param options.networkCacheConfig - Network cache configuration.
- * @param options.deferStream - Whether to defer the SSR stream until the data is resolved.
+ * @param options.deferStream - Reserved for API compatibility; this browser build does not stream SSR.
  * @returns A `DataStore` containing the query data state.
  */
 export function createLazyLoadQuery<TQuery extends OperationType>(
@@ -98,6 +87,7 @@ export function createLazyLoadQueryInternal<TQuery extends OperationType>(params
 	fetchObservable: Accessor<Observable<GraphQLResponse> | null | undefined>;
 	fetchKey?: Accessor<string | number | null | undefined>;
 	fetchPolicy?: Accessor<FetchPolicy | undefined>;
+	/** Retained for the upstream API; browser rendering does not use SSR streaming. */
 	deferStream?: boolean;
 }): DataStore<TQuery["response"]> {
 	const environment = useRelayEnvironment();
@@ -142,95 +132,32 @@ export function createLazyLoadQueryInternal<TQuery extends OperationType>(params
 			}
 		})();
 
-		const replaySubject = new ReplaySubject<GraphQLResponse>();
-		let subscriptionTarget = shouldFetch
-			? environment().executeWithSource({
-					operation,
-					source: __internal.fetchQueryDeduped(environment(), operation.request.identifier, () =>
-						Observable.create((sink) => replaySubject.subscribe(sink)),
-					),
-				})
-			: undefined;
-
-		type RecursiveResult = {
-			value: GraphQLResponse;
-			next: Promise<RecursiveResult>;
-		} | null;
-
-		let fetchedInSameEnv = false;
-		const [resource] = createResource<RecursiveResult, Observable<GraphQLResponse>>(
-			() => shouldFetch && params.fetchObservable(),
-			async (observable) => {
-				subscriptionTarget = observable;
-				fetchedInSameEnv = true;
-
-				let pr = Promise.withResolvers<RecursiveResult>();
-				observable.subscribe({
-					next(response) {
-						const nextPr = Promise.withResolvers<RecursiveResult>();
-						pr.resolve({ value: response, next: nextPr.promise });
-						pr = nextPr;
-					},
-					error(error: unknown) {
-						pr.reject(error);
-					},
-					complete() {
-						pr.resolve(null);
-					},
-				});
-				return await pr.promise;
-			},
-			{
-				deferStream: params.deferStream,
-				storage(init) {
-					const [value, setValue] = createSignal(init);
-
-					return [
-						value,
-						(next: Setter<RecursiveResult | undefined>) => {
-							const current = untrack(value);
-							const nextValue = typeof next === "function" ? next(current) : next;
-							let result = nextValue;
-
-							if (!fetchedInSameEnv && nextValue) {
-								void (async () => {
-									try {
-										while (result) {
-											replaySubject.next(result.value);
-											result = await result.next;
-										}
-										replaySubject.complete();
-									} catch (error) {
-										replaySubject.error(error instanceof Error ? error : new Error(String(error)));
-									}
-								})();
-							}
-
-							setValue(() => nextValue);
-						},
-					] as Signal<RecursiveResult | undefined>;
-				},
-			},
-		);
-
 		let entry: QueryCacheEntry | undefined;
 		if (shouldFetch) {
-			const subscription = subscriptionTarget?.subscribe({});
+			const source = params.fetchObservable();
+			const [fetchError, setFetchError] = createSignal<{ value: unknown } | undefined>();
+			let subscription: Subscription | undefined;
 			let retainCount = 0;
 			let retention: Disposable | undefined;
 			entry = {
-				resource,
+				resource: {},
+				error: () => fetchError()?.value,
 				retain: (environment) => {
 					retainCount++;
 					if (retainCount === 1) {
 						retention = environment.retain(operation);
+						// Both ordinary and preloaded sources have already been wired to
+						// Relay's normalization pipeline before reaching this accessor.
+						subscription = source?.subscribe({
+							error: (error: unknown) => setFetchError({ value: error }),
+						});
 					}
 					return {
 						dispose: () => {
 							retainCount = Math.max(retainCount - 1, 0);
 							if (retainCount === 0) {
 								retention?.dispose();
-								if (isLiveQuery()) subscription?.unsubscribe();
+								subscription?.unsubscribe();
 								cache.delete(key);
 							}
 						},
@@ -243,11 +170,10 @@ export function createLazyLoadQueryInternal<TQuery extends OperationType>(params
 		return entry;
 	});
 
-	createComputed(() => {
-		const entry = cacheEntry();
+	createEffect(() => ({ entry: cacheEntry(), env: environment() }), ({ entry, env }) => {
 		if (!entry) return;
-		const retention = entry.retain(environment());
-		onCleanup(retention.dispose);
+		const retention = entry.retain(env);
+		return () => retention.dispose();
 	});
 
 	const [result, setResult] = createDataStore<QueryResult<TQuery["response"]>>(
@@ -259,53 +185,52 @@ export function createLazyLoadQueryInternal<TQuery extends OperationType>(params
 		() => cacheEntry()?.resource,
 	);
 
-	createComputed(() => {
-		batch(() => {
+	createEffect(
+		() => ({
+			operation: params.query(),
+			env: environment(),
+			fragment: params.fragment(),
+			fetchError: cacheEntry()?.error?.(),
+		}),
+		({ operation, env, fragment, fetchError }) => {
 			setResult("data", undefined);
 			setResult("error", undefined);
 			setResult("pending", false);
-
-			const operation = params.query();
-			const env = environment();
+			if (fetchError !== undefined) {
+				setResult("error", fetchError);
+				return;
+			}
 			if (!operation || !env) return;
 
 			setResult("pending", true);
-
 			const fragmentSubscription = observeFragment(
 				env,
-				params.fragment(),
-				getQueryRef(operation),
+				fragment,
+				getQueryRef(operation) as unknown as KeyType<TQuery["response"]>,
 			).subscribe({
 				next(state) {
-					batch(() => {
-						switch (state.state) {
-							case "ok":
-								setResult("error", undefined);
-								setResult("pending", false);
-								setResult(
-									"data",
-									reconcile(cleanSnapshot(state.value), { key: "__id", merge: true }),
-								);
-								break;
-							case "error":
-								setResult("data", undefined);
-								setResult("error", state.error);
-								setResult("pending", false);
-								break;
-							case "loading":
-								setResult("data", undefined);
-								setResult("error", undefined);
-								setResult("pending", true);
-								break;
-						}
-					});
+					switch (state.state) {
+						case "ok":
+							setResult("error", undefined);
+							setResult("pending", false);
+							setResult("data", cleanSnapshot(state.value));
+							break;
+						case "error":
+							setResult("data", undefined);
+							setResult("error", state.error);
+							setResult("pending", false);
+							break;
+						case "loading":
+							setResult("data", undefined);
+							setResult("error", undefined);
+							setResult("pending", true);
+							break;
+					}
 				},
 			});
-			onCleanup(() => {
-				fragmentSubscription.unsubscribe();
-			});
-		});
-	});
+			return () => fragmentSubscription.unsubscribe();
+		},
+	);
 
 	return result;
 }

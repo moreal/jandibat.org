@@ -1,5 +1,5 @@
 import type { Subscription } from "relay-runtime";
-import { createSignal, onCleanup } from "solid-js";
+import { createSignal, onSettled } from "solid-js";
 
 export function createFetchTracker(): {
 	disposeFetch: () => void;
@@ -28,7 +28,7 @@ export function createFetchTracker(): {
 		setIsFetching(false);
 	};
 
-	onCleanup(disposeFetch);
+	onSettled(() => disposeFetch);
 
 	return {
 		disposeFetch,

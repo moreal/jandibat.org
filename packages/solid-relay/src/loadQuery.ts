@@ -21,7 +21,6 @@ import {
 	type Subscription,
 	type VariablesOf,
 } from "relay-runtime";
-import type { RequestIdentifier } from "relay-runtime/lib/util/getRequestIdentifier";
 import { OpaqueReference } from "seroval";
 import invariant from "tiny-invariant";
 
@@ -128,7 +127,7 @@ export function loadQuery<TQuery extends OperationType>(
 
 		const subject = new ReplaySubject<GraphQLResponse>();
 
-		const identifier: RequestIdentifier =
+		const identifier: string =
 			"raw-network-request-" + getRequestIdentifier(params, variables);
 		const observable = __internal.fetchQueryDeduped(environment, identifier, () => {
 			const network = environment.getNetwork();

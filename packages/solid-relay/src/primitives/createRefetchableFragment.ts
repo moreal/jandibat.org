@@ -20,18 +20,16 @@ import {
 	type VariablesOf,
 } from "relay-runtime";
 import { waitForFragmentData } from "relay-runtime/experimental.js";
-import { KeyType, KeyTypeData } from "relay-runtime/lib/store/FragmentTypes";
+import type { KeyType, KeyTypeData } from "relay-runtime/store/RelayStoreTypes.js";
 import {
 	type Accessor,
-	batch,
-	createComputed,
 	createEffect,
 	createMemo,
 	createSignal,
+	snapshot,
 	untrack,
 } from "solid-js";
-import { unwrap } from "solid-js/store";
-import { isServer } from "solid-js/web";
+import { isServer } from "@solidjs/web";
 import { useRelayEnvironment } from "../RelayEnvironment";
 import type { DataStore } from "../utils/dataStore";
 import { getQueryRef } from "../utils/getQueryRef";
@@ -131,7 +129,7 @@ export function createRefetchableFragmentInternal<
 	refetch: RefetchFnDynamic<TQuery, TKey>;
 } {
 	const parentEnvironment = useRelayEnvironment();
-	const parentFragmentRef = () => unwrap(key());
+	const parentFragmentRef = () => snapshot(key());
 	const isMounted = useIsMounted();
 	const fragmentNode = getFragment(fragment);
 	// Outdated type definitions on DT, fix PR: https://github.com/DefinitelyTyped/DefinitelyTyped/pull/71342
@@ -160,68 +158,92 @@ export function createRefetchableFragmentInternal<
 		refetchQuery: OperationDescriptor | null;
 	}>({
 		fetchPolicy: undefined,
-		mirroredEnvironment: parentEnvironment(),
-		mirroredFragmentIdentifier: fragmentIdentifier(),
+		mirroredEnvironment: untrack(parentEnvironment),
+		mirroredFragmentIdentifier: untrack(fragmentIdentifier),
 		onComplete: undefined,
 		refetchEnvironment: null,
 		refetchQuery: null,
-	});
+	}, { ownedWrite: true });
 
 	const environment = createMemo(() => state().refetchEnvironment ?? parentEnvironment());
 
 	const [preloadedQueryRef, loadQuery, disposeQuery] =
 		createQueryLoader<TQuery>(refetchableRequest);
-	const [fragmentRef, setFragmentRef] = createSignal(parentFragmentRef());
-	createComputed(() => {
-		if (untrack(fragmentRef) !== parentFragmentRef()) {
-			setFragmentRef(() => parentFragmentRef());
-		}
+	const [fragmentRefState, setFragmentRefState] = createSignal(
+		{ value: untrack(parentFragmentRef) },
+		{ ownedWrite: true },
+	);
+	const fragmentRef = () => fragmentRefState().value;
+	const setFragmentRef = (value: TKey | null | undefined) => setFragmentRefState({ value });
+	createEffect(parentFragmentRef, (parentRef) => {
+		if (untrack(fragmentRef) !== parentRef) setFragmentRef(parentRef);
 	});
 
-	const refetchObservable = createMemo(() => {
-		const refetchQuery = state().refetchQuery;
-		const preloadedQuery = preloadedQueryRef();
-		if (!refetchQuery || !preloadedQuery) return;
+	const [refetchObservable, setRefetchObservable] = createSignal<ReplaySubject<GraphQLResponse> | undefined>(
+		undefined,
+		{ ownedWrite: true },
+	);
+	createEffect(
+		() => ({
+			refetchQuery: state().refetchQuery,
+			preloadedQuery: preloadedQueryRef(),
+			environment: environment(),
+			onComplete: state().onComplete,
+		}),
+		({ refetchQuery, preloadedQuery, environment, onComplete }) => {
+			setRefetchObservable(undefined);
+			if (!refetchQuery || !preloadedQuery) return;
 
-		const fetchObservable =
-			preloadedQuery.controls?.value.source != null
-				? preloadedQuery.controls.value.source
-				: __internal.fetchQuery(environment(), refetchQuery);
-
-		const replaySubject = new ReplaySubject<GraphQLResponse>();
-		fetchObservable.subscribe({
-			next: (value) => replaySubject.next(value),
-			unsubscribe: () => replaySubject.unsubscribe(),
-			complete() {
-				replaySubject.complete();
-				state().onComplete?.(null);
-			},
-			error(err: Error) {
-				replaySubject.error(err);
-				state().onComplete?.(err);
-			},
-		});
-		return replaySubject;
-	});
-	createComputed(() => {
-		const refetchQuery = state().refetchQuery;
-		if (!refetchQuery) return;
-		const obs = refetchObservable();
-		if (!obs) return;
-		obs.subscribe({
-			async complete() {
-				const data = await waitForFragmentData(
-					environment(),
-					refetchableRequest.fragment,
-					getQueryRef(refetchQuery),
-				);
-				if (!data) return;
-				const refetchedFragmentRef = getValueAtPath(unwrap(data), fragmentRefPathInResponse);
-				if (!refetchedFragmentRef) return;
-				setFragmentRef(unwrap(refetchedFragmentRef));
-			},
-		});
-	});
+			const fetchObservable =
+				preloadedQuery.controls?.value.source != null
+					? preloadedQuery.controls.value.source
+					: __internal.fetchQuery(environment, refetchQuery);
+			const replaySubject = new ReplaySubject<GraphQLResponse>();
+			setRefetchObservable(replaySubject);
+			const subscription = fetchObservable.subscribe({
+				next: (value) => replaySubject.next(value),
+				complete() {
+					replaySubject.complete();
+					onComplete?.(null);
+				},
+				error(err: Error) {
+					replaySubject.error(err);
+					onComplete?.(err);
+				},
+			});
+			return () => {
+				subscription.unsubscribe();
+				replaySubject.unsubscribe();
+			};
+		},
+	);
+	createEffect(
+		() => ({
+			refetchQuery: state().refetchQuery,
+			observable: refetchObservable(),
+			environment: environment(),
+		}),
+		({ refetchQuery, observable, environment }) => {
+			if (!refetchQuery || !observable) return;
+			let active = true;
+			const subscription = observable.subscribe({
+				async complete() {
+					const data = await waitForFragmentData(
+						environment,
+						refetchableRequest.fragment,
+						getQueryRef(refetchQuery) as unknown as KeyType,
+					);
+					if (!active || !data) return;
+					const refetchedFragmentRef = getValueAtPath(snapshot(data), fragmentRefPathInResponse);
+					if (refetchedFragmentRef) setFragmentRef(snapshot(refetchedFragmentRef) as TKey);
+				},
+			});
+			return () => {
+				active = false;
+				subscription.unsubscribe();
+			};
+		},
+	);
 
 	const refetch = (action: {
 		refetchQuery: OperationDescriptor;
@@ -248,19 +270,20 @@ export function createRefetchableFragmentInternal<
 			refetchQuery: null,
 		});
 
-	createEffect(() => {
-		const env = environment();
-		const fragmentIdent = fragmentIdentifier();
-		const shouldReset =
-			env !== state().mirroredEnvironment || fragmentIdent !== state().mirroredFragmentIdentifier;
-		if (shouldReset) {
-			reset({
-				environment: env,
-				fragmentIdentifier: fragmentIdent,
-			});
+	createEffect(
+		() => ({
+			environment: environment(),
+			fragmentIdentifier: fragmentIdentifier(),
+			mirroredEnvironment: state().mirroredEnvironment,
+			mirroredFragmentIdentifier: state().mirroredFragmentIdentifier,
+		}),
+		({ environment, fragmentIdentifier, mirroredEnvironment, mirroredFragmentIdentifier }) => {
+			if (environment === mirroredEnvironment && fragmentIdentifier === mirroredFragmentIdentifier)
+				return;
+			reset({ environment, fragmentIdentifier });
 			disposeQuery();
-		}
-	});
+		},
+	);
 
 	const fragmentData = createFragmentInternal(
 		fragment,
@@ -345,18 +368,16 @@ export function createRefetchableFragmentInternal<
 				force: true,
 			});
 
-			batch(() => {
-				loadQuery(refetchQuery.request.variables, {
-					fetchPolicy,
-					__environment: state().refetchEnvironment,
-				});
+			loadQuery(refetchQuery.request.variables, {
+				fetchPolicy,
+				__environment: state().refetchEnvironment,
+			});
 
-				refetch({
-					fetchPolicy,
-					onComplete,
-					refetchEnvironment: state().refetchEnvironment,
-					refetchQuery,
-				});
+			refetch({
+				fetchPolicy,
+				onComplete,
+				refetchEnvironment: state().refetchEnvironment,
+				refetchQuery,
 			});
 
 			return { dispose: disposeQuery };

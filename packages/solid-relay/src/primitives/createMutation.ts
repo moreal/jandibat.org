@@ -21,34 +21,39 @@ export function createMutation<TMutation extends MutationParameters>(
 	mutation: GraphQLTaggedNode,
 ): [(config: Omit<MutationConfig<TMutation>, "mutation">) => Disposable, Accessor<boolean>] {
 	const environment = useRelayEnvironment();
-	const inFlightMutations = new Set<Disposable>();
+	const inFlightMutations = new Set<object>();
 	const [isMutationInFlight, setIsMutationInFlight] = createSignal(false);
 
-	const cleanup = (disposable: Disposable) => {
-		inFlightMutations.delete(disposable);
+	const cleanup = (token: object) => {
+		inFlightMutations.delete(token);
 		setIsMutationInFlight(inFlightMutations.size > 0);
 	};
 
 	const commit = (config: Omit<MutationConfig<TMutation>, "mutation">) => {
+		const token = {};
+		inFlightMutations.add(token);
 		setIsMutationInFlight(true);
-		const disposable = commitMutation(environment(), {
-			...config,
-			mutation,
-			onCompleted: (response, errors) => {
-				cleanup(disposable);
-				config.onCompleted?.(response, errors);
-			},
-			onError: (error) => {
-				cleanup(disposable);
-				config.onError?.(error);
-			},
-			onUnsubscribe: () => {
-				cleanup(disposable);
-				config.onUnsubscribe?.();
-			},
-		});
-		inFlightMutations.add(disposable);
-		return disposable;
+		try {
+			return commitMutation(environment(), {
+				...config,
+				mutation,
+				onCompleted: (response, errors) => {
+					cleanup(token);
+					config.onCompleted?.(response, errors);
+				},
+				onError: (error) => {
+					cleanup(token);
+					config.onError?.(error);
+				},
+				onUnsubscribe: () => {
+					cleanup(token);
+					config.onUnsubscribe?.();
+				},
+			});
+		} catch (error) {
+			cleanup(token);
+			throw error;
+		}
 	};
 
 	return [commit, isMutationInFlight];

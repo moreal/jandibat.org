@@ -5,14 +5,13 @@ import {
 	type SingularReaderSelector,
 	type Subscription,
 } from "relay-runtime";
-import { KeyType } from "relay-runtime/lib/store/FragmentTypes";
-import { type Accessor, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
+import { type Accessor, createEffect, createMemo, createSignal } from "solid-js";
 import invariant from "tiny-invariant";
 import { useRelayEnvironment } from "../RelayEnvironment";
 
 export function useIsOperationNodeActive(
 	fragmentNode: ReaderFragment,
-	fragmentRef: Accessor<KeyType | null | undefined>,
+	fragmentRef: Accessor<unknown | null | undefined>,
 ): Accessor<boolean> {
 	const environment = useRelayEnvironment();
 	const selector = createMemo(() => getSelector(fragmentNode, fragmentRef()));
@@ -30,9 +29,8 @@ export function useIsOperationNodeActive(
 	});
 	const [isActive, setIsActive] = createSignal(false);
 
-	createEffect(() => {
+	createEffect(() => observable(), (obs) => {
 		let subscription: Subscription | undefined;
-		const obs = observable();
 		setIsActive(obs != null);
 		if (obs != null) {
 			const onCompleteOrError = () => setIsActive(false);
@@ -41,9 +39,9 @@ export function useIsOperationNodeActive(
 				error: onCompleteOrError,
 			});
 		}
-		onCleanup(() => {
+		return () => {
 			subscription?.unsubscribe();
-		});
+		};
 	});
 
 	return isActive;

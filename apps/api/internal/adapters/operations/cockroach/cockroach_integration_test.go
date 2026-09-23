@@ -670,6 +670,74 @@ func TestCockroachDeletionResidualsSeeUncommittedPGXState(t *testing.T) {
 	}
 }
 
+func TestCockroachReencryptionListSeesUncommittedPGXSecret(t *testing.T) {
+	dsn := os.Getenv("JANDIBAT_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("set JANDIBAT_TEST_DATABASE_URL")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pool.Close(); _ = db.Close() })
+	store, err := NewWithPGXPool(db, pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unique := strings.ReplaceAll(time.Now().UTC().Format("150405.000000000"), ".", "")
+	userID, subjectID, environmentID := "scythe-rotate-user-"+unique, "scythe-rotate-subject-"+unique, "scythe:rotate:env:"+unique
+	connectionID := "f37d0f6a-04ae-4e72-b2f3-" + unique[:12]
+	rollback := errors.New("rollback re-encryption fixture")
+	err = appdb.InTx(ctx, pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
+		for _, statement := range []struct {
+			query string
+			args  []any
+		}{
+			{`INSERT INTO users (id,primary_email,status) VALUES ($1,$2,'active')`, []any{userID, unique + "@example.invalid"}},
+			{`INSERT INTO subjects (id,owner_user_id,handle,timezone) VALUES ($1,$2,$3,'UTC')`, []any{subjectID, userID, "rotate-" + unique}},
+			{`INSERT INTO environments (id,key,name,scope,owner_subject_id) VALUES ($1,$1,$1,'subject',$2)`, []any{environmentID, subjectID}},
+			{`INSERT INTO provider_connections (id,subject_id,environment_id,auth_method,status,access_token_ciphertext,access_token_key_id) VALUES ($1::UUID,$2,$3,'oauth2','active',$4,'old-key')`, []any{connectionID, subjectID, environmentID, []byte("opaque-test-ciphertext")}},
+		} {
+			if _, err := tx.Exec(txctx, statement.query, statement.args...); err != nil {
+				return err
+			}
+		}
+		rows, err := store.ListSecretsForReencryption(txctx, operations.SecretLocator{
+			Kind: operations.SecretConnectionAccessToken, ID: "f0000000-0000-4000-8000-000000000000",
+		}, 10)
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			if row.Locator.ID == connectionID && row.Locator.Kind == operations.SecretConnectionAccessToken && row.KeyID == "old-key" {
+				changed, err := store.ReplaceEncryptedSecret(txctx, row, "new-key", []byte("new-test-ciphertext"))
+				if err != nil || !changed {
+					return fmt.Errorf("transactional secret replacement changed=%t err=%v", changed, err)
+				}
+				changed, err = store.ReplaceEncryptedSecret(txctx, row, "another-key", []byte("another-test-ciphertext"))
+				if err != nil || changed {
+					return fmt.Errorf("stale secret replacement changed=%t err=%v", changed, err)
+				}
+				var keyID string
+				if err := tx.QueryRow(txctx, `SELECT access_token_key_id FROM provider_connections WHERE id=$1::UUID`, connectionID).Scan(&keyID); err != nil || keyID != "new-key" {
+					return fmt.Errorf("transactional secret key id=%q err=%v", keyID, err)
+				}
+				return rollback
+			}
+		}
+		return errors.New("uncommitted secret absent from re-encryption page")
+	})
+	if !errors.Is(err, rollback) {
+		t.Fatalf("re-encryption list transaction result=%v", err)
+	}
+}
+
 func TestCockroachOperationsSchemaReadiness(t *testing.T) {
 	dsn := os.Getenv("JANDIBAT_TEST_DATABASE_URL")
 	if dsn == "" {
@@ -1104,7 +1172,15 @@ func TestCockroachReencryptionDryRunAndExecuteReportSourceKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	store, _ := New(db)
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	store, err := NewWithPGXPool(db, pool)
+	if err != nil {
+		t.Fatal(err)
+	}
 	suffix := strings.ReplaceAll(time.Now().UTC().Format("150405.000000000"), ".", "")
 	userID, subjectID := "rekey_user_"+suffix, "rekey_subject_"+suffix
 	environmentID, handle := "rekey:env:"+suffix, "rekey-"+suffix
@@ -1159,7 +1235,7 @@ id, subject_id, environment_id, auth_method, status, access_token_ciphertext, ac
 	}
 	plaintext, err := rotationKeyring.Decrypt(ctx, rotated)
 	if err != nil || keyID != "new-key" || string(plaintext) != "integration-secret" {
-		t.Fatalf("rotated key=%q plaintext=%q err=%v", keyID, plaintext, err)
+		t.Fatalf("rotated key=%q plaintext_matches=%t err=%v", keyID, string(plaintext) == "integration-secret", err)
 	}
 }
 

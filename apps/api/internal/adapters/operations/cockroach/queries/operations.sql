@@ -38,6 +38,51 @@ SELECT deletion_requests.id::STRING AS id, request_id, target_type, target_id, s
 FROM deletion_requests
 WHERE request_id = $1::STRING;
 
+-- @name ListEncryptedSecretsForReencryption
+-- @returns :many
+WITH encrypted_secrets (kind, id, key_id, ciphertext) AS (
+  SELECT 'connection_access_token', id::STRING,
+    COALESCE(access_token_key_id, ''), access_token_ciphertext
+  FROM provider_connections
+  WHERE access_token_ciphertext IS NOT NULL
+  UNION ALL
+  SELECT 'connection_refresh_token', id::STRING,
+    COALESCE(refresh_token_key_id, ''), refresh_token_ciphertext
+  FROM provider_connections
+  WHERE refresh_token_ciphertext IS NOT NULL
+  UNION ALL
+  SELECT 'oauth_revocation_token', id::STRING,
+    COALESCE(token_key_id, ''), token_ciphertext
+  FROM provider_token_revocation_jobs
+  WHERE token_ciphertext IS NOT NULL
+)
+SELECT kind, id, key_id, ciphertext
+FROM encrypted_secrets
+WHERE (kind > $1::STRING OR (kind = $1::STRING AND id > $2::STRING))
+ORDER BY kind, id
+LIMIT $3::INT8;
+
+-- @name ReplaceConnectionAccessToken
+-- @returns :exec_result
+UPDATE provider_connections
+SET access_token_ciphertext = $3::BYTES, access_token_key_id = $4::STRING, updated_at = now()
+WHERE id = $1::UUID AND access_token_ciphertext = $2::BYTES
+  AND COALESCE(access_token_key_id, '') = $5::STRING;
+
+-- @name ReplaceConnectionRefreshToken
+-- @returns :exec_result
+UPDATE provider_connections
+SET refresh_token_ciphertext = $3::BYTES, refresh_token_key_id = $4::STRING, updated_at = now()
+WHERE id = $1::UUID AND refresh_token_ciphertext = $2::BYTES
+  AND COALESCE(refresh_token_key_id, '') = $5::STRING;
+
+-- @name ReplaceOAuthRevocationToken
+-- @returns :exec_result
+UPDATE provider_token_revocation_jobs
+SET token_ciphertext = $3::BYTES, token_key_id = $4::STRING, updated_at = now()
+WHERE id = $1::UUID AND token_ciphertext = $2::BYTES
+  AND COALESCE(token_key_id, '') = $5::STRING;
+
 -- @name CountDeletionResiduals
 -- @returns :one
 SELECT

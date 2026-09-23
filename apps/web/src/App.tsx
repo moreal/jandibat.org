@@ -9,6 +9,9 @@ import {
   type ParentProps,
 } from "solid-js";
 import { AppStateProvider, useAppState } from "./app/state";
+import { defaultApiBaseUrl } from "./api/client";
+import { createRelayEnvironment } from "./relay/environment";
+import { RelayProvider } from "./relay";
 import { loadRuntimeConfig } from "./runtime-config";
 import { Router } from "./router";
 import { migrateLegacyHashLocation } from "./routing/legacy";
@@ -105,6 +108,17 @@ function RuntimeError(props: { error: Error; retry: () => void }) {
   );
 }
 
+function ReadyApplication() {
+  const environment = createRelayEnvironment(defaultApiBaseUrl());
+  return (
+    <RelayProvider environment={environment}>
+      <AppStateProvider>
+        <Router>{(props) => <AppShell>{props.children}</AppShell>}</Router>
+      </AppStateProvider>
+    </RelayProvider>
+  );
+}
+
 export default function App() {
   const [runtime, setRuntime] = createSignal<RuntimeState>({ status: "loading" });
   let attempt = 0;
@@ -148,9 +162,7 @@ export default function App() {
         />
       </Match>
       <Match when={runtime().status === "ready"}>
-        <AppStateProvider>
-          <Router>{(props) => <AppShell>{props.children}</AppShell>}</Router>
-        </AppStateProvider>
+        <ReadyApplication />
       </Match>
     </Switch>
   );

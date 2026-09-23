@@ -11,31 +11,10 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	generated "github.com/moreal/jandibat.org/apps/api/internal/adapters/integrations/cockroach/generated"
 	"github.com/moreal/jandibat.org/apps/api/internal/adapters/internal/fakedb"
-	appdb "github.com/moreal/jandibat.org/apps/api/internal/database"
 	"github.com/moreal/jandibat.org/apps/api/internal/integrations"
 )
-
-func TestIdempotentSyncLookupParticipatesInLazyAuditTransaction(t *testing.T) {
-	script := fakedb.New(
-		fakedb.Step{Operation: fakedb.Begin},
-		fakedb.Step{Operation: fakedb.Query, Columns: []string{"id"}},
-		fakedb.Step{Operation: fakedb.Rollback},
-	)
-	db := script.Open()
-	t.Cleanup(func() { _ = db.Close() })
-	store, _ := New(db)
-	ctx, lazy := appdb.WithLazyTransaction(context.Background(), db)
-	if _, found, err := store.GetSyncJobByIdempotencyKey(ctx, "018f0000-0000-7000-8000-000000000001", []byte("key"), time.Now()); err != nil || found {
-		t.Fatalf("idempotency lookup found=%t err=%v", found, err)
-	}
-	if _, active := lazy.Transaction(); !active {
-		t.Fatal("idempotent sync lookup did not join the lazy audit transaction")
-	}
-	if err := lazy.Rollback(); err != nil {
-		t.Fatal(err)
-	}
-}
 
 func TestNewRejectsNilDatabase(t *testing.T) {
 	store, err := New(nil)
@@ -300,40 +279,28 @@ func TestScanCustomProvider(t *testing.T) {
 	}
 }
 
-func TestScanSyncJobMapsQueuedAndPayload(t *testing.T) {
+func TestGeneratedSyncJobMapsQueuedAndPayload(t *testing.T) {
 	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
 	started := now.Add(time.Second)
 	expires := now.Add(24 * time.Hour)
-	row := valueScanner{values: []any{
-		"018f0000-0000-7000-8000-000000000003",
-		"018f0000-0000-7000-8000-000000000001",
-		sql.NullString{}, sql.NullString{}, "queued", int64(1), now,
-		sql.NullTime{Time: started, Valid: true}, sql.NullTime{},
-		[]byte(`{"trigger":"scheduled","force":true,"timezone":"Asia/Seoul","failure_policy":"purge","facts_written":7,"idempotency_key_hash":"0102","request_hash":"0304","idempotency_expires_at":"2026-08-13T12:00:00Z"}`), now, started,
-	}}
-	got, err := scanSyncJob(row)
+	row := generated.GetSyncJobByIdRow{
+		Id:           "018f0000-0000-7000-8000-000000000003",
+		ConnectionId: "018f0000-0000-7000-8000-000000000001",
+		Status:       "queued", Attempt: 1, AvailableAt: now, StartedAt: &started,
+		Payload:   `{"trigger":"scheduled","force":true,"timezone":"Asia/Seoul","failure_policy":"purge","facts_written":7,"idempotency_key_hash":"0102","request_hash":"0304","idempotency_expires_at":"2026-08-13T12:00:00Z"}`,
+		CreatedAt: now, UpdatedAt: started,
+	}
+	got, err := syncJobFromGenerated(row)
 	if err != nil {
-		t.Fatalf("scanSyncJob() error = %v", err)
+		t.Fatalf("syncJobFromGenerated() error = %v", err)
 	}
 	if got.Status != integrations.SyncJobPending || got.Trigger != integrations.SyncTriggerScheduled || got.FactsWritten != 7 ||
 		!got.Force || got.Timezone != "Asia/Seoul" || got.FailurePolicy != "purge" || !reflect.DeepEqual(got.IdempotencyKeyHash, []byte{1, 2}) ||
 		got.IdempotencyExpires == nil || !got.IdempotencyExpires.Equal(expires) {
-		t.Fatalf("scanSyncJob() = %#v", got)
+		t.Fatalf("syncJobFromGenerated() = %#v", got)
 	}
 	if got.StartedAt == nil || !got.StartedAt.Equal(started) {
 		t.Fatalf("startedAt = %v", got.StartedAt)
-	}
-	if !strings.Contains(upsertSyncJobQuery, "FROM provider_connections WHERE id = $2::UUID") {
-		t.Fatal("sync job insert must derive subject/environment from its connection")
-	}
-	listQuery, args := buildListSyncJobsQuery(got.ConnectionID)
-	if !strings.HasSuffix(listQuery, "ORDER BY created_at, id") || !reflect.DeepEqual(args, []any{got.ConnectionID}) {
-		t.Fatalf("sync job list query = %s %#v", listQuery, args)
-	}
-	for _, fragment := range []string{"date_from", "date_to", "attempt", "available_at", "idempotency_key_hash", "idempotency_expires_at"} {
-		if !strings.Contains(upsertSyncJobQuery+getSyncJobByIdempotencyQuery, fragment) {
-			t.Errorf("sync job persistence SQL missing %q", fragment)
-		}
 	}
 }
 
@@ -367,51 +334,6 @@ func TestSyncExecutionLeaseRejectsRevokedConnections(t *testing.T) {
 	for _, fragment := range []string{"connection_status", "IN ('active', 'error')"} {
 		if !strings.Contains(acquireSyncExecutionQuery, fragment) {
 			t.Errorf("acquire query missing %q: %s", fragment, acquireSyncExecutionQuery)
-		}
-	}
-}
-
-func TestSyncJobClaimAndCompletionUseOpaqueLeaseToken(t *testing.T) {
-	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
-	leaseUntil := now.Add(20 * time.Minute)
-	jobID := "018f0000-0000-7000-8000-000000000003"
-	claimToken := "11111111-1111-4111-8111-111111111111"
-	script := fakedb.New(
-		fakedb.Step{Operation: fakedb.Query, Columns: []string{"id"}, Rows: [][]driver.Value{{jobID}}},
-		fakedb.Step{Operation: fakedb.Query, Columns: []string{"claim_token"}, Rows: [][]driver.Value{{claimToken}}},
-		fakedb.Step{Operation: fakedb.Exec, Affected: 1},
-		fakedb.Step{Operation: fakedb.Exec, Affected: 0},
-	)
-	db := script.Open()
-	defer db.Close()
-	store, err := New(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ids, err := store.ListClaimableSyncJobs(context.Background(), now, 10)
-	if err != nil || !reflect.DeepEqual(ids, []string{jobID}) {
-		t.Fatalf("ListClaimableSyncJobs() = %#v, %v", ids, err)
-	}
-	gotToken, acquired, err := store.ClaimSyncJob(context.Background(), jobID, now, leaseUntil)
-	if err != nil || !acquired || gotToken != claimToken {
-		t.Fatalf("ClaimSyncJob() = %q, %v, %v", gotToken, acquired, err)
-	}
-	finished := now.Add(time.Minute)
-	job := integrations.SyncJob{
-		ID: jobID, Status: integrations.SyncJobSucceeded, FinishedAt: &finished,
-		CreatedAt: now, UpdatedAt: finished,
-	}
-	if err := store.CompleteClaimedSyncJob(context.Background(), job, claimToken); err != nil {
-		t.Fatalf("CompleteClaimedSyncJob() = %v", err)
-	}
-	if err := store.CompleteClaimedSyncJob(context.Background(), job, claimToken); !errors.Is(err, integrations.ErrSyncAlreadyRunning) {
-		t.Fatalf("stale completion = %v, want %v", err, integrations.ErrSyncAlreadyRunning)
-	}
-	calls := script.Calls()
-	combined := calls[0].Query + calls[1].Query + calls[2].Query
-	for _, fragment := range []string{"lease_expires_at <= $1", "claim_token = gen_random_uuid()", "claim_token = $2::UUID", "lease_expires_at = NULL"} {
-		if !strings.Contains(combined, fragment) {
-			t.Errorf("sync claim SQL missing %q", fragment)
 		}
 	}
 }

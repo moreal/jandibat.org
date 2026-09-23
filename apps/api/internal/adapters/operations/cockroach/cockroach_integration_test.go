@@ -1487,6 +1487,20 @@ VALUES ('subject', $1, 'integration', 'long deletion hold', $2)`, []any{subjectI
 	if err != nil || claim.RequestID != requestID {
 		t.Fatalf("promoted claim = %#v, %v", claim, err)
 	}
+	rollbackHold := errors.New("rollback legal hold deferral")
+	err = appdb.InTx(ctx, pool, appdb.RetryOptions{}, func(txctx context.Context, _ pgx.Tx) error {
+		if err := store.DeferDeletionForLegalHold(txctx, claim, holdAsOf); err != nil {
+			return err
+		}
+		return rollbackHold
+	})
+	if !errors.Is(err, rollbackHold) {
+		t.Fatalf("legal hold deferral rollback=%v", err)
+	}
+	var statusAfterRollback string
+	if err := db.QueryRowContext(ctx, `SELECT status FROM deletion_requests WHERE request_id=$1`, requestID).Scan(&statusAfterRollback); err != nil || statusAfterRollback != string(operations.DeletionRequested) {
+		t.Fatalf("legal hold deferral escaped rollback: status=%q err=%v", statusAfterRollback, err)
+	}
 	claims := []operations.DeletionRequest{claim}
 	workflow, _ := operations.NewDeletionWorkflow(store, integrationClock{now: holdAsOf}, mustAuditRecorder(t, store), bytes.Repeat([]byte{'p'}, 32))
 	_, heldErr := workflow.RunClaimed(ctx, claims[0])

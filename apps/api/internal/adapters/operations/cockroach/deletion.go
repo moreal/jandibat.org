@@ -1153,6 +1153,39 @@ WHERE deletion_request_id = (SELECT id FROM deletion_requests WHERE request_id =
 }
 
 func (store *Store) DeferDeletionForLegalHold(ctx context.Context, request operations.DeletionRequest, now time.Time) error {
+	if store.pool != nil {
+		return appdb.InTx(ctx, store.pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
+			if err := lockDeletionLeasePGX(txctx, tx, request); err != nil {
+				return err
+			}
+			count, err := generated.MarkDeletionDeferredForLegalHold(txctx, tx, request.RequestID, now.UTC())
+			if err != nil {
+				return fmt.Errorf("defer deletion for legal hold: %w", err)
+			}
+			if count != 1 {
+				return operations.ErrDeletionLeaseLost
+			}
+			if request.ClaimToken != "" {
+				releaseAt, err := generated.GetDeletionHoldReleaseAt(txctx, tx,
+					string(request.TargetType), request.TargetID, now.UTC())
+				if err != nil {
+					return fmt.Errorf("find deletion legal hold expiry: %w", err)
+				}
+				if releaseAt.AvailableAt == nil {
+					return fmt.Errorf("find deletion legal hold expiry: missing available_at")
+				}
+				count, err = generated.ReleaseHeldDeletionClaim(txctx, tx, request.RequestID,
+					*releaseAt.AvailableAt, now.UTC(), request.ClaimToken)
+				if err != nil {
+					return fmt.Errorf("defer deletion claim for legal hold: %w", err)
+				}
+				if count != 1 {
+					return operations.ErrDeletionLeaseLost
+				}
+			}
+			return nil
+		})
+	}
 	tx, err := store.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("defer deletion for legal hold: begin: %w", err)

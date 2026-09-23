@@ -100,6 +100,35 @@ UPDATE deletion_request_claims SET
 WHERE deletion_request_id = (SELECT id FROM deletion_requests WHERE request_id = $1::STRING)
   AND claim_token::STRING = $3::STRING;
 
+-- @name MarkDeletionDeferredForLegalHold
+-- @returns :exec_result
+UPDATE deletion_requests
+SET status = 'failed', error_code = 'legal_hold_active', updated_at = $2::TIMESTAMPTZ
+WHERE request_id = $1::STRING AND status <> 'completed';
+
+-- @name GetDeletionHoldReleaseAt
+-- @returns :one
+SELECT COALESCE(max(hold.expires_at), $3::TIMESTAMPTZ + INTERVAL '1 minute') AS available_at
+FROM legal_holds AS hold
+WHERE hold.expires_at > $3::TIMESTAMPTZ
+      AND (
+        (hold.target_type = $1::STRING AND hold.target_id = $2::STRING)
+        OR ($1::STRING = 'account' AND hold.target_type = 'subject' AND EXISTS (
+          SELECT 1 FROM subjects WHERE subjects.id = hold.target_id AND subjects.owner_user_id = $2::STRING
+        ))
+        OR ($1::STRING = 'subject' AND hold.target_type = 'account' AND EXISTS (
+          SELECT 1 FROM subjects WHERE subjects.id = $2::STRING AND subjects.owner_user_id = hold.target_id
+        ))
+      );
+
+-- @name ReleaseHeldDeletionClaim
+-- @returns :exec_result
+UPDATE deletion_request_claims SET
+  attempts = GREATEST(attempts - 1, 0), available_at = $2::TIMESTAMPTZ,
+  lease_until = NULL, claim_token = NULL, updated_at = $3::TIMESTAMPTZ
+WHERE deletion_request_id = (SELECT id FROM deletion_requests WHERE request_id = $1::STRING)
+  AND claim_token::STRING = $4::STRING;
+
 -- @name GetAccountEmailForDeletion
 -- @returns :opt
 SELECT primary_email FROM users WHERE id = $1::STRING FOR UPDATE;

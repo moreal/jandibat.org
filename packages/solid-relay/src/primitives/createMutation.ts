@@ -1,0 +1,55 @@
+import {
+	commitMutation,
+	type Disposable,
+	type GraphQLTaggedNode,
+	type MutationConfig,
+	type MutationParameters,
+} from "relay-runtime";
+import { type Accessor, createSignal } from "solid-js";
+import { useRelayEnvironment } from "../RelayEnvironment";
+
+/**
+ * Creates a mutation commit function and an in-flight state accessor.
+ *
+ * The returned commit function forwards to Relay's `commitMutation` and
+ * keeps `isMutationInFlight` updated while one or more commits are active.
+ *
+ * @param mutation - GraphQL mutation document.
+ * @returns A tuple of `[commitMutation, isMutationInFlight]`.
+ */
+export function createMutation<TMutation extends MutationParameters>(
+	mutation: GraphQLTaggedNode,
+): [(config: Omit<MutationConfig<TMutation>, "mutation">) => Disposable, Accessor<boolean>] {
+	const environment = useRelayEnvironment();
+	const inFlightMutations = new Set<Disposable>();
+	const [isMutationInFlight, setIsMutationInFlight] = createSignal(false);
+
+	const cleanup = (disposable: Disposable) => {
+		inFlightMutations.delete(disposable);
+		setIsMutationInFlight(inFlightMutations.size > 0);
+	};
+
+	const commit = (config: Omit<MutationConfig<TMutation>, "mutation">) => {
+		setIsMutationInFlight(true);
+		const disposable = commitMutation(environment(), {
+			...config,
+			mutation,
+			onCompleted: (response, errors) => {
+				cleanup(disposable);
+				config.onCompleted?.(response, errors);
+			},
+			onError: (error) => {
+				cleanup(disposable);
+				config.onError?.(error);
+			},
+			onUnsubscribe: () => {
+				cleanup(disposable);
+				config.onUnsubscribe?.();
+			},
+		});
+		inFlightMutations.add(disposable);
+		return disposable;
+	};
+
+	return [commit, isMutationInFlight];
+}

@@ -2175,6 +2175,49 @@ func TestCockroachOperationsSchemaChecksUsePGXPool(t *testing.T) {
 	}
 }
 
+func TestCockroachOperationsSchemaChecksJoinPGXTransactionWithoutSQLHandle(t *testing.T) {
+	dsn := os.Getenv("JANDIBAT_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("set JANDIBAT_TEST_DATABASE_URL to a migrated CockroachDB")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	legacy, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	store := &Store{db: legacy, pool: pool}
+	if err := store.Check(ctx); err != nil {
+		t.Fatalf("operations schema check used closed SQL handle: %v", err)
+	}
+	if err := store.CheckMutationAuditOutboxSchema(ctx); err != nil {
+		t.Fatalf("mutation audit schema check used closed SQL handle: %v", err)
+	}
+	err = appdb.InTx(ctx, pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
+		if _, err := tx.Exec(txctx, `SET LOCAL search_path = pg_catalog`); err != nil {
+			return err
+		}
+		if err := store.Check(txctx); err == nil || !strings.Contains(err.Error(), "found 0 of") {
+			return fmt.Errorf("operations schema check did not use transaction search_path: %v", err)
+		}
+		if err := store.CheckMutationAuditOutboxSchema(txctx); err == nil || !strings.Contains(err.Error(), "got 0 of") {
+			return fmt.Errorf("mutation audit schema check did not use transaction search_path: %v", err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCockroachRetentionPurgeJoinsPGXTransaction(t *testing.T) {
 	dsn := os.Getenv("JANDIBAT_TEST_DATABASE_URL")
 	maintenanceDSN := os.Getenv("JANDIBAT_TEST_MAINTENANCE_DATABASE_URL")

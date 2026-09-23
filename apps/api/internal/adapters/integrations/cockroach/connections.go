@@ -33,66 +33,13 @@ EXISTS (
   WHERE consent.connection_id = provider_connections.id AND consent.enabled
 )`
 
-const upsertConnectionQuery = `
-INSERT INTO provider_connections (
-  id, subject_id, environment_id, auth_method, external_account_id, status,
-  scopes, access_token_ciphertext, access_token_key_id,
-  refresh_token_ciphertext, refresh_token_key_id, token_expires_at,
-  last_synced_at, last_error, created_at, updated_at, sync_cursor
-) VALUES (
-  $1::UUID, $2, $3, $4, NULLIF($5, ''), $6, $7::STRING[], $8, NULLIF($9, ''),
-  $10, NULLIF($11, ''), $12, $13, NULLIF($14, ''), $15, $16,
-  jsonb_build_object(
-    'provider_id', $17::STRING,
-    'connection_status', $18::STRING,
-    'last_sync_attempt_at', $19::TIMESTAMPTZ,
-    'next_sync_attempt_at', $20::TIMESTAMPTZ,
-    'last_sync_attempt', $21::INT,
-    'consecutive_failures', $22::INT,
-    'external_account_login', $23::STRING
-  )
-)
-ON CONFLICT (id) DO UPDATE SET
-  subject_id = excluded.subject_id,
-  environment_id = excluded.environment_id,
-  auth_method = excluded.auth_method,
-  external_account_id = excluded.external_account_id,
-  status = excluded.status,
-  scopes = excluded.scopes,
-  access_token_ciphertext = excluded.access_token_ciphertext,
-  access_token_key_id = excluded.access_token_key_id,
-  refresh_token_ciphertext = excluded.refresh_token_ciphertext,
-  refresh_token_key_id = excluded.refresh_token_key_id,
-  token_expires_at = excluded.token_expires_at,
-  last_synced_at = excluded.last_synced_at,
-  last_error = excluded.last_error,
-  created_at = excluded.created_at,
-  updated_at = excluded.updated_at,
-  sync_cursor = COALESCE(provider_connections.sync_cursor, '{}'::JSONB)
-    || excluded.sync_cursor
-WHERE COALESCE(provider_connections.sync_cursor->>'connection_status', provider_connections.status) <> 'revoked'`
-
-const updateConnectionAfterSyncQuery = `
-UPDATE provider_connections SET
-  status = $2,
-  last_synced_at = $3,
-  last_error = NULLIF($4, ''),
-  updated_at = $5,
-  sync_cursor = COALESCE(sync_cursor, '{}'::JSONB) || jsonb_build_object(
-    'connection_status', $6::STRING,
-    'last_sync_attempt_at', $7::TIMESTAMPTZ,
-    'next_sync_attempt_at', $8::TIMESTAMPTZ,
-    'last_sync_attempt', $9::INT,
-    'consecutive_failures', $10::INT
-  )
-WHERE id = $1::UUID
-  AND COALESCE(sync_cursor->>'connection_status', status) IN ('active', 'error')
-  AND sync_cursor->>'sync_execution_claim_token' = $11`
-
 func (s *Store) SaveConnection(ctx context.Context, record integrations.ConnectionRecord) error {
 	connection := record.Connection
 	if connection.ID == "" {
 		return integrations.ErrEmptyConnectionID
+	}
+	if s.pool == nil {
+		return ErrNilDB
 	}
 	if !connection.PrivateDataEnabled {
 		// Defense in depth: an opt-out record cannot persist credentials even if
@@ -109,88 +56,43 @@ func (s *Store) SaveConnection(ctx context.Context, record integrations.Connecti
 	if err != nil {
 		return fmt.Errorf("refresh token key ID: %w", err)
 	}
-	if s.pool != nil {
-		id, err := uuid.Parse(connection.ID)
-		if err != nil {
-			return integrations.ErrInvalidIdentifier
-		}
-		if connection.LastSyncAttempt < math.MinInt32 || connection.LastSyncAttempt > math.MaxInt32 ||
-			connection.ConsecutiveFailures < math.MinInt32 || connection.ConsecutiveFailures > math.MaxInt32 {
-			return integrations.ErrInvalidConnectionStatus
-		}
-		return appdb.InTx(ctx, s.pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
-			var scopes *[]string
-			if connection.Scopes != nil {
-				value := append([]string(nil), connection.Scopes...)
-				scopes = &value
-			}
-			count, err := generated.UpsertConnection(txctx, tx,
-				id, connection.SubjectID, connection.EnvironmentID, string(connection.AuthMethod),
-				&connection.ExternalAccountID, string(databaseConnectionStatus(connection.Status)),
-				scopes, optionalBytes(record.Credentials.AccessToken), optionalString(accessKeyID),
-				optionalBytes(record.Credentials.RefreshToken), optionalString(refreshKeyID),
-				connection.TokenExpiresAt, connection.LastSyncedAt, &connection.LastError,
-				connection.CreatedAt, connection.UpdatedAt, connection.ProviderID,
-				string(connection.Status), optionalTimeText(connection.LastSyncAttemptAt),
-				optionalTimeText(connection.NextSyncAttemptAt), int32(connection.LastSyncAttempt),
-				int32(connection.ConsecutiveFailures), connection.ExternalAccountLogin)
-			if err != nil {
-				return persistenceError(err, integrations.ErrConflict)
-			}
-			if count != 1 {
-				return integrations.ErrInvalidConnectionStatus
-			}
-			if connection.PrivateDataEnabled {
-				err = generated.EnableConnectionPrivateConsent(txctx, tx, id, connection.UpdatedAt)
-			} else {
-				err = generated.DisableConnectionPrivateConsent(txctx, tx, id)
-			}
-			return persistenceError(err, integrations.ErrConflict)
-		})
-	}
-	ctx, scope, err := s.beginMutation(ctx)
+	id, err := uuid.Parse(connection.ID)
 	if err != nil {
-		return fmt.Errorf("save connection: begin transaction: %w", err)
+		return integrations.ErrInvalidIdentifier
 	}
-	tx := scope.Tx
-	defer func() { _ = scope.Rollback() }()
-	result, err := tx.ExecContext(ctx, upsertConnectionQuery,
-		connection.ID, connection.SubjectID, connection.EnvironmentID,
-		connection.AuthMethod, connection.ExternalAccountID, databaseConnectionStatus(connection.Status),
-		connection.Scopes, nullableBytes(record.Credentials.AccessToken), accessKeyID,
-		nullableBytes(record.Credentials.RefreshToken), refreshKeyID, connection.TokenExpiresAt,
-		connection.LastSyncedAt, connection.LastError, connection.CreatedAt,
-		connection.UpdatedAt, connection.ProviderID, connection.Status,
-		connection.LastSyncAttemptAt, connection.NextSyncAttemptAt,
-		connection.LastSyncAttempt, connection.ConsecutiveFailures,
-		connection.ExternalAccountLogin,
-	)
-	if err != nil {
-		return persistenceError(err, integrations.ErrConflict)
-	}
-	count, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("save connection: rows affected: %w", err)
-	}
-	if count != 1 {
+	if connection.LastSyncAttempt < math.MinInt32 || connection.LastSyncAttempt > math.MaxInt32 ||
+		connection.ConsecutiveFailures < math.MinInt32 || connection.ConsecutiveFailures > math.MaxInt32 {
 		return integrations.ErrInvalidConnectionStatus
 	}
-	if connection.PrivateDataEnabled {
-		_, err = tx.ExecContext(ctx, `
-INSERT INTO provider_connection_private_consents (connection_id, enabled, created_at, updated_at)
-VALUES ($1::UUID, true, $2, $2)
-ON CONFLICT (connection_id) DO UPDATE SET enabled = true, updated_at = excluded.updated_at`,
-			connection.ID, connection.UpdatedAt)
-	} else {
-		_, err = tx.ExecContext(ctx, `DELETE FROM provider_connection_private_consents WHERE connection_id = $1::UUID`, connection.ID)
-	}
-	if err != nil {
+	return appdb.InTx(ctx, s.pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
+		var scopes *[]string
+		if connection.Scopes != nil {
+			value := append([]string(nil), connection.Scopes...)
+			scopes = &value
+		}
+		count, err := generated.UpsertConnection(txctx, tx,
+			id, connection.SubjectID, connection.EnvironmentID, string(connection.AuthMethod),
+			&connection.ExternalAccountID, string(databaseConnectionStatus(connection.Status)),
+			scopes, optionalBytes(record.Credentials.AccessToken), optionalString(accessKeyID),
+			optionalBytes(record.Credentials.RefreshToken), optionalString(refreshKeyID),
+			connection.TokenExpiresAt, connection.LastSyncedAt, &connection.LastError,
+			connection.CreatedAt, connection.UpdatedAt, connection.ProviderID,
+			string(connection.Status), optionalTimeText(connection.LastSyncAttemptAt),
+			optionalTimeText(connection.NextSyncAttemptAt), int32(connection.LastSyncAttempt),
+			int32(connection.ConsecutiveFailures), connection.ExternalAccountLogin)
+		if err != nil {
+			return persistenceError(err, integrations.ErrConflict)
+		}
+		if count != 1 {
+			return integrations.ErrInvalidConnectionStatus
+		}
+		if connection.PrivateDataEnabled {
+			err = generated.EnableConnectionPrivateConsent(txctx, tx, id, connection.UpdatedAt)
+		} else {
+			err = generated.DisableConnectionPrivateConsent(txctx, tx, id)
+		}
 		return persistenceError(err, integrations.ErrConflict)
-	}
-	if err := scope.Commit(); err != nil {
-		return fmt.Errorf("save connection: commit transaction: %w", err)
-	}
-	return nil
+	})
 }
 
 func optionalBytes(value []byte) *[]byte {
@@ -224,45 +126,24 @@ func (s *Store) UpdateConnectionAfterSync(ctx context.Context, record integratio
 	if connection.ID == "" || claimToken == "" {
 		return integrations.ErrInvalidConnectionStatus
 	}
-	if s.pool != nil {
-		id, err := uuid.Parse(connection.ID)
-		if err != nil {
-			return integrations.ErrInvalidIdentifier
-		}
-		if connection.LastSyncAttempt < math.MinInt32 || connection.LastSyncAttempt > math.MaxInt32 ||
-			connection.ConsecutiveFailures < math.MinInt32 || connection.ConsecutiveFailures > math.MaxInt32 {
-			return integrations.ErrInvalidConnectionStatus
-		}
-		count, err := generated.UpdateConnectionAfterSync(ctx, appdb.PGXExecutorFor(ctx, s.pool),
-			id, string(databaseConnectionStatus(connection.Status)), optionalTimeText(connection.LastSyncedAt),
-			connection.LastError, connection.UpdatedAt, string(connection.Status),
-			optionalTimeText(connection.LastSyncAttemptAt), optionalTimeText(connection.NextSyncAttemptAt),
-			int32(connection.LastSyncAttempt), int32(connection.ConsecutiveFailures), claimToken)
-		if err != nil {
-			return persistenceError(err, integrations.ErrConflict)
-		}
-		if count != 1 {
-			return integrations.ErrInvalidConnectionStatus
-		}
-		return nil
+	if s.pool == nil {
+		return ErrNilDB
 	}
-	executor, err := s.mutationExecutor(ctx)
+	id, err := uuid.Parse(connection.ID)
 	if err != nil {
-		return err
+		return integrations.ErrInvalidIdentifier
 	}
-	result, err := executor.ExecContext(ctx, updateConnectionAfterSyncQuery,
-		connection.ID, databaseConnectionStatus(connection.Status),
-		connection.LastSyncedAt, connection.LastError, connection.UpdatedAt, connection.Status,
-		connection.LastSyncAttemptAt, connection.NextSyncAttemptAt,
-		connection.LastSyncAttempt, connection.ConsecutiveFailures,
-		claimToken,
-	)
+	if connection.LastSyncAttempt < math.MinInt32 || connection.LastSyncAttempt > math.MaxInt32 ||
+		connection.ConsecutiveFailures < math.MinInt32 || connection.ConsecutiveFailures > math.MaxInt32 {
+		return integrations.ErrInvalidConnectionStatus
+	}
+	count, err := generated.UpdateConnectionAfterSync(ctx, appdb.PGXExecutorFor(ctx, s.pool),
+		id, string(databaseConnectionStatus(connection.Status)), optionalTimeText(connection.LastSyncedAt),
+		connection.LastError, connection.UpdatedAt, string(connection.Status),
+		optionalTimeText(connection.LastSyncAttemptAt), optionalTimeText(connection.NextSyncAttemptAt),
+		int32(connection.LastSyncAttempt), int32(connection.ConsecutiveFailures), claimToken)
 	if err != nil {
 		return persistenceError(err, integrations.ErrConflict)
-	}
-	count, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("update connection after sync: rows affected: %w", err)
 	}
 	if count != 1 {
 		return integrations.ErrInvalidConnectionStatus
@@ -294,29 +175,21 @@ func databaseConnectionStatus(status integrations.ConnectionStatus) integrations
 }
 
 func (s *Store) GetConnection(ctx context.Context, id string) (integrations.ConnectionRecord, error) {
-	if s.pool != nil {
-		parsed, err := uuid.Parse(id)
-		if err != nil {
-			return integrations.ConnectionRecord{}, integrations.ErrInvalidIdentifier
-		}
-		row, err := generated.GetConnectionById(ctx, appdb.PGXExecutorFor(ctx, s.pool), parsed)
-		if err != nil {
-			return integrations.ConnectionRecord{}, fmt.Errorf("get connection: %w", err)
-		}
-		if row == nil {
-			return integrations.ConnectionRecord{}, notFound("connection", id)
-		}
-		return connectionFromGenerated(*row)
+	if s.pool == nil {
+		return integrations.ConnectionRecord{}, ErrNilDB
 	}
-	query := `SELECT ` + connectionColumns + ` FROM provider_connections WHERE id = $1::UUID`
-	record, err := scanConnection(appdb.ExecutorFor(ctx, s.db).QueryRowContext(ctx, query, id))
-	if err == sql.ErrNoRows {
-		return integrations.ConnectionRecord{}, notFound("connection", id)
+	parsed, err := uuid.Parse(id)
+	if err != nil {
+		return integrations.ConnectionRecord{}, integrations.ErrInvalidIdentifier
 	}
+	row, err := generated.GetConnectionById(ctx, appdb.PGXExecutorFor(ctx, s.pool), parsed)
 	if err != nil {
 		return integrations.ConnectionRecord{}, fmt.Errorf("get connection: %w", err)
 	}
-	return record, nil
+	if row == nil {
+		return integrations.ConnectionRecord{}, notFound("connection", id)
+	}
+	return connectionFromGenerated(*row)
 }
 
 func connectionFromGenerated(row generated.GetConnectionByIdRow) (integrations.ConnectionRecord, error) {
@@ -350,37 +223,20 @@ func connectionFromGenerated(row generated.GetConnectionByIdRow) (integrations.C
 }
 
 func (s *Store) ListConnections(ctx context.Context, subjectID string) ([]integrations.ConnectionRecord, error) {
-	if s.pool != nil {
-		rows, err := generated.ListConnections(ctx, appdb.PGXExecutorFor(ctx, s.pool), subjectID)
-		if err != nil {
-			return nil, fmt.Errorf("list connections: %w", err)
-		}
-		records := make([]integrations.ConnectionRecord, 0, len(rows))
-		for _, row := range rows {
-			record, err := connectionFromGenerated(generated.GetConnectionByIdRow(row))
-			if err != nil {
-				return nil, fmt.Errorf("list connections: %w", err)
-			}
-			records = append(records, record)
-		}
-		return records, nil
+	if s.pool == nil {
+		return nil, ErrNilDB
 	}
-	query, args := buildListConnectionsQuery(subjectID)
-	rows, err := appdb.ExecutorFor(ctx, s.db).QueryContext(ctx, query, args...)
+	rows, err := generated.ListConnections(ctx, appdb.PGXExecutorFor(ctx, s.pool), subjectID)
 	if err != nil {
 		return nil, fmt.Errorf("list connections: %w", err)
 	}
-	defer rows.Close()
-	records := make([]integrations.ConnectionRecord, 0)
-	for rows.Next() {
-		record, scanErr := scanConnection(rows)
-		if scanErr != nil {
-			return nil, fmt.Errorf("list connections: %w", scanErr)
+	records := make([]integrations.ConnectionRecord, 0, len(rows))
+	for _, row := range rows {
+		record, err := connectionFromGenerated(generated.GetConnectionByIdRow(row))
+		if err != nil {
+			return nil, fmt.Errorf("list connections: %w", err)
 		}
 		records = append(records, record)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("list connections: %w", err)
 	}
 	return records, nil
 }
@@ -392,82 +248,34 @@ func (s *Store) PurgeConnectionData(ctx context.Context, id string) error {
 	if id == "" {
 		return integrations.ErrEmptyConnectionID
 	}
-	if s.pool != nil {
-		parsed, err := uuid.Parse(id)
-		if err != nil {
-			return integrations.ErrInvalidIdentifier
-		}
-		return appdb.InTx(ctx, s.pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
-			row, err := generated.LockConnectionForRevocation(txctx, tx, parsed)
-			if err != nil {
-				return fmt.Errorf("purge connection data: load aggregate: %w", err)
-			}
-			if row == nil {
-				return notFound("connection", id)
-			}
-			if integrations.ConnectionStatus(row.ConnectionStatus) != integrations.ConnectionRevoked {
-				return integrations.ErrInvalidConnectionStatus
-			}
-			if integrations.AuthMethod(row.AuthMethod) != integrations.AuthNone {
-				if err := generated.PurgeConnectionFacts(txctx, tx, row.SubjectId, row.EnvironmentId); err != nil {
-					return fmt.Errorf("purge connection data: purge facts: %w", err)
-				}
-			}
-			if err := generated.PurgeConnectionSyncJobs(txctx, tx, parsed); err != nil {
-				return fmt.Errorf("purge connection data: purge sync jobs: %w", err)
-			}
-			return nil
-		})
+	if s.pool == nil {
+		return ErrNilDB
 	}
-	ctx, scope, err := s.beginMutation(ctx)
+	parsed, err := uuid.Parse(id)
 	if err != nil {
-		return fmt.Errorf("purge connection data: begin transaction: %w", err)
+		return integrations.ErrInvalidIdentifier
 	}
-	tx := scope.Tx
-	defer func() { _ = scope.Rollback() }()
-
-	var subjectID, environmentID string
-	var authMethod integrations.AuthMethod
-	var status integrations.ConnectionStatus
-	if err := tx.QueryRowContext(ctx, `
-SELECT subject_id, environment_id, auth_method,
-       COALESCE(sync_cursor->>'connection_status', status)
-FROM provider_connections
-WHERE id = $1::UUID
-FOR UPDATE`, id).Scan(&subjectID, &environmentID, &authMethod, &status); err != nil {
-		if err == sql.ErrNoRows {
+	return appdb.InTx(ctx, s.pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
+		row, err := generated.LockConnectionForRevocation(txctx, tx, parsed)
+		if err != nil {
+			return fmt.Errorf("purge connection data: load aggregate: %w", err)
+		}
+		if row == nil {
 			return notFound("connection", id)
 		}
-		return fmt.Errorf("purge connection data: load aggregate: %w", err)
-	}
-	if status != integrations.ConnectionRevoked {
-		return integrations.ErrInvalidConnectionStatus
-	}
-	if authMethod != integrations.AuthNone {
-		if _, err := tx.ExecContext(ctx, `
-DELETE FROM activity_facts
-WHERE subject_id = $1 AND environment_id = $2`, subjectID, environmentID); err != nil {
-			return fmt.Errorf("purge connection data: purge facts: %w", err)
+		if integrations.ConnectionStatus(row.ConnectionStatus) != integrations.ConnectionRevoked {
+			return integrations.ErrInvalidConnectionStatus
 		}
-	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM provider_sync_jobs WHERE provider_connection_id = $1::UUID`, id); err != nil {
-		return fmt.Errorf("purge connection data: purge sync jobs: %w", err)
-	}
-	if err := scope.Commit(); err != nil {
-		return fmt.Errorf("purge connection data: commit transaction: %w", err)
-	}
-	return nil
-}
-
-func buildListConnectionsQuery(subjectID string) (string, []any) {
-	query := `SELECT ` + connectionColumns + ` FROM provider_connections`
-	args := []any{}
-	if subjectID != "" {
-		query += ` WHERE subject_id = $1`
-		args = append(args, subjectID)
-	}
-	query += ` ORDER BY subject_id, id`
-	return query, args
+		if integrations.AuthMethod(row.AuthMethod) != integrations.AuthNone {
+			if err := generated.PurgeConnectionFacts(txctx, tx, row.SubjectId, row.EnvironmentId); err != nil {
+				return fmt.Errorf("purge connection data: purge facts: %w", err)
+			}
+		}
+		if err := generated.PurgeConnectionSyncJobs(txctx, tx, parsed); err != nil {
+			return fmt.Errorf("purge connection data: purge sync jobs: %w", err)
+		}
+		return nil
+	})
 }
 
 func scanConnection(row scanner) (integrations.ConnectionRecord, error) {
@@ -510,11 +318,4 @@ func scanConnection(row scanner) (integrations.ConnectionRecord, error) {
 	record.Credentials.AccessToken = append([]byte(nil), accessToken...)
 	record.Credentials.RefreshToken = append([]byte(nil), refreshToken...)
 	return record, nil
-}
-
-func nullableBytes(value []byte) any {
-	if len(value) == 0 {
-		return nil
-	}
-	return value
 }

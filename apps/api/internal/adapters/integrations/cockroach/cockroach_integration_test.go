@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	integrationstore "github.com/moreal/jandibat.org/apps/api/internal/adapters/integrations/cockroach"
@@ -232,6 +233,10 @@ VALUES ($1, $1, 'Consent integration', 'subject', $2, $3, $3)`, environmentID, s
 	if err != nil || len(listed) != 1 || listed[0].Connection.ID != connectionID {
 		t.Fatalf("subject connections = (%+v, %v)", listed, err)
 	}
+	listed, err = generatedStore.ListConnections(ctx, subjectID+"' OR true --")
+	if err != nil || len(listed) != 0 {
+		t.Fatalf("connection filter interpreted subject text as SQL = (%+v, %v)", listed, err)
+	}
 	var rows int
 	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM provider_connection_private_consents WHERE connection_id = $1`, connectionID).Scan(&rows); err != nil || rows != 0 {
 		t.Fatalf("consent rows after opt-out = %d, error=%v", rows, err)
@@ -286,6 +291,13 @@ FROM provider_connections WHERE id = $1`, connectionID).Scan(&credentialColumnsN
 	workerStore, err := integrationstore.NewWithPGXPool(workerDB, workerPool)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if _, err := workerStore.GetConnection(ctx, connectionID); err != nil {
+		t.Fatalf("worker connection read: %v", err)
+	}
+	var permissionErr *pgconn.PgError
+	if err := workerStore.SaveConnection(ctx, record); !errors.As(err, &permissionErr) || permissionErr.Code != "42501" {
+		t.Fatalf("worker connection upsert privilege = %v, want SQLSTATE 42501", err)
 	}
 	if err := generatedStore.SaveSyncJob(ctx, transactionJob); err != nil {
 		t.Fatalf("prepare worker sync claim: %v", err)

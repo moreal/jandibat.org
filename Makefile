@@ -205,6 +205,7 @@ baseline-history-test:
 	sh scripts/test-baseline-schema.sh
 	sh scripts/test-baseline-history-rejection.sh
 	sh scripts/test-baseline-followup-history.sh
+	sh scripts/test-ingest-reservation-migration.sh
 
 db-configure-runtime-roles:
 	sh scripts/db-configure-runtime-roles.sh

@@ -6,9 +6,10 @@ repository_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT HUP INT TERM
 
-mkdir -p "$scratch/apps/api/internal" "$scratch/db/migrations"
+mkdir -p "$scratch/apps/api/internal" "$scratch/db"
 cp "$repository_root/scythe.toml" "$scratch/scythe.toml"
 cp -R "$repository_root/apps/api/internal/adapters" "$scratch/apps/api/internal/adapters"
+cp -R "$repository_root/db/migrations" "$scratch/db/migrations"
 sed '/^  primary_email STRING NOT NULL UNIQUE,$/a\
   drift_missing STRING NULL,' "$repository_root/db/migrations/0001_baseline.sql" > "$scratch/db/migrations/0001_baseline.sql"
 

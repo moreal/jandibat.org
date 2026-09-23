@@ -18,8 +18,8 @@ sql() {
 COCKROACH_DATABASE="$database" sh scripts/db-migrate.sh >/dev/null
 
 versions=$(sql --execute="SELECT string_agg(version, ',' ORDER BY version) FROM schema_migrations" | tail -n 1 | tr -d '\r')
-if [ "$versions" != 0001_baseline.sql ]; then
-  echo "expected exactly one baseline migration; got: $versions" >&2
+if [ "$versions" != 0001_baseline.sql,0002_ingest_reservation_token.sql ]; then
+  echo "expected baseline and reservation-token migrations; got: $versions" >&2
   exit 1
 fi
 

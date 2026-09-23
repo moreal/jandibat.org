@@ -7,7 +7,13 @@ scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT HUP INT TERM
 
 cp "$source_root/scythe.toml" "$scratch/scythe.toml"
-awk -F '"' '/^(schema|queries|output) = / { print $2 }' "$source_root/scythe.toml" | sort -u > "$scratch/paths"
+awk '/^(schema|queries|output) = / {
+  line = $0
+  while (match(line, /"[^"]+"/)) {
+    print substr(line, RSTART + 1, RLENGTH - 2)
+    line = substr(line, RSTART + RLENGTH)
+  }
+}' "$source_root/scythe.toml" | sort -u > "$scratch/paths"
 awk -F '"' '/^output = / { print $2 }' "$source_root/scythe.toml" | sort -u > "$scratch/outputs"
 
 while IFS= read -r path; do

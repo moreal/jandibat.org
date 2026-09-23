@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/google/uuid"
+	generated "github.com/moreal/jandibat.org/apps/api/internal/adapters/integrations/cockroach/generated"
 	appdb "github.com/moreal/jandibat.org/apps/api/internal/database"
 	"github.com/moreal/jandibat.org/apps/api/internal/integrations"
 	"github.com/moreal/jandibat.org/apps/api/internal/operations"
@@ -206,6 +208,20 @@ func databaseConnectionStatus(status integrations.ConnectionStatus) integrations
 }
 
 func (s *Store) GetConnection(ctx context.Context, id string) (integrations.ConnectionRecord, error) {
+	if s.pool != nil {
+		parsed, err := uuid.Parse(id)
+		if err != nil {
+			return integrations.ConnectionRecord{}, integrations.ErrInvalidIdentifier
+		}
+		row, err := generated.GetConnectionById(ctx, appdb.PGXExecutorFor(ctx, s.pool), parsed)
+		if err != nil {
+			return integrations.ConnectionRecord{}, fmt.Errorf("get connection: %w", err)
+		}
+		if row == nil {
+			return integrations.ConnectionRecord{}, notFound("connection", id)
+		}
+		return connectionFromGenerated(*row)
+	}
 	query := `SELECT ` + connectionColumns + ` FROM provider_connections WHERE id = $1::UUID`
 	record, err := scanConnection(appdb.ExecutorFor(ctx, s.db).QueryRowContext(ctx, query, id))
 	if err == sql.ErrNoRows {
@@ -217,7 +233,52 @@ func (s *Store) GetConnection(ctx context.Context, id string) (integrations.Conn
 	return record, nil
 }
 
+func connectionFromGenerated(row generated.GetConnectionByIdRow) (integrations.ConnectionRecord, error) {
+	record := integrations.ConnectionRecord{Connection: integrations.ProviderConnection{
+		ID: row.Id, SubjectID: row.SubjectId, ProviderID: row.ProviderId,
+		EnvironmentID: row.EnvironmentId, AuthMethod: integrations.AuthMethod(row.AuthMethod),
+		ExternalAccountID: row.ExternalAccountId, ExternalAccountLogin: row.ExternalAccountLogin,
+		Status:             integrations.ConnectionStatus(row.ConnectionStatus),
+		PrivateDataEnabled: row.PrivateDataEnabled, LastSyncAttempt: int(row.LastSyncAttempt),
+		ConsecutiveFailures: int(row.ConsecutiveFailures), LastError: row.LastError,
+		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
+	}}
+	connection := &record.Connection
+	if err := json.Unmarshal(row.ScopesJson, &connection.Scopes); err != nil {
+		return integrations.ConnectionRecord{}, fmt.Errorf("decode scopes: %w", err)
+	}
+	if connection.Scopes == nil {
+		connection.Scopes = []string{}
+	}
+	connection.TokenExpiresAt = row.TokenExpiresAt
+	connection.LastSyncedAt = row.LastSyncedAt
+	connection.LastSyncAttemptAt = row.LastSyncAttemptAt
+	connection.NextSyncAttemptAt = row.NextSyncAttemptAt
+	if row.AccessTokenCiphertext != nil {
+		record.Credentials.AccessToken = append([]byte(nil), (*row.AccessTokenCiphertext)...)
+	}
+	if row.RefreshTokenCiphertext != nil {
+		record.Credentials.RefreshToken = append([]byte(nil), (*row.RefreshTokenCiphertext)...)
+	}
+	return record, nil
+}
+
 func (s *Store) ListConnections(ctx context.Context, subjectID string) ([]integrations.ConnectionRecord, error) {
+	if s.pool != nil {
+		rows, err := generated.ListConnections(ctx, appdb.PGXExecutorFor(ctx, s.pool), subjectID)
+		if err != nil {
+			return nil, fmt.Errorf("list connections: %w", err)
+		}
+		records := make([]integrations.ConnectionRecord, 0, len(rows))
+		for _, row := range rows {
+			record, err := connectionFromGenerated(generated.GetConnectionByIdRow(row))
+			if err != nil {
+				return nil, fmt.Errorf("list connections: %w", err)
+			}
+			records = append(records, record)
+		}
+		return records, nil
+	}
 	query, args := buildListConnectionsQuery(subjectID)
 	rows, err := appdb.ExecutorFor(ctx, s.db).QueryContext(ctx, query, args...)
 	if err != nil {

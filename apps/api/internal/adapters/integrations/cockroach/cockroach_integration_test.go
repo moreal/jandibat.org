@@ -7,6 +7,8 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"net/url"
 	"os"
 	"reflect"
@@ -14,10 +16,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	integrationstore "github.com/moreal/jandibat.org/apps/api/internal/adapters/integrations/cockroach"
 	activitystore "github.com/moreal/jandibat.org/apps/api/internal/adapters/storage/cockroach"
+	appdb "github.com/moreal/jandibat.org/apps/api/internal/database"
 	"github.com/moreal/jandibat.org/apps/api/internal/domain/activity"
 	"github.com/moreal/jandibat.org/apps/api/internal/integrations"
 )
@@ -122,9 +126,29 @@ VALUES ($1, $1, 'Consent integration', 'subject', $2, $3, $3)`, environmentID, s
 	if _, acquired, err := generatedStore.TryAcquireSyncExecution(ctx, connectionID); err != nil || !acquired {
 		t.Fatalf("claim after release = %t, %v", acquired, err)
 	}
-	loaded, err := store.GetConnection(ctx, connectionID)
+	loaded, err := generatedStore.GetConnection(ctx, connectionID)
 	if err != nil || !loaded.Connection.PrivateDataEnabled {
 		t.Fatalf("loaded private consent = %#v, error=%v", loaded.Connection, err)
+	}
+	rollbackProbe := errors.New("rollback read probe")
+	err = appdb.InTx(ctx, apiPool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
+		if _, err := tx.Exec(txctx, `UPDATE provider_connections SET external_account_id='uncommitted' WHERE id=$1`, connectionID); err != nil {
+			return err
+		}
+		readCtx, done := context.WithTimeout(txctx, 2*time.Second)
+		defer done()
+		inside, err := generatedStore.GetConnection(readCtx, connectionID)
+		if err != nil || inside.Connection.ExternalAccountID != "uncommitted" {
+			return fmt.Errorf("transactional read = (%+v, %v)", inside.Connection, err)
+		}
+		listed, err := generatedStore.ListConnections(readCtx, subjectID)
+		if err != nil || len(listed) != 1 || listed[0].Connection.ExternalAccountID != "uncommitted" {
+			return fmt.Errorf("transactional list = (%+v, %v)", listed, err)
+		}
+		return rollbackProbe
+	})
+	if !errors.Is(err, rollbackProbe) {
+		t.Fatalf("rollback read probe = %v", err)
 	}
 	record.Connection.PrivateDataEnabled = false
 	record.Connection.TokenExpiresAt = func() *time.Time { value := now.Add(time.Hour); return &value }()
@@ -133,9 +157,16 @@ VALUES ($1, $1, 'Consent integration', 'subject', $2, $3, $3)`, environmentID, s
 	if err := store.SaveConnection(ctx, record); err != nil {
 		t.Fatalf("disable private consent: %v", err)
 	}
-	loaded, err = store.GetConnection(ctx, connectionID)
+	loaded, err = generatedStore.GetConnection(ctx, connectionID)
 	if err != nil || loaded.Connection.PrivateDataEnabled {
 		t.Fatalf("loaded opt-out = %#v, error=%v", loaded.Connection, err)
+	}
+	if _, err := generatedStore.GetConnection(ctx, "00000000-0000-4000-8000-000000000000"); !errors.Is(err, integrations.ErrNotFound) {
+		t.Fatalf("missing connection = %v", err)
+	}
+	listed, err := generatedStore.ListConnections(ctx, subjectID)
+	if err != nil || len(listed) != 1 || listed[0].Connection.ID != connectionID {
+		t.Fatalf("subject connections = (%+v, %v)", listed, err)
 	}
 	var rows int
 	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM provider_connection_private_consents WHERE connection_id = $1`, connectionID).Scan(&rows); err != nil || rows != 0 {

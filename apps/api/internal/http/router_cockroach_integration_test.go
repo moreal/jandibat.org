@@ -120,7 +120,9 @@ func TestCockroachAuditTimeoutRollsBackStateAndOutbox(t *testing.T) {
 	}
 	router := chi.NewRouter()
 	router.Use(middleware.RequestID)
-	router.Use(timeoutProblems(25 * time.Millisecond))
+	// Leave enough time for the durable audit intent on a loaded Cockroach node;
+	// the handler below blocks until the request deadline to exercise rollback.
+	router.Use(timeoutProblems(500 * time.Millisecond))
 	router.Use(auditRequests(recorder, []byte("timeout-audit-source-key"), operationStore))
 	router.Patch("/v1/subjects/{subject}", func(w http.ResponseWriter, r *http.Request) {
 		if execErr := settingsStore.SaveUserSettings(r.Context(), userID, subjects.UserSettings{Locale: "ja-JP", Timezone: "UTC", Theme: subjects.ThemeSystem, UpdatedAt: now.Add(time.Second)}); execErr != nil {

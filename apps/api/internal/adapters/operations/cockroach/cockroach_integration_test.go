@@ -984,6 +984,47 @@ func TestCockroachMaintenanceAccountCredentialRevocationIsAtomic(t *testing.T) {
 	if err := admin.QueryRowContext(ctx, `SELECT count(*) FROM deleted_identity_tombstones_v2 WHERE deletion_request_id=(SELECT id FROM deletion_requests WHERE request_id=$1)`, requestID).Scan(&tombstones); err != nil || tombstones != 1 {
 		t.Fatalf("committed account HMAC tombstone count=%d err=%v", tombstones, err)
 	}
+	event := operations.AuditEvent{
+		ID: "b37d0f6a-04ae-4e72-b2f3-" + unique[:12], OccurredAt: now.Add(6 * time.Second),
+		Actor: operations.AuditActor{Type: operations.AuditActorSystem}, Action: "deletion.completed",
+		Target: operations.AuditTarget{Type: "account", ID: userID}, Outcome: operations.AuditSucceeded,
+		RequestID: requestID,
+	}
+	t.Cleanup(func() { _, _ = admin.ExecContext(context.Background(), `DELETE FROM audit_events WHERE id=$1::UUID`, event.ID) })
+	backupExpiry := now.Add(35 * 24 * time.Hour)
+	rollbackCompletion := errors.New("rollback account deletion completion")
+	err = appdb.InTx(ctx, pool, appdb.RetryOptions{}, func(txctx context.Context, _ pgx.Tx) error {
+		updated, err := store.CompleteDeletionWithAudit(txctx, deleted, event, now.Add(6*time.Second), backupExpiry)
+		if err != nil || updated.Status != operations.DeletionCompleted {
+			return fmt.Errorf("transactional account completion status=%s err=%v", updated.Status, err)
+		}
+		return rollbackCompletion
+	})
+	if !errors.Is(err, rollbackCompletion) {
+		t.Fatalf("account completion rollback=%v", err)
+	}
+	var completionStatus string
+	if err := admin.QueryRowContext(ctx, `SELECT status FROM deletion_requests WHERE request_id=$1`, requestID).Scan(&completionStatus); err != nil || completionStatus != string(operations.DeletionVerifying) {
+		t.Fatalf("account completion escaped rollback: status=%q err=%v", completionStatus, err)
+	}
+	if err := admin.QueryRowContext(ctx, `SELECT count(*) FROM audit_events WHERE id=$1::UUID`, event.ID).Scan(&tombstones); err != nil || tombstones != 0 {
+		t.Fatalf("account completion audit escaped rollback: count=%d err=%v", tombstones, err)
+	}
+	completed, err := store.CompleteDeletionWithAudit(ctx, deleted, event, now.Add(7*time.Second), backupExpiry)
+	if err != nil || completed.Status != operations.DeletionCompleted {
+		t.Fatalf("committed account completion status=%s err=%v", completed.Status, err)
+	}
+	var claimCount, auditCount int
+	var expiresAt time.Time
+	if err := admin.QueryRowContext(ctx, `SELECT count(*) FROM deletion_request_claims WHERE deletion_request_id=(SELECT id FROM deletion_requests WHERE request_id=$1)`, requestID).Scan(&claimCount); err != nil || claimCount != 0 {
+		t.Fatalf("committed account claim count=%d err=%v", claimCount, err)
+	}
+	if err := admin.QueryRowContext(ctx, `SELECT count(*) FROM audit_events WHERE id=$1::UUID`, event.ID).Scan(&auditCount); err != nil || auditCount != 1 {
+		t.Fatalf("committed account audit count=%d err=%v", auditCount, err)
+	}
+	if err := admin.QueryRowContext(ctx, `SELECT expires_at FROM deleted_identity_tombstones_v2 WHERE deletion_request_id=(SELECT id FROM deletion_requests WHERE request_id=$1)`, requestID).Scan(&expiresAt); err != nil || expiresAt.Before(backupExpiry) {
+		t.Fatalf("committed account tombstone expiry=%s err=%v", expiresAt, err)
+	}
 }
 
 func TestCockroachMaintenanceCustomProviderDeleteCascadesSecrets(t *testing.T) {

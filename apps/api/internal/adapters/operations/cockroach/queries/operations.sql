@@ -106,6 +106,26 @@ UPDATE deletion_requests
 SET status = 'failed', error_code = 'legal_hold_active', updated_at = $2::TIMESTAMPTZ
 WHERE request_id = $1::STRING AND status <> 'completed';
 
+-- @name ExtendLegacyDeletedIdentityTombstone
+-- @returns :exec_result
+UPDATE deleted_identity_tombstones
+SET expires_at = GREATEST(expires_at, $2::TIMESTAMPTZ)
+WHERE deletion_request_id = (SELECT id FROM deletion_requests WHERE request_id = $1::STRING);
+
+-- @name MarkDeletionCompleted
+-- @returns :exec_result
+UPDATE deletion_requests SET
+  status = 'completed', last_completed_stage = 'completed', error_code = NULL,
+  subject_ids = $2::STRING[], updated_at = $3::TIMESTAMPTZ,
+  completed_at = $3::TIMESTAMPTZ, backup_expiry_at = $4::TIMESTAMPTZ,
+  audit_event_id = $5::UUID
+WHERE request_id = $1::STRING;
+
+-- @name DeleteCompletedDeletionClaim
+-- @returns :exec
+DELETE FROM deletion_request_claims
+WHERE deletion_request_id = (SELECT id FROM deletion_requests WHERE request_id = $1::STRING);
+
 -- @name GetDeletionHoldReleaseAt
 -- @returns :one
 SELECT COALESCE(max(hold.expires_at), $3::TIMESTAMPTZ + INTERVAL '1 minute') AS available_at

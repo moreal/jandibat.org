@@ -1028,6 +1028,54 @@ func (store *Store) CompleteDeletionWithAudit(ctx context.Context, request opera
 	if err := operations.ValidateAuditEvent(event); err != nil || event.ID == "" {
 		return request, operations.ErrInvalidDeletionRequest
 	}
+	if store.pool != nil {
+		var completed operations.DeletionRequest
+		err := appdb.InTx(ctx, store.pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
+			if err := lockDeletionLeasePGX(txctx, tx, request); err != nil {
+				return err
+			}
+			if err := store.WriteAuditEvent(txctx, event); err != nil {
+				return err
+			}
+			if request.TargetType == operations.DeletionTargetAccount {
+				count, err := generated.ExtendDeletedIdentityHmacTombstone(txctx, tx, request.RequestID, backupExpiryAt.UTC())
+				if err != nil {
+					return fmt.Errorf("extend deleted identity HMAC tombstone: %w", err)
+				}
+				if count == 0 {
+					count, err = generated.ExtendLegacyDeletedIdentityTombstone(txctx, tx, request.RequestID, backupExpiryAt.UTC())
+					if err != nil {
+						return fmt.Errorf("extend legacy deleted identity tombstone: %w", err)
+					}
+					if count != 1 {
+						return fmt.Errorf("%w: account identity tombstone is missing", operations.ErrDeletionResiduals)
+					}
+				} else if count != 1 {
+					return fmt.Errorf("%w: multiple account identity tombstones", operations.ErrDeletionResiduals)
+				}
+			}
+			eventID, err := uuid.Parse(event.ID)
+			if err != nil {
+				return fmt.Errorf("complete deletion audit event ID: %w", err)
+			}
+			count, err := generated.MarkDeletionCompleted(txctx, tx, request.RequestID, request.SubjectIDs, completedAt.UTC(), backupExpiryAt.UTC(), eventID)
+			if err != nil {
+				return fmt.Errorf("complete deletion request: %w", err)
+			}
+			if count != 1 {
+				return operations.ErrDeletionNotFound
+			}
+			if err := generated.DeleteCompletedDeletionClaim(txctx, tx, request.RequestID); err != nil {
+				return fmt.Errorf("complete deletion claim: %w", err)
+			}
+			completed, err = store.LoadDeletion(txctx, request.RequestID)
+			return err
+		})
+		if err != nil {
+			return request, err
+		}
+		return completed, nil
+	}
 	tx, err := store.db.BeginTx(ctx, nil)
 	if err != nil {
 		return request, fmt.Errorf("complete deletion with audit: begin: %w", err)

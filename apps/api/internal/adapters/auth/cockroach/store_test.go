@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	generated "github.com/moreal/jandibat.org/apps/api/internal/adapters/auth/cockroach/generated"
 	"github.com/moreal/jandibat.org/apps/api/internal/adapters/internal/fakedb"
 	coreauth "github.com/moreal/jandibat.org/apps/api/internal/auth"
 	appdb "github.com/moreal/jandibat.org/apps/api/internal/database"
@@ -370,58 +371,65 @@ func TestGetOrCreateUserRejectsRetainedDeletionTombstone(t *testing.T) {
 	}
 }
 
-func TestSaveCeremonyHashesChallengeAndKeepsVerifierPayload(t *testing.T) {
-	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+func TestCeremonyMutationRequiresPGXPool(t *testing.T) {
 	script := fakedb.New(fakedb.Step{Operation: fakedb.Exec, Affected: 1})
 	db := script.Open()
 	t.Cleanup(func() { _ = db.Close() })
-	store, _ := New(db)
+	store, err := New(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	ceremony := coreauth.PasskeyCeremony{
+		ID: "b73db5cc-c6bc-4298-9361-6dd00b876075", Kind: coreauth.CeremonyAuthentication,
+		Challenge: "browser-challenge", VerifierSession: json.RawMessage(`{"opaque":true}`),
+		CreatedAt: now, ExpiresAt: now.Add(5 * time.Minute),
+	}
+	if err := store.SaveCeremony(context.Background(), ceremony); !errors.Is(err, ErrNilDB) {
+		t.Fatalf("SQL-only ceremony save error=%v, want ErrNilDB", err)
+	}
+	if len(script.Calls()) != 0 {
+		t.Fatal("SQL-only ceremony save executed a legacy query")
+	}
+}
+
+func TestEncodeCeremonyHashesChallengeAndKeepsVerifierPayload(t *testing.T) {
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
 	ceremony := coreauth.PasskeyCeremony{
 		ID: "b73db5cc-c6bc-4298-9361-6dd00b876075", Kind: coreauth.CeremonyAuthentication,
 		Challenge: "browser-challenge", VerifierSession: json.RawMessage(`{"opaque":true}`),
 		CreatedAt: now, ExpiresAt: now.Add(5 * time.Minute),
 	}
 
-	if err := store.SaveCeremony(context.Background(), ceremony); err != nil {
-		t.Fatalf("SaveCeremony() error = %v", err)
+	payload, gotHash, err := encodeCeremony(ceremony)
+	if err != nil {
+		t.Fatalf("encodeCeremony() error = %v", err)
 	}
-	call := script.Calls()[0]
 	wantHash := sha256.Sum256([]byte(ceremony.Challenge))
-	gotHash, ok := call.Args[3].Value.([]byte)
-	if !ok || string(gotHash) != string(wantHash[:]) {
+	if gotHash != wantHash {
 		t.Fatalf("challenge hash = %x, want %x", gotHash, wantHash)
 	}
-	payload, ok := call.Args[4].Value.([]byte)
-	if !ok || !strings.Contains(string(payload), `"challenge":"browser-challenge"`) ||
+	if !strings.Contains(string(payload), `"challenge":"browser-challenge"`) ||
 		!strings.Contains(string(payload), `"verifier_session":{"opaque":true}`) {
 		t.Fatalf("payload = %s", payload)
 	}
-	if call.Args[2].Value != "passkey_authentication" {
-		t.Fatalf("database ceremony kind = %v", call.Args[2].Value)
+	if kind := databaseCeremonyKind(ceremony.Kind); kind != "passkey_authentication" {
+		t.Fatalf("database ceremony kind = %v", kind)
 	}
 }
 
-func TestConsumeCeremonyRestoresPayload(t *testing.T) {
+func TestCeremonyFromGeneratedRestoresPayload(t *testing.T) {
 	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
-	payload := []byte(`{"challenge":"browser-challenge","verifier_session":{"opaque":true}}`)
-	script := fakedb.New(fakedb.Step{
-		Operation: fakedb.Query,
-		Columns:   []string{"id", "kind", "user", "payload", "created", "expires", "consumed"},
-		Rows: [][]driver.Value{{
-			"cf0e620a-9568-4771-a0c9-54d8833f0950", "passkey_registration", "user-1", payload,
-			now.Add(-time.Minute), now.Add(time.Minute), now,
-		}},
+	ceremony, err := ceremonyFromGenerated(generated.ConsumeCeremonyRow{
+		Id: "cf0e620a-9568-4771-a0c9-54d8833f0950", Kind: "passkey_registration", UserId: "user-1",
+		Payload:   json.RawMessage(`{"challenge":"browser-challenge","verifier_session":{"opaque":true}}`),
+		CreatedAt: now.Add(-time.Minute), ExpiresAt: now.Add(time.Minute), ConsumedAt: &now,
 	})
-	db := script.Open()
-	t.Cleanup(func() { _ = db.Close() })
-	store, _ := New(db)
-
-	ceremony, err := store.ConsumeCeremony(context.Background(), "cf0e620a-9568-4771-a0c9-54d8833f0950", coreauth.CeremonyRegistration, now)
 	if err != nil {
-		t.Fatalf("ConsumeCeremony() error = %v", err)
+		t.Fatalf("ceremonyFromGenerated() error = %v", err)
 	}
 	if ceremony.Challenge != "browser-challenge" || ceremony.UserID != "user-1" || ceremony.ConsumedAt == nil {
-		t.Fatalf("ConsumeCeremony() = %#v", ceremony)
+		t.Fatalf("ceremonyFromGenerated() = %#v", ceremony)
 	}
 }
 

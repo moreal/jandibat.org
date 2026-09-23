@@ -47,6 +47,11 @@ func TestCockroachAPIRolePasskeyFailureConsumesCeremonyWithDeniedOutbox(t *testi
 	if err := api.QueryRowContext(ctx, `SELECT current_user`).Scan(&currentUser); err != nil || currentUser != "jandibat_api" {
 		t.Fatalf("API DSN current_user=%q err=%v", currentUser, err)
 	}
+	pool, err := pgxpool.New(ctx, apiDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	suffix := strings.ReplaceAll(now.Format("150405.000000000"), ".", "")[:12]
 	ceremonyID := "a17d0f6a-04ae-4e72-b2f3-" + suffix
@@ -56,7 +61,7 @@ func TestCockroachAPIRolePasskeyFailureConsumesCeremonyWithDeniedOutbox(t *testi
 		_, _ = admin.ExecContext(context.Background(), `DELETE FROM mutation_audit_outbox WHERE request_id=$1`, requestID)
 		_, _ = admin.ExecContext(context.Background(), `DELETE FROM auth_challenges WHERE id=$1`, ceremonyID)
 	})
-	authRepository, err := authstore.New(api)
+	authRepository, err := authstore.New(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +72,7 @@ func TestCockroachAPIRolePasskeyFailureConsumesCeremonyWithDeniedOutbox(t *testi
 	if err := authRepository.SaveCeremony(ctx, ceremony); err != nil {
 		t.Fatalf("save ceremony: %v", err)
 	}
-	operationStore, err := New(api)
+	operationStore, err := NewWithPGXPool(api, pool)
 	if err != nil {
 		t.Fatal(err)
 	}

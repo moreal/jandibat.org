@@ -3,8 +3,10 @@
 package cockroach
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -111,6 +113,27 @@ func TestGeneratedAuthRepositoryVerticalSlice(t *testing.T) {
 	ceremony := coreauth.PasskeyCeremony{ID: uuid.NewString(), Kind: coreauth.CeremonyRegistration, Challenge: "scythe-challenge-" + suffix, UserID: userID, VerifierSession: []byte(`{"challenge":"scythe"}`), CreatedAt: now, ExpiresAt: now.Add(time.Hour)}
 	if err := store.SaveCeremony(ctx, ceremony); err != nil {
 		t.Fatalf("SaveCeremony() = %v", err)
+	}
+	var challengeHash []byte
+	var ceremonyPayloadBytes []byte
+	var ceremonyKind string
+	if err := pool.QueryRow(ctx, `SELECT challenge_hash, payload, kind FROM auth_challenges WHERE id=$1::UUID`, ceremony.ID).
+		Scan(&challengeHash, &ceremonyPayloadBytes, &ceremonyKind); err != nil {
+		t.Fatal(err)
+	}
+	wantHash := sha256.Sum256([]byte(ceremony.Challenge))
+	var storedPayload ceremonyPayload
+	decodeErr := json.Unmarshal(ceremonyPayloadBytes, &storedPayload)
+	var storedVerifier, expectedVerifier bytes.Buffer
+	storedVerifierErr := json.Compact(&storedVerifier, storedPayload.VerifierSession)
+	expectedVerifierErr := json.Compact(&expectedVerifier, ceremony.VerifierSession)
+	verifierEqual := storedVerifierErr == nil && expectedVerifierErr == nil && bytes.Equal(storedVerifier.Bytes(), expectedVerifier.Bytes())
+	if !bytes.Equal(challengeHash, wantHash[:]) || ceremonyKind != "passkey_registration" ||
+		decodeErr != nil || storedPayload.Challenge != ceremony.Challenge ||
+		!verifierEqual {
+		t.Fatalf("saved ceremony digest_equal=%t kind_valid=%t payload_decoded=%t challenge_equal=%t verifier_equal=%t",
+			bytes.Equal(challengeHash, wantHash[:]), ceremonyKind == "passkey_registration", decodeErr == nil,
+			storedPayload.Challenge == ceremony.Challenge, verifierEqual)
 	}
 	consumedCeremony, err := store.ConsumeCeremony(ctx, ceremony.ID, ceremony.Kind, now.Add(time.Second))
 	if err != nil || consumedCeremony.ID != ceremony.ID || consumedCeremony.ConsumedAt == nil {

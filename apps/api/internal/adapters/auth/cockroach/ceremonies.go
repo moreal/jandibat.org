@@ -3,7 +3,6 @@ package cockroach
 import (
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -20,90 +19,60 @@ type ceremonyPayload struct {
 	VerifierSession json.RawMessage `json:"verifier_session"`
 }
 
-const ceremonyColumns = `id, kind, COALESCE(user_id, ''), payload, created_at, expires_at, consumed_at`
-
 func (store *Store) SaveCeremony(ctx context.Context, ceremony coreauth.PasskeyCeremony) error {
 	if ceremony.ID == "" || ceremony.Challenge == "" || !validJSONObject(ceremony.VerifierSession) ||
 		!validCeremonyKind(ceremony.Kind) || !ceremony.ExpiresAt.After(ceremony.CreatedAt) {
 		return coreauth.ErrInvalidInput
 	}
-	payload, err := json.Marshal(ceremonyPayload{Challenge: ceremony.Challenge, VerifierSession: ceremony.VerifierSession})
+	if store.pool == nil {
+		return ErrNilDB
+	}
+	payload, digest, err := encodeCeremony(ceremony)
 	if err != nil {
 		return coreauth.ErrInvalidInput
 	}
-	digest := sha256.Sum256([]byte(ceremony.Challenge))
-	if store.pool != nil {
-		id, err := uuid.Parse(ceremony.ID)
-		if err != nil {
-			return coreauth.ErrInvalidInput
-		}
-		userID := ceremony.UserID
-		var consumed *string
-		if ceremony.ConsumedAt != nil {
-			value := nullableTimeText(ceremony.ConsumedAt)
-			consumed = &value
-		}
-		return persistenceError(generated.InsertCeremony(ctx, appdb.PGXExecutorFor(ctx, store.pool), id, &userID, databaseCeremonyKind(ceremony.Kind), digest[:], payload, ceremony.ExpiresAt, consumed, ceremony.CreatedAt))
-	}
-	executor, err := store.mutationExecutor(ctx)
+	id, err := uuid.Parse(ceremony.ID)
 	if err != nil {
-		return err
+		return coreauth.ErrInvalidInput
 	}
-	_, err = executor.ExecContext(ctx, `
-INSERT INTO auth_challenges
-  (id, user_id, kind, challenge_hash, payload, expires_at, consumed_at, created_at)
-VALUES ($1, NULLIF($2, ''), $3, $4, $5, $6, $7, $8)`,
-		ceremony.ID, ceremony.UserID, databaseCeremonyKind(ceremony.Kind), digest[:], payload,
-		ceremony.ExpiresAt, ceremony.ConsumedAt, ceremony.CreatedAt)
-	return persistenceError(err)
+	userID := ceremony.UserID
+	var consumed *string
+	if ceremony.ConsumedAt != nil {
+		value := nullableTimeText(ceremony.ConsumedAt)
+		consumed = &value
+	}
+	return persistenceError(generated.InsertCeremony(ctx, appdb.PGXExecutorFor(ctx, store.pool), id, &userID, databaseCeremonyKind(ceremony.Kind), digest[:], payload, ceremony.ExpiresAt, consumed, ceremony.CreatedAt))
+}
+
+func encodeCeremony(ceremony coreauth.PasskeyCeremony) ([]byte, [sha256.Size]byte, error) {
+	payload, err := json.Marshal(ceremonyPayload{Challenge: ceremony.Challenge, VerifierSession: ceremony.VerifierSession})
+	return payload, sha256.Sum256([]byte(ceremony.Challenge)), err
 }
 
 func (store *Store) ConsumeCeremony(ctx context.Context, id string, kind coreauth.CeremonyKind, now time.Time) (coreauth.PasskeyCeremony, error) {
 	if id == "" || !validCeremonyKind(kind) {
 		return coreauth.PasskeyCeremony{}, coreauth.ErrInvalidInput
 	}
-	if store.pool != nil {
-		parsedID, err := uuid.Parse(id)
-		if err != nil {
-			return coreauth.PasskeyCeremony{}, coreauth.ErrInvalidInput
-		}
-		if appdb.HasPendingLazyPGXTransaction(ctx, store.pool) {
-			if stateErr := store.ceremonyStatePGX(ctx, parsedID, kind, now); !errors.Is(stateErr, coreauth.ErrConflict) {
-				return coreauth.PasskeyCeremony{}, stateErr
-			}
-		}
-		row, err := generated.ConsumeCeremony(ctx, appdb.PGXExecutorFor(ctx, store.pool), parsedID, databaseCeremonyKind(kind), now)
-		if err != nil {
-			return coreauth.PasskeyCeremony{}, persistenceError(err)
-		}
-		if row != nil {
-			return ceremonyFromGenerated(*row)
-		}
-		return coreauth.PasskeyCeremony{}, store.ceremonyStatePGX(ctx, parsedID, kind, now)
+	if store.pool == nil {
+		return coreauth.PasskeyCeremony{}, ErrNilDB
 	}
-	// Known missing/expired/replayed ceremonies do not need a transaction. This
-	// lets the HTTP audit boundary distinguish a deliberate post-claim verifier
-	// rejection from a replay that changed no durable state. The conditional
-	// UPDATE below remains the authority for concurrent consumers.
-	if _, active := appdb.Transaction(ctx, store.db); !active && appdb.HasLazyTransaction(ctx, store.db) {
-		if stateErr := store.ceremonyState(ctx, id, kind, now); !errors.Is(stateErr, coreauth.ErrConflict) {
+	parsedID, err := uuid.Parse(id)
+	if err != nil {
+		return coreauth.PasskeyCeremony{}, coreauth.ErrInvalidInput
+	}
+	if appdb.HasPendingLazyPGXTransaction(ctx, store.pool) {
+		if stateErr := store.ceremonyStatePGX(ctx, parsedID, kind, now); !errors.Is(stateErr, coreauth.ErrConflict) {
 			return coreauth.PasskeyCeremony{}, stateErr
 		}
 	}
-	executor, err := store.mutationExecutor(ctx)
+	row, err := generated.ConsumeCeremony(ctx, appdb.PGXExecutorFor(ctx, store.pool), parsedID, databaseCeremonyKind(kind), now)
 	if err != nil {
-		return coreauth.PasskeyCeremony{}, err
+		return coreauth.PasskeyCeremony{}, persistenceError(err)
 	}
-	row := executor.QueryRowContext(ctx, `
-UPDATE auth_challenges
-SET consumed_at = $3
-WHERE id = $1 AND kind = $2 AND consumed_at IS NULL AND expires_at > $3
-RETURNING `+ceremonyColumns, id, databaseCeremonyKind(kind), now)
-	ceremony, err := scanCeremony(row)
-	if !errors.Is(err, coreauth.ErrNotFound) {
-		return ceremony, err
+	if row != nil {
+		return ceremonyFromGenerated(*row)
 	}
-	return coreauth.PasskeyCeremony{}, store.ceremonyState(ctx, id, kind, now)
+	return coreauth.PasskeyCeremony{}, store.ceremonyStatePGX(ctx, parsedID, kind, now)
 }
 
 func (store *Store) ceremonyStatePGX(ctx context.Context, id uuid.UUID, kind coreauth.CeremonyKind, now time.Time) error {
@@ -132,53 +101,6 @@ func ceremonyFromGenerated(row generated.ConsumeCeremonyRow) (coreauth.PasskeyCe
 	ceremony := coreauth.PasskeyCeremony{ID: row.Id, Kind: kind, Challenge: payload.Challenge, UserID: row.UserId, VerifierSession: append(json.RawMessage(nil), payload.VerifierSession...), CreatedAt: row.CreatedAt, ExpiresAt: row.ExpiresAt}
 	if row.ConsumedAt != nil {
 		value := *row.ConsumedAt
-		ceremony.ConsumedAt = &value
-	}
-	return ceremony, nil
-}
-
-func (store *Store) ceremonyState(ctx context.Context, id string, kind coreauth.CeremonyKind, now time.Time) error {
-	var actualKind string
-	var consumed sql.NullTime
-	var expires time.Time
-	err := store.db.QueryRowContext(ctx, `
-SELECT kind, consumed_at, expires_at FROM auth_challenges WHERE id = $1`, id).Scan(&actualKind, &consumed, &expires)
-	if err == sql.ErrNoRows || (err == nil && actualKind != databaseCeremonyKind(kind)) {
-		return coreauth.ErrNotFound
-	}
-	if err != nil {
-		return persistenceError(err)
-	}
-	if consumed.Valid {
-		return coreauth.ErrConsumed
-	}
-	if !now.Before(expires) {
-		return coreauth.ErrExpired
-	}
-	return coreauth.ErrConflict
-}
-
-func scanCeremony(row scanner) (coreauth.PasskeyCeremony, error) {
-	var ceremony coreauth.PasskeyCeremony
-	var databaseKind string
-	var payloadBytes []byte
-	var consumed sql.NullTime
-	if err := row.Scan(&ceremony.ID, &databaseKind, &ceremony.UserID, &payloadBytes,
-		&ceremony.CreatedAt, &ceremony.ExpiresAt, &consumed); err != nil {
-		if err == sql.ErrNoRows {
-			return coreauth.PasskeyCeremony{}, coreauth.ErrNotFound
-		}
-		return coreauth.PasskeyCeremony{}, persistenceError(err)
-	}
-	ceremony.Kind = applicationCeremonyKind(databaseKind)
-	var payload ceremonyPayload
-	if ceremony.Kind == "" || json.Unmarshal(payloadBytes, &payload) != nil || payload.Challenge == "" || !validJSONObject(payload.VerifierSession) {
-		return coreauth.PasskeyCeremony{}, coreauth.ErrInvalidInput
-	}
-	ceremony.Challenge = payload.Challenge
-	ceremony.VerifierSession = append(json.RawMessage(nil), payload.VerifierSession...)
-	if consumed.Valid {
-		value := consumed.Time
 		ceremony.ConsumedAt = &value
 	}
 	return ceremony, nil

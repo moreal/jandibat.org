@@ -21,10 +21,6 @@ type Store struct {
 	pool *pgxpool.Pool
 }
 
-func (s *Store) mutationExecutor(ctx context.Context) (appdb.Executor, error) {
-	return appdb.MutationExecutor(ctx, s.db)
-}
-
 func (s *Store) beginMutation(ctx context.Context) (context.Context, *appdb.Scope, error) {
 	return appdb.Begin(ctx, s.db, nil)
 }

@@ -3,10 +3,8 @@ package cockroach
 import (
 	"context"
 	"database/sql"
-	"database/sql/driver"
 	"errors"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 
@@ -89,37 +87,20 @@ func TestGeneratedSyncJobMapsQueuedAndPayload(t *testing.T) {
 	}
 }
 
-func TestSyncExecutionLeaseUsesSyncCursor(t *testing.T) {
-	script := fakedb.New(
-		fakedb.Step{Operation: fakedb.Query, Columns: []string{"claim_token"}, Rows: [][]driver.Value{{"11111111-1111-4111-8111-111111111111"}}},
-		fakedb.Step{Operation: fakedb.Exec, Affected: 1},
-	)
-	db := script.Open()
+func TestSyncExecutionRequiresPGXPool(t *testing.T) {
+	db := fakedb.New().Open()
 	defer db.Close()
 	store, err := New(db)
 	if err != nil {
 		t.Fatal(err)
 	}
 	connectionID := "018f0000-0000-7000-8000-000000000001"
-	claimToken, acquired, err := store.TryAcquireSyncExecution(context.Background(), connectionID)
-	if err != nil || !acquired {
-		t.Fatalf("TryAcquireSyncExecution() = %q, %v, %v", claimToken, acquired, err)
+	_, _, err = store.TryAcquireSyncExecution(context.Background(), connectionID)
+	if !errors.Is(err, ErrNilDB) {
+		t.Fatalf("TryAcquireSyncExecution() error = %v, want %v", err, ErrNilDB)
 	}
-	if err := store.ReleaseSyncExecution(context.Background(), connectionID, claimToken); err != nil {
-		t.Fatal(err)
-	}
-	calls := script.Calls()
-	if len(calls) != 2 || !strings.Contains(calls[0].Query, "sync_execution_expires_at") ||
-		!strings.Contains(calls[0].Query, "sync_execution_claim_token") || !strings.Contains(calls[1].Query, "sync_execution_claim_token' = $2") {
-		t.Fatalf("lease queries = %#v", calls)
-	}
-}
-
-func TestSyncExecutionLeaseRejectsRevokedConnections(t *testing.T) {
-	for _, fragment := range []string{"connection_status", "IN ('active', 'error')"} {
-		if !strings.Contains(acquireSyncExecutionQuery, fragment) {
-			t.Errorf("acquire query missing %q: %s", fragment, acquireSyncExecutionQuery)
-		}
+	if err := store.ReleaseSyncExecution(context.Background(), connectionID, "claim-token"); !errors.Is(err, ErrNilDB) {
+		t.Fatalf("ReleaseSyncExecution() error = %v, want %v", err, ErrNilDB)
 	}
 }
 

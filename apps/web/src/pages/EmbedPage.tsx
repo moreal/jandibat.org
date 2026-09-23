@@ -1,5 +1,5 @@
-import { For, Show, createMemo, createSignal } from "solid-js";
-import { defaultApiBaseUrl } from "../api/client";
+import { For, Show, createMemo, createSignal, untrack } from "solid-js";
+import { defaultApiBaseUrl } from "../api/runtime-base";
 import { useAppState } from "../app/state";
 import { CopyButton } from "../components/CopyButton";
 import { PageIntro } from "../components/common";
@@ -17,7 +17,7 @@ function appBaseUrl(): string {
 
 export function EmbedPage() {
   const app = useAppState();
-  const suggestedSubject = app.currentSubject() || app.exploreSubject();
+  const suggestedSubject = untrack(() => app.currentSubject() || app.exploreSubject());
   const [subject, setSubject] = createSignal(suggestedSubject);
   const [title, setTitle] = createSignal(
     suggestedSubject ? `${suggestedSubject}'s activity` : "Activity heatmap",
@@ -39,7 +39,6 @@ export function EmbedPage() {
     apiBaseUrl: defaultApiBaseUrl() || location.origin,
     appBaseUrl: appBaseUrl(),
   }));
-  const code = () => values()[format()];
 
   const selectTab = (next: EmbedFormat, focus = false) => {
     setFormat(next);
@@ -145,13 +144,15 @@ export function EmbedPage() {
           <div class="preview-card">
             <div class="browser-dots" aria-hidden="true"><i /><i /><i /></div>
             <div class="embed-preview">
-              <Show when={subject() && !previewFailed()} fallback={<p>SVG 미리보기는 공개 프로필을 입력하면 표시됩니다.</p>}>
-                <img
-                  src={values().url}
-                  alt={title() || "활동 히트맵"}
-                  onLoad={() => setPreviewFailed(false)}
-                  onError={() => setPreviewFailed(true)}
-                />
+              <Show when={values()} fallback={<p>SVG 미리보기는 유효한 공개 프로필 식별자를 입력하면 표시됩니다.</p>}>
+                {(embed) => <Show when={!previewFailed()} fallback={<p>공개 프로필의 SVG 미리보기를 불러오지 못했습니다.</p>}>
+                  <img
+                    src={embed().url}
+                    alt={title() || "활동 히트맵"}
+                    onLoad={() => setPreviewFailed(false)}
+                    onError={() => setPreviewFailed(true)}
+                  />
+                </Show>}
               </Show>
             </div>
           </div>
@@ -175,16 +176,20 @@ export function EmbedPage() {
             role="tabpanel"
             aria-labelledby={`embed-tab-${format()}`}
           >
-            <code>{code()}</code>
-            <CopyButton
-              value={code()}
-              label="코드 복사"
-              copiedLabel="복사됨"
-              successMessage="임베드 코드를 복사했습니다."
-              failureMessage="코드를 복사하지 못했습니다."
-            />
+            <Show when={values()} fallback={<code>유효한 프로필 식별자를 입력해 주세요.</code>}>
+              {(embed) => <>
+                <code>{embed()[format()]}</code>
+                <CopyButton
+                  value={embed()[format()]}
+                  label="코드 복사"
+                  copiedLabel="복사됨"
+                  successMessage="임베드 코드를 복사했습니다."
+                  failureMessage="코드를 복사하지 못했습니다."
+                />
+              </>}
+            </Show>
           </div>
-          <p class="code-help">공개 프로필의 렌더 URL에는 인증 정보가 포함되지 않습니다.</p>
+          <p class="code-help">임베드는 공개 프로필에서만 보입니다. 렌더 URL에는 인증 정보가 포함되지 않습니다.</p>
         </div>
       </div>
     </section>

@@ -1,5 +1,5 @@
 import {
-  escapeHtml,
+  escapeHtmlAttribute,
   escapeMarkdownDestination,
   escapeMarkdownLabel,
 } from "../ui/html.ts";
@@ -23,12 +23,15 @@ export type EmbedValues = {
   html: string;
 };
 
+const SUBJECT_HANDLE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
 function withoutTrailingSlash(value: string): string {
   return value.replace(/\/$/, "");
 }
 
-export function buildEmbedValues(options: EmbedOptions): EmbedValues {
+export function buildEmbedValues(options: EmbedOptions): EmbedValues | undefined {
   const subject = options.subject.trim();
+  if (!SUBJECT_HANDLE.test(subject)) return undefined;
   const title = options.title.trim() || `${subject}'s activity`;
   const cellSize = Math.max(6, Math.min(32, options.cellSize));
   const params = new URLSearchParams({
@@ -42,7 +45,7 @@ export function buildEmbedValues(options: EmbedOptions): EmbedValues {
 
   return {
     url,
-    markdown: `[![${escapeMarkdownLabel(title)}](${escapeMarkdownDestination(url)})](${escapeMarkdownDestination(profileUrl)})`,
-    html: `<a href="${escapeHtml(profileUrl)}"><img src="${escapeHtml(url)}" alt="${escapeHtml(title)}"></a>`,
+    markdown: `[![${escapeMarkdownLabel(title.replace(/[\r\n\t]+/g, " "))}](${escapeMarkdownDestination(url)})](${escapeMarkdownDestination(profileUrl)})`,
+    html: `<a href="${escapeHtmlAttribute(profileUrl)}"><img src="${escapeHtmlAttribute(url)}" alt="${escapeHtmlAttribute(title)}"></a>`,
   };
 }

@@ -28,7 +28,8 @@ import type {
   WebAuthnCredentialDto,
 } from "@jandibat/contracts";
 import type { components, paths } from "../generated/api";
-import { validateRuntimeApiBaseUrl } from "./authorization-url";
+import { defaultApiBaseUrl } from "./runtime-base";
+export { defaultApiBaseUrl } from "./runtime-base";
 
 export type OpenApiPaths = paths;
 export type PasskeyOptions = Record<string, unknown>;
@@ -432,16 +433,6 @@ function isProblem(value: unknown): value is ProblemDto {
     typeof candidate.code === "string" &&
     typeof candidate.requestId === "string"
   );
-}
-
-export function defaultApiBaseUrl(): string {
-  const runtime = window.__JANDIBAT_CONFIG__?.apiBaseUrl;
-  if (runtime !== undefined) {
-    return validateRuntimeApiBaseUrl(runtime, import.meta.env.DEV);
-  }
-  const configured = import.meta.env.VITE_API_BASE_URL as string | undefined;
-  if (configured) return validateRuntimeApiBaseUrl(configured, import.meta.env.DEV);
-  return import.meta.env.DEV ? "http://localhost:8080" : "";
 }
 
 export const api = new FetchJandibatApi();

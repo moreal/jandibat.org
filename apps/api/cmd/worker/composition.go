@@ -74,7 +74,7 @@ func buildWorker(ctx context.Context, settings config.Config, logger *zap.Logger
 	if err != nil {
 		return nil, fmt.Errorf("worker: construct subject store: %w", err)
 	}
-	authRepository, err := authstore.New(db)
+	authRepository, err := authstore.New(database.Pool)
 	if err != nil {
 		return nil, fmt.Errorf("worker: construct auth store: %w", err)
 	}

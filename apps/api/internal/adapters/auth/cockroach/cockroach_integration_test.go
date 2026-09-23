@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	coreauth "github.com/moreal/jandibat.org/apps/api/internal/auth"
 	"github.com/moreal/jandibat.org/apps/api/internal/identity"
@@ -46,7 +47,7 @@ func TestCockroachMagicLinkPurposeBindingAndReplay(t *testing.T) {
 		_, _ = db.ExecContext(cleanupCtx, `DELETE FROM magic_link_tokens WHERE id = $1`, linkID)
 	})
 
-	store, err := New(db)
+	store, err := New(authIntegrationPool(t, ctx, dsn))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,13 +105,31 @@ func TestCockroachMagicLinkIntentOutboxRolesAndCrashRecovery(t *testing.T) {
 		}
 		return db
 	}
-	apiDB := roleDB("JANDIBAT_TEST_API_DATABASE_URL", "jandibat_api")
+	roleDB("JANDIBAT_TEST_API_DATABASE_URL", "jandibat_api")
 	workerDB := roleDB("JANDIBAT_TEST_WORKER_DATABASE_URL", "jandibat_worker")
-	apiStore, err := New(apiDB)
+	apiDSN := os.Getenv("JANDIBAT_TEST_API_DATABASE_URL")
+	if apiDSN == "" {
+		parsed, parseErr := url.Parse(dsn)
+		if parseErr != nil {
+			t.Fatal(parseErr)
+		}
+		parsed.User = url.User("jandibat_api")
+		apiDSN = parsed.String()
+	}
+	workerDSN := os.Getenv("JANDIBAT_TEST_WORKER_DATABASE_URL")
+	if workerDSN == "" {
+		parsed, parseErr := url.Parse(dsn)
+		if parseErr != nil {
+			t.Fatal(parseErr)
+		}
+		parsed.User = url.User("jandibat_worker")
+		workerDSN = parsed.String()
+	}
+	apiStore, err := New(authIntegrationPool(t, ctx, apiDSN))
 	if err != nil {
 		t.Fatal(err)
 	}
-	workerStore, err := New(workerDB)
+	workerStore, err := New(authIntegrationPool(t, ctx, workerDSN))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +339,7 @@ VALUES ('old', $1, $2, $3, $4)`, digest[:], requestUUID, now, now.Add(30*24*time
 		_, _ = db.ExecContext(cleanupCtx, `DELETE FROM deletion_requests WHERE id = $1`, requestUUID)
 	})
 
-	store, err := NewWithDeletedIdentityHMACKeys(db, map[string][]byte{"new": newKey, "old": oldKey})
+	store, err := NewWithDeletedIdentityHMACKeys(authIntegrationPool(t, ctx, dsn), map[string][]byte{"new": newKey, "old": oldKey})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -377,7 +396,7 @@ VALUES ($1, $2, $3, 'active', $3, $3)`, userID, email, now); err != nil {
 		_, _ = db.ExecContext(cleanupCtx, `DELETE FROM users WHERE primary_email = $1`, email)
 	})
 
-	store, err := New(db)
+	store, err := New(authIntegrationPool(t, ctx, dsn))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -480,7 +499,7 @@ VALUES ($1, $2, now(), 'active', now(), now())`, userID, userID+"@example.invali
 		_, _ = db.ExecContext(cleanupCtx, `DELETE FROM users WHERE id = $1`, userID)
 	})
 
-	store, err := New(db)
+	store, err := New(authIntegrationPool(t, ctx, dsn))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -589,4 +608,17 @@ func authIntegrationSuffix(t *testing.T) string {
 		t.Fatalf("generate integration suffix: %v", err)
 	}
 	return hex.EncodeToString(value[:])
+}
+
+func authIntegrationPool(t *testing.T, ctx context.Context, dsn string) *pgxpool.Pool {
+	t.Helper()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	if err := pool.Ping(ctx); err != nil {
+		t.Fatalf("ping CockroachDB: %v", err)
+	}
+	return pool
 }

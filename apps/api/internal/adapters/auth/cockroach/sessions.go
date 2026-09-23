@@ -6,6 +6,9 @@ import (
 	"errors"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	generated "github.com/moreal/jandibat.org/apps/api/internal/adapters/auth/cockroach/generated"
 	coreauth "github.com/moreal/jandibat.org/apps/api/internal/auth"
 	appdb "github.com/moreal/jandibat.org/apps/api/internal/database"
 )
@@ -15,6 +18,20 @@ const sessionColumns = `id, user_id, session_token_hash, created_at, expires_at,
 func (store *Store) SaveSession(ctx context.Context, session coreauth.Session) error {
 	if session.ID == "" || session.UserID == "" || !session.ExpiresAt.After(session.CreatedAt) {
 		return coreauth.ErrInvalidInput
+	}
+	if store.pool != nil {
+		id, err := uuid.Parse(session.ID)
+		if err != nil {
+			return coreauth.ErrInvalidInput
+		}
+		count, err := generated.InsertActiveSession(ctx, appdb.PGXExecutorFor(ctx, store.pool), id, session.UserID, session.TokenHash[:], session.CreatedAt, session.ExpiresAt, nullableTimeText(session.RevokedAt), nullableTimeText(session.LastSeenAt), session.IPAddress, session.UserAgent)
+		if err != nil {
+			return persistenceError(err)
+		}
+		if count == 0 {
+			return coreauth.ErrUserDisabled
+		}
+		return nil
 	}
 	executor, err := store.mutationExecutor(ctx)
 	if err != nil {
@@ -39,6 +56,17 @@ WHERE id = $2 AND status = 'active'`,
 }
 
 func (store *Store) UseSession(ctx context.Context, tokenHash coreauth.Digest, now time.Time) (coreauth.Session, error) {
+	if store.pool != nil {
+		executor := appdb.PGXExecutorFor(ctx, store.pool)
+		row, err := generated.UseActiveSession(ctx, executor, tokenHash[:], now)
+		if err != nil {
+			return coreauth.Session{}, persistenceError(err)
+		}
+		if row != nil {
+			return sessionFromGenerated(generated.GetSessionByHashRow(*row))
+		}
+		return coreauth.Session{}, store.sessionStatePGX(ctx, tokenHash, now)
+	}
 	// ExecutorFor joins an already-active request transaction (for example the
 	// session just created by a successful sign-in), but deliberately does not
 	// start a lazy transaction during ordinary authentication. OAuth callbacks
@@ -58,6 +86,23 @@ RETURNING `+sessionColumns, tokenHash[:], now)
 		return session, err
 	}
 	return coreauth.Session{}, store.sessionState(ctx, executor, tokenHash, now)
+}
+
+func (store *Store) sessionStatePGX(ctx context.Context, tokenHash coreauth.Digest, now time.Time) error {
+	row, err := generated.GetSessionState(ctx, appdb.PGXExecutorFor(ctx, store.pool), tokenHash[:])
+	if err != nil {
+		return persistenceError(err)
+	}
+	if row == nil {
+		return coreauth.ErrNotFound
+	}
+	if row.RevokedAt != nil {
+		return coreauth.ErrConsumed
+	}
+	if !now.Before(row.ExpiresAt) {
+		return coreauth.ErrExpired
+	}
+	return coreauth.ErrConflict
 }
 
 func (store *Store) sessionState(ctx context.Context, executor appdb.Executor, tokenHash coreauth.Digest, now time.Time) error {
@@ -81,16 +126,51 @@ SELECT revoked_at, expires_at FROM user_sessions WHERE session_token_hash = $1`,
 }
 
 func (store *Store) RevokeSession(ctx context.Context, tokenHash coreauth.Digest, now time.Time) error {
+	if store.pool != nil {
+		count, err := generated.RevokeSessionByHash(ctx, appdb.PGXExecutorFor(ctx, store.pool), tokenHash[:], now)
+		if err != nil {
+			return persistenceError(err)
+		}
+		if count == 0 {
+			return coreauth.ErrNotFound
+		}
+		return nil
+	}
 	return store.execSessionUpdate(ctx, `
 UPDATE user_sessions SET revoked_at = COALESCE(revoked_at, $2) WHERE session_token_hash = $1`, tokenHash[:], now)
 }
 
 func (store *Store) GetSession(ctx context.Context, tokenHash coreauth.Digest) (coreauth.Session, error) {
+	if store.pool != nil {
+		row, err := generated.GetSessionByHash(ctx, appdb.PGXExecutorFor(ctx, store.pool), tokenHash[:])
+		if err != nil {
+			return coreauth.Session{}, persistenceError(err)
+		}
+		if row == nil {
+			return coreauth.Session{}, coreauth.ErrNotFound
+		}
+		return sessionFromGenerated(*row)
+	}
 	return scanSession(store.db.QueryRowContext(ctx, `
 SELECT `+sessionColumns+` FROM user_sessions WHERE session_token_hash = $1`, tokenHash[:]))
 }
 
 func (store *Store) ListSessionsByUser(ctx context.Context, userID string) ([]coreauth.Session, error) {
+	if store.pool != nil {
+		rows, err := generated.ListSessionsByUser(ctx, appdb.PGXExecutorFor(ctx, store.pool), userID)
+		if err != nil {
+			return nil, persistenceError(err)
+		}
+		items := make([]coreauth.Session, 0, len(rows))
+		for _, row := range rows {
+			item, mapErr := sessionFromGenerated(generated.GetSessionByHashRow(row))
+			if mapErr != nil {
+				return nil, mapErr
+			}
+			items = append(items, item)
+		}
+		return items, nil
+	}
 	rows, err := store.db.QueryContext(ctx, `
 SELECT `+sessionColumns+` FROM user_sessions WHERE user_id = $1 ORDER BY created_at DESC, id`, userID)
 	if err != nil {
@@ -112,6 +192,18 @@ SELECT `+sessionColumns+` FROM user_sessions WHERE user_id = $1 ORDER BY created
 }
 
 func (store *Store) RevokeOtherSessions(ctx context.Context, userID string, exceptTokenHash coreauth.Digest, now time.Time) error {
+	if store.pool != nil {
+		return appdb.InTx(ctx, store.pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
+			exists, err := generated.GetSessionOwnedByUserExists(txctx, tx, userID, exceptTokenHash[:])
+			if err != nil {
+				return persistenceError(err)
+			}
+			if !exists.Exists {
+				return coreauth.ErrNotFound
+			}
+			return persistenceError(generated.RevokeOtherSessions(txctx, tx, userID, exceptTokenHash[:], now))
+		})
+	}
 	ctx, scope, err := store.beginMutation(ctx)
 	if err != nil {
 		return err
@@ -136,8 +228,49 @@ WHERE user_id = $1 AND session_token_hash != $2`, userID, exceptTokenHash[:], no
 }
 
 func (store *Store) RevokeSessionByID(ctx context.Context, userID, sessionID string, now time.Time) error {
+	if store.pool != nil {
+		id, err := uuid.Parse(sessionID)
+		if err != nil {
+			return coreauth.ErrInvalidInput
+		}
+		count, err := generated.RevokeSessionById(ctx, appdb.PGXExecutorFor(ctx, store.pool), userID, id, now)
+		if err != nil {
+			return persistenceError(err)
+		}
+		if count == 0 {
+			return coreauth.ErrNotFound
+		}
+		return nil
+	}
 	return store.execSessionUpdate(ctx, `
 UPDATE user_sessions SET revoked_at = COALESCE(revoked_at, $3) WHERE user_id = $1 AND id = $2`, userID, sessionID, now)
+}
+
+func nullableTimeText(value *time.Time) string {
+	if value == nil {
+		return ""
+	}
+	return value.UTC().Format(time.RFC3339Nano)
+}
+
+func sessionFromGenerated(row generated.GetSessionByHashRow) (coreauth.Session, error) {
+	var session coreauth.Session
+	if len(row.SessionTokenHash) != len(session.TokenHash) {
+		return coreauth.Session{}, coreauth.ErrInvalidInput
+	}
+	session.ID, session.UserID = row.Id, row.UserId
+	copy(session.TokenHash[:], row.SessionTokenHash)
+	session.CreatedAt, session.ExpiresAt = row.CreatedAt, row.ExpiresAt
+	if row.RevokedAt != nil {
+		value := *row.RevokedAt
+		session.RevokedAt = &value
+	}
+	if row.LastSeenAt != nil {
+		value := *row.LastSeenAt
+		session.LastSeenAt = &value
+	}
+	session.IPAddress, session.UserAgent = row.Ip, row.UserAgent
+	return session, nil
 }
 
 func (store *Store) execSessionUpdate(ctx context.Context, query string, args ...any) error {

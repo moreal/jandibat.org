@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+	generated "github.com/moreal/jandibat.org/apps/api/internal/adapters/auth/cockroach/generated"
 	coreauth "github.com/moreal/jandibat.org/apps/api/internal/auth"
 	appdb "github.com/moreal/jandibat.org/apps/api/internal/database"
 )
@@ -30,6 +32,19 @@ func (store *Store) SaveCeremony(ctx context.Context, ceremony coreauth.PasskeyC
 		return coreauth.ErrInvalidInput
 	}
 	digest := sha256.Sum256([]byte(ceremony.Challenge))
+	if store.pool != nil {
+		id, err := uuid.Parse(ceremony.ID)
+		if err != nil {
+			return coreauth.ErrInvalidInput
+		}
+		userID := ceremony.UserID
+		var consumed *string
+		if ceremony.ConsumedAt != nil {
+			value := nullableTimeText(ceremony.ConsumedAt)
+			consumed = &value
+		}
+		return persistenceError(generated.InsertCeremony(ctx, appdb.PGXExecutorFor(ctx, store.pool), id, &userID, databaseCeremonyKind(ceremony.Kind), digest[:], payload, ceremony.ExpiresAt, consumed, ceremony.CreatedAt))
+	}
 	executor, err := store.mutationExecutor(ctx)
 	if err != nil {
 		return err
@@ -46,6 +61,20 @@ VALUES ($1, NULLIF($2, ''), $3, $4, $5, $6, $7, $8)`,
 func (store *Store) ConsumeCeremony(ctx context.Context, id string, kind coreauth.CeremonyKind, now time.Time) (coreauth.PasskeyCeremony, error) {
 	if id == "" || !validCeremonyKind(kind) {
 		return coreauth.PasskeyCeremony{}, coreauth.ErrInvalidInput
+	}
+	if store.pool != nil {
+		parsedID, err := uuid.Parse(id)
+		if err != nil {
+			return coreauth.PasskeyCeremony{}, coreauth.ErrInvalidInput
+		}
+		row, err := generated.ConsumeCeremony(ctx, appdb.PGXExecutorFor(ctx, store.pool), parsedID, databaseCeremonyKind(kind), now)
+		if err != nil {
+			return coreauth.PasskeyCeremony{}, persistenceError(err)
+		}
+		if row != nil {
+			return ceremonyFromGenerated(*row)
+		}
+		return coreauth.PasskeyCeremony{}, store.ceremonyStatePGX(ctx, parsedID, kind, now)
 	}
 	// Known missing/expired/replayed ceremonies do not need a transaction. This
 	// lets the HTTP audit boundary distinguish a deliberate post-claim verifier
@@ -70,6 +99,37 @@ RETURNING `+ceremonyColumns, id, databaseCeremonyKind(kind), now)
 		return ceremony, err
 	}
 	return coreauth.PasskeyCeremony{}, store.ceremonyState(ctx, id, kind, now)
+}
+
+func (store *Store) ceremonyStatePGX(ctx context.Context, id uuid.UUID, kind coreauth.CeremonyKind, now time.Time) error {
+	row, err := generated.GetCeremonyState(ctx, appdb.PGXExecutorFor(ctx, store.pool), id)
+	if err != nil {
+		return persistenceError(err)
+	}
+	if row == nil || row.Kind != databaseCeremonyKind(kind) {
+		return coreauth.ErrNotFound
+	}
+	if row.ConsumedAt != nil {
+		return coreauth.ErrConsumed
+	}
+	if !now.Before(row.ExpiresAt) {
+		return coreauth.ErrExpired
+	}
+	return coreauth.ErrConflict
+}
+
+func ceremonyFromGenerated(row generated.ConsumeCeremonyRow) (coreauth.PasskeyCeremony, error) {
+	kind := applicationCeremonyKind(row.Kind)
+	var payload ceremonyPayload
+	if kind == "" || json.Unmarshal(row.Payload, &payload) != nil || payload.Challenge == "" || !validJSONObject(payload.VerifierSession) {
+		return coreauth.PasskeyCeremony{}, coreauth.ErrInvalidInput
+	}
+	ceremony := coreauth.PasskeyCeremony{ID: row.Id, Kind: kind, Challenge: payload.Challenge, UserID: row.UserId, VerifierSession: append(json.RawMessage(nil), payload.VerifierSession...), CreatedAt: row.CreatedAt, ExpiresAt: row.ExpiresAt}
+	if row.ConsumedAt != nil {
+		value := *row.ConsumedAt
+		ceremony.ConsumedAt = &value
+	}
+	return ceremony, nil
 }
 
 func (store *Store) ceremonyState(ctx context.Context, id string, kind coreauth.CeremonyKind, now time.Time) error {

@@ -247,7 +247,7 @@ func buildApplication(ctx context.Context, settings config.Config, logger *zap.L
 
 	authRepository := auth.Repository(auth.NewMemoryStore())
 	if stores.db != nil {
-		authRepository, err = authstore.NewWithDeletedIdentityHMACKeys(stores.db, settings.DeletedIdentityHMACKeys)
+		authRepository, err = authstore.NewWithDeletedIdentityHMACKeys(stores.pool, settings.DeletedIdentityHMACKeys)
 		if err != nil {
 			return nil, fmt.Errorf("runtime: construct auth store: %w", err)
 		}

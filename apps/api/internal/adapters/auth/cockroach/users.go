@@ -4,10 +4,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	generated "github.com/moreal/jandibat.org/apps/api/internal/adapters/auth/cockroach/generated"
 	coreauth "github.com/moreal/jandibat.org/apps/api/internal/auth"
 	appdb "github.com/moreal/jandibat.org/apps/api/internal/database"
@@ -19,6 +21,9 @@ const userColumns = `id, primary_email, status, email_verified_at, created_at, u
 func (store *Store) GetUserByID(ctx context.Context, id string) (coreauth.User, error) {
 	if store.pool != nil {
 		row, err := generated.GetUserById(ctx, appdb.PGXExecutorFor(ctx, store.pool), id)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return coreauth.User{}, coreauth.ErrNotFound
+		}
 		if err != nil {
 			return coreauth.User{}, persistenceError(err)
 		}
@@ -40,6 +45,35 @@ func (store *Store) GetOrCreateUserByEmail(ctx context.Context, email, suggested
 	normalized, ok := normalizeEmail(email)
 	if !ok || strings.TrimSpace(suggestedID) == "" || now.IsZero() {
 		return coreauth.User{}, coreauth.ErrInvalidInput
+	}
+	if store.pool != nil {
+		var user coreauth.User
+		err := appdb.InTx(ctx, store.pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
+			for _, key := range store.deletedIdentityHMACKeys {
+				digest, ok := identity.EmailHMAC(normalized, key.material)
+				if !ok {
+					return coreauth.ErrInvalidInput
+				}
+				row, err := generated.GetActiveIdentityTombstone(txctx, tx, key.id, digest[:], now)
+				if err != nil {
+					return persistenceError(err)
+				}
+				if row.Exists {
+					return coreauth.ErrUserDisabled
+				}
+			}
+			emailHash := sha256.Sum256([]byte(normalized))
+			row, err := generated.InsertOrFindUser(txctx, tx, suggestedID, normalized, now, emailHash[:])
+			if err != nil {
+				return persistenceError(err)
+			}
+			if row == nil {
+				return coreauth.ErrUserDisabled
+			}
+			user, err = userFromGenerated(generated.GetUserByIdRow(*row))
+			return err
+		})
+		return user, err
 	}
 	query := `
 INSERT INTO users (id, primary_email, email_verified_at, status, created_at, updated_at)

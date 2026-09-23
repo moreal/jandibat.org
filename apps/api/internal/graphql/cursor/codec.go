@@ -16,9 +16,11 @@ import (
 type Kind string
 
 const (
-	Subject Kind = "Subject"
-	Session Kind = "Session"
-	SyncJob Kind = "SyncJob"
+	Subject            Kind = "Subject"
+	Session            Kind = "Session"
+	SyncJob            Kind = "SyncJob"
+	ProviderConnection Kind = "ProviderConnection"
+	CustomProvider     Kind = "CustomProvider"
 )
 
 // Position is a stable pagination tuple, independent of whether its row still exists.
@@ -70,7 +72,7 @@ func DecodeAs(expected Kind, token string) (Position, error) {
 
 func allowed(kind Kind) bool {
 	switch kind {
-	case Subject, Session, SyncJob:
+	case Subject, Session, SyncJob, ProviderConnection, CustomProvider:
 		return true
 	default:
 		return false
@@ -79,7 +81,7 @@ func allowed(kind Kind) bool {
 
 func validID(kind Kind, id string) bool {
 	switch kind {
-	case Session, SyncJob:
+	case Session, SyncJob, ProviderConnection, CustomProvider:
 		parsed, err := uuid.Parse(id)
 		return err == nil && parsed.String() == id
 	case Subject:

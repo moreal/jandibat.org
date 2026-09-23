@@ -10,7 +10,7 @@ import (
 const testUUID = "123e4567-e89b-42d3-a456-426614174000"
 
 func TestRoundTripConnectionKindsAndTuple(t *testing.T) {
-	for _, kind := range []Kind{Subject, Session, SyncJob} {
+	for _, kind := range []Kind{Subject, Session, SyncJob, ProviderConnection, CustomProvider} {
 		t.Run(string(kind), func(t *testing.T) {
 			id := testUUID
 			if kind == Subject {
@@ -39,6 +39,11 @@ func TestRejectsCrossConnectionCursor(t *testing.T) {
 	}
 	if position, err := DecodeAs(Subject, token); err == nil || position != (Position{}) {
 		t.Fatalf("DecodeAs(Subject, Session cursor) = (%+v, %v)", position, err)
+	}
+	for _, kind := range []Kind{ProviderConnection, CustomProvider} {
+		if position, err := DecodeAs(kind, token); err == nil || position != (Position{}) {
+			t.Fatalf("DecodeAs(%s, Session cursor) = (%+v, %v)", kind, position, err)
+		}
 	}
 }
 
@@ -79,7 +84,7 @@ func TestEncodeRejectsInvalidPositionWithoutEchoingInput(t *testing.T) {
 		kind     Kind
 		position Position
 	}{
-		{Kind("ProviderConnection"), Position{Timestamp: time.Now(), ID: secret}},
+		{Kind("UnknownConnection"), Position{Timestamp: time.Now(), ID: secret}},
 		{Session, Position{ID: secret}},
 		{Session, Position{Timestamp: time.Now(), ID: ""}},
 		{Session, Position{Timestamp: time.Now(), ID: "a\x00b"}},
@@ -115,6 +120,9 @@ func TestEncodeRejectsKindSpecificInvalidIDs(t *testing.T) {
 		{Session, "not-a-uuid"},
 		{Session, strings.ToUpper(testUUID)},
 		{SyncJob, strings.ReplaceAll(testUUID, "-", "")},
+		{ProviderConnection, "not-a-uuid"},
+		{ProviderConnection, strings.ToUpper(testUUID)},
+		{CustomProvider, strings.ReplaceAll(testUUID, "-", "")},
 		{Subject, "\nsubject"},
 		{Subject, "subject\x7f"},
 		{Subject, " \t "},
@@ -138,6 +146,9 @@ func TestDecodeRejectsKindSpecificInvalidIDs(t *testing.T) {
 		{Session, "not-a-uuid"},
 		{Session, strings.ToUpper(testUUID)},
 		{SyncJob, "no-dashes"},
+		{ProviderConnection, "not-a-uuid"},
+		{ProviderConnection, strings.ToUpper(testUUID)},
+		{CustomProvider, "no-dashes"},
 		{Subject, "subject\n"},
 		{Subject, "subject\x7f"},
 		{Subject, "  "},

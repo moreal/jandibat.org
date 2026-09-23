@@ -208,6 +208,67 @@ type CustomProviderConnection {
   pageInfo: PageInfo!
 }
 
+enum ProviderAuthMethod {
+  PUBLIC
+  TOKEN
+  OAUTH2
+}
+
+input ConnectProviderInput {
+  subjectID: ID!
+  providerID: String!
+  authMethod: ProviderAuthMethod!
+  "For TOKEN only. Never echoed in a Node or response."
+  token: String
+  scopes: [String!]
+  includePrivate: Boolean = false
+  "For OAUTH2 only; checked against the server's exact redirect allowlist."
+  redirectURI: String
+}
+
+type ConnectProviderPayload implements MutationPayload {
+  errors: [MutationError!]!
+  connection: ProviderConnection
+  authorizationURL: String
+}
+
+input UpdateProviderConnectionInput {
+  id: ID!
+  token: String
+  scopes: [String!]
+  enabled: Boolean
+}
+
+type UpdateProviderConnectionPayload implements MutationPayload {
+  errors: [MutationError!]!
+  connection: ProviderConnection
+}
+
+input RevokeProviderConnectionInput {
+  id: ID!
+}
+
+type RevokeProviderConnectionPayload implements MutationPayload {
+  errors: [MutationError!]!
+  "Relay ID to evict from normalized stores; revoked connections are no longer Nodes."
+  revokedConnectionID: ID
+}
+
+input EnqueueManualSyncInput {
+  connectionID: ID!
+  "8..255 chars; never echoed."
+  idempotencyKey: String!
+  from: Date
+  to: Date
+  force: Boolean = false
+  failurePolicy: FetchFailurePolicy
+}
+
+type EnqueueManualSyncPayload implements MutationPayload {
+  errors: [MutationError!]!
+  job: SyncJob
+}
+
 "A stable domain validation failure returned inside mutation payloads."
 type MutationError {
   code: String!
@@ -236,6 +297,10 @@ type Mutation {
   updateSubject(input: UpdateSubjectInput!): UpdateSubjectPayload!
   updateSubjectSettings(input: UpdateSubjectSettingsInput!): UpdateSubjectSettingsPayload!
   requestSubjectDeletion(input: RequestSubjectDeletionInput!): RequestSubjectDeletionPayload!
+  connectProvider(input: ConnectProviderInput!): ConnectProviderPayload!
+  updateProviderConnection(input: UpdateProviderConnectionInput!): UpdateProviderConnectionPayload!
+  revokeProviderConnection(input: RevokeProviderConnectionInput!): RevokeProviderConnectionPayload!
+  enqueueManualSync(input: EnqueueManualSyncInput!): EnqueueManualSyncPayload!
 }
 
 "A durable entity with an opaque, globally unique identity."

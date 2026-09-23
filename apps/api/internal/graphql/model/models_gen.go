@@ -100,6 +100,36 @@ func (this BeginPasskeySignInPayload) GetErrors() []*MutationError {
 	return interfaceSlice
 }
 
+type ConnectProviderInput struct {
+	SubjectID  string             `json:"subjectID"`
+	ProviderID string             `json:"providerID"`
+	AuthMethod ProviderAuthMethod `json:"authMethod"`
+	// For TOKEN only. Never echoed in a Node or response.
+	Token          *string  `json:"token,omitempty"`
+	Scopes         []string `json:"scopes,omitempty"`
+	IncludePrivate *bool    `json:"includePrivate,omitempty"`
+	// For OAUTH2 only; checked against the server's exact redirect allowlist.
+	RedirectURI *string `json:"redirectURI,omitempty"`
+}
+
+type ConnectProviderPayload struct {
+	Errors           []*MutationError    `json:"errors"`
+	Connection       *ProviderConnection `json:"connection,omitempty"`
+	AuthorizationURL *string             `json:"authorizationURL,omitempty"`
+}
+
+func (ConnectProviderPayload) IsMutationPayload() {}
+func (this ConnectProviderPayload) GetErrors() []*MutationError {
+	if this.Errors == nil {
+		return nil
+	}
+	interfaceSlice := make([]*MutationError, 0, len(this.Errors))
+	for _, concrete := range this.Errors {
+		interfaceSlice = append(interfaceSlice, concrete)
+	}
+	return interfaceSlice
+}
+
 type CreateSubjectInput struct {
 	Handle      string          `json:"handle"`
 	DisplayName *string         `json:"displayName,omitempty"`
@@ -163,6 +193,33 @@ type DateRangeInput struct {
 type DeletionRequestResult struct {
 	RequestID string `json:"requestID"`
 	Status    string `json:"status"`
+}
+
+type EnqueueManualSyncInput struct {
+	ConnectionID string `json:"connectionID"`
+	// 8..255 chars; never echoed.
+	IdempotencyKey string              `json:"idempotencyKey"`
+	From           *scalar.Date        `json:"from,omitempty"`
+	To             *scalar.Date        `json:"to,omitempty"`
+	Force          *bool               `json:"force,omitempty"`
+	FailurePolicy  *FetchFailurePolicy `json:"failurePolicy,omitempty"`
+}
+
+type EnqueueManualSyncPayload struct {
+	Errors []*MutationError `json:"errors"`
+	Job    *SyncJob         `json:"job,omitempty"`
+}
+
+func (EnqueueManualSyncPayload) IsMutationPayload() {}
+func (this EnqueueManualSyncPayload) GetErrors() []*MutationError {
+	if this.Errors == nil {
+		return nil
+	}
+	interfaceSlice := make([]*MutationError, 0, len(this.Errors))
+	for _, concrete := range this.Errors {
+		interfaceSlice = append(interfaceSlice, concrete)
+	}
+	return interfaceSlice
 }
 
 type FinishPasskeyRegistrationInput struct {
@@ -353,6 +410,28 @@ func (this RevokeOtherSessionsPayload) GetErrors() []*MutationError {
 	return interfaceSlice
 }
 
+type RevokeProviderConnectionInput struct {
+	ID string `json:"id"`
+}
+
+type RevokeProviderConnectionPayload struct {
+	Errors []*MutationError `json:"errors"`
+	// Relay ID to evict from normalized stores; revoked connections are no longer Nodes.
+	RevokedConnectionID *string `json:"revokedConnectionID,omitempty"`
+}
+
+func (RevokeProviderConnectionPayload) IsMutationPayload() {}
+func (this RevokeProviderConnectionPayload) GetErrors() []*MutationError {
+	if this.Errors == nil {
+		return nil
+	}
+	interfaceSlice := make([]*MutationError, 0, len(this.Errors))
+	for _, concrete := range this.Errors {
+		interfaceSlice = append(interfaceSlice, concrete)
+	}
+	return interfaceSlice
+}
+
 type RevokeSessionInput struct {
 	ID string `json:"id"`
 }
@@ -475,6 +554,30 @@ type SyncJobConnection struct {
 type SyncJobEdge struct {
 	Cursor scalar.Cursor `json:"cursor"`
 	Node   *SyncJob      `json:"node"`
+}
+
+type UpdateProviderConnectionInput struct {
+	ID      string   `json:"id"`
+	Token   *string  `json:"token,omitempty"`
+	Scopes  []string `json:"scopes,omitempty"`
+	Enabled *bool    `json:"enabled,omitempty"`
+}
+
+type UpdateProviderConnectionPayload struct {
+	Errors     []*MutationError    `json:"errors"`
+	Connection *ProviderConnection `json:"connection,omitempty"`
+}
+
+func (UpdateProviderConnectionPayload) IsMutationPayload() {}
+func (this UpdateProviderConnectionPayload) GetErrors() []*MutationError {
+	if this.Errors == nil {
+		return nil
+	}
+	interfaceSlice := make([]*MutationError, 0, len(this.Errors))
+	for _, concrete := range this.Errors {
+		interfaceSlice = append(interfaceSlice, concrete)
+	}
+	return interfaceSlice
 }
 
 type UpdateSubjectInput struct {
@@ -691,6 +794,63 @@ func (e *HeatmapTheme) UnmarshalJSON(b []byte) error {
 }
 
 func (e HeatmapTheme) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type ProviderAuthMethod string
+
+const (
+	ProviderAuthMethodPublic ProviderAuthMethod = "PUBLIC"
+	ProviderAuthMethodToken  ProviderAuthMethod = "TOKEN"
+	ProviderAuthMethodOauth2 ProviderAuthMethod = "OAUTH2"
+)
+
+var AllProviderAuthMethod = []ProviderAuthMethod{
+	ProviderAuthMethodPublic,
+	ProviderAuthMethodToken,
+	ProviderAuthMethodOauth2,
+}
+
+func (e ProviderAuthMethod) IsValid() bool {
+	switch e {
+	case ProviderAuthMethodPublic, ProviderAuthMethodToken, ProviderAuthMethodOauth2:
+		return true
+	}
+	return false
+}
+
+func (e ProviderAuthMethod) String() string {
+	return string(e)
+}
+
+func (e *ProviderAuthMethod) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = ProviderAuthMethod(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid ProviderAuthMethod", str)
+	}
+	return nil
+}
+
+func (e ProviderAuthMethod) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *ProviderAuthMethod) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e ProviderAuthMethod) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil

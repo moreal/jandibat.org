@@ -104,6 +104,16 @@ provider 목록은 소유자 전용 nullable Relay connection으로 노출합니
 원문 제공자 오류는 노출하지 않습니다. OAuth callback과 custom ingest는 HTTP edge에
 남습니다.
 
+## 2026-09-24 — Provider connection 변경 GraphQL 계약
+
+호환성: provider 연결 생성·수정·철회와 수동 동기화 요청을 typed mutation payload로
+추가합니다. TOKEN 비밀과 idempotency key는 입력으로만 받고 응답·Node에 복제하지
+않습니다. OAuth 시작은 검증된 쿠키 세션 바인딩과 redirect allowlist를 요구하며 callback은
+HTTP edge에 남습니다. 철회된 연결은 Node에서 사라지므로 철회 결과는 클라이언트의
+normalized store 축출에 필요한 Relay ID만 돌려줍니다. 동기화는 기존 24시간
+idempotency 의미를 유지합니다. Task 5의 operation별 rate limit, CSRF 및 감사 경계가
+완료되기 전에는 공개 라우트에 연결하지 않습니다.
+
 ## 2026-08-12 — 운영·보안 계약 강화 (`1.1.0`)
 
 호환성: `1.0.0` 개발 기준선 대비 breaking change. 아직 배포되지 않은 계약의 Phase 3 완료 조건을 명시적으로 고정합니다.

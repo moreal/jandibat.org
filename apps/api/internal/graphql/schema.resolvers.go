@@ -82,6 +82,26 @@ func (r *mutationResolver) RequestSubjectDeletion(ctx context.Context, input mod
 	return resolveRequestSubjectDeletion(ctx, input)
 }
 
+// ConnectProvider is the resolver for the connectProvider field.
+func (r *mutationResolver) ConnectProvider(ctx context.Context, input model.ConnectProviderInput) (*model.ConnectProviderPayload, error) {
+	return resolveConnectProvider(ctx, input)
+}
+
+// UpdateProviderConnection is the resolver for the updateProviderConnection field.
+func (r *mutationResolver) UpdateProviderConnection(ctx context.Context, input model.UpdateProviderConnectionInput) (*model.UpdateProviderConnectionPayload, error) {
+	return resolveUpdateProviderConnection(ctx, input)
+}
+
+// RevokeProviderConnection is the resolver for the revokeProviderConnection field.
+func (r *mutationResolver) RevokeProviderConnection(ctx context.Context, input model.RevokeProviderConnectionInput) (*model.RevokeProviderConnectionPayload, error) {
+	return resolveRevokeProviderConnection(ctx, input)
+}
+
+// EnqueueManualSync is the resolver for the enqueueManualSync field.
+func (r *mutationResolver) EnqueueManualSync(ctx context.Context, input model.EnqueueManualSyncInput) (*model.EnqueueManualSyncPayload, error) {
+	return resolveEnqueueManualSync(ctx, input)
+}
+
 // SyncJobs is the resolver for the syncJobs field.
 func (r *providerConnectionResolver) SyncJobs(ctx context.Context, obj *model.ProviderConnection, first *int, after *scalar.Cursor) (*model.SyncJobConnection, error) {
 	return resolveSyncJobs(ctx, obj, first, after)

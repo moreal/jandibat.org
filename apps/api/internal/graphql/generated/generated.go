@@ -90,6 +90,12 @@ type ComplexityRoot struct {
 		Options func(childComplexity int) int
 	}
 
+	ConnectProviderPayload struct {
+		AuthorizationURL func(childComplexity int) int
+		Connection       func(childComplexity int) int
+		Errors           func(childComplexity int) int
+	}
+
 	CreateSubjectPayload struct {
 		Errors  func(childComplexity int) int
 		Subject func(childComplexity int) int
@@ -128,6 +134,11 @@ type ComplexityRoot struct {
 		Status    func(childComplexity int) int
 	}
 
+	EnqueueManualSyncPayload struct {
+		Errors func(childComplexity int) int
+		Job    func(childComplexity int) int
+	}
+
 	FinishPasskeyRegistrationPayload struct {
 		Credential func(childComplexity int) int
 		Errors     func(childComplexity int) int
@@ -141,15 +152,19 @@ type ComplexityRoot struct {
 	Mutation struct {
 		BeginPasskeyRegistration  func(childComplexity int) int
 		BeginPasskeySignIn        func(childComplexity int) int
+		ConnectProvider           func(childComplexity int, input model.ConnectProviderInput) int
 		Contract                  func(childComplexity int) int
 		CreateSubject             func(childComplexity int, input model.CreateSubjectInput) int
+		EnqueueManualSync         func(childComplexity int, input model.EnqueueManualSyncInput) int
 		FinishPasskeyRegistration func(childComplexity int, input model.FinishPasskeyRegistrationInput) int
 		FinishPasskeySignIn       func(childComplexity int, input model.FinishPasskeySignInInput) int
 		RequestMagicLink          func(childComplexity int, input model.RequestMagicLinkInput) int
 		RequestSubjectDeletion    func(childComplexity int, input model.RequestSubjectDeletionInput) int
 		RevokeOtherSessions       func(childComplexity int) int
+		RevokeProviderConnection  func(childComplexity int, input model.RevokeProviderConnectionInput) int
 		RevokeSession             func(childComplexity int, input model.RevokeSessionInput) int
 		SignOut                   func(childComplexity int) int
+		UpdateProviderConnection  func(childComplexity int, input model.UpdateProviderConnectionInput) int
 		UpdateSubject             func(childComplexity int, input model.UpdateSubjectInput) int
 		UpdateSubjectSettings     func(childComplexity int, input model.UpdateSubjectSettingsInput) int
 		UpdateUserSettings        func(childComplexity int, input model.UpdateUserSettingsInput) int
@@ -242,6 +257,11 @@ type ComplexityRoot struct {
 		Errors         func(childComplexity int) int
 	}
 
+	RevokeProviderConnectionPayload struct {
+		Errors              func(childComplexity int) int
+		RevokedConnectionID func(childComplexity int) int
+	}
+
 	RevokeSessionPayload struct {
 		Errors  func(childComplexity int) int
 		Session func(childComplexity int) int
@@ -325,6 +345,11 @@ type ComplexityRoot struct {
 		Node   func(childComplexity int) int
 	}
 
+	UpdateProviderConnectionPayload struct {
+		Connection func(childComplexity int) int
+		Errors     func(childComplexity int) int
+	}
+
 	UpdateSubjectPayload struct {
 		Errors  func(childComplexity int) int
 		Subject func(childComplexity int) int
@@ -384,6 +409,10 @@ type MutationResolver interface {
 	UpdateSubject(ctx context.Context, input model.UpdateSubjectInput) (*model.UpdateSubjectPayload, error)
 	UpdateSubjectSettings(ctx context.Context, input model.UpdateSubjectSettingsInput) (*model.UpdateSubjectSettingsPayload, error)
 	RequestSubjectDeletion(ctx context.Context, input model.RequestSubjectDeletionInput) (*model.RequestSubjectDeletionPayload, error)
+	ConnectProvider(ctx context.Context, input model.ConnectProviderInput) (*model.ConnectProviderPayload, error)
+	UpdateProviderConnection(ctx context.Context, input model.UpdateProviderConnectionInput) (*model.UpdateProviderConnectionPayload, error)
+	RevokeProviderConnection(ctx context.Context, input model.RevokeProviderConnectionInput) (*model.RevokeProviderConnectionPayload, error)
+	EnqueueManualSync(ctx context.Context, input model.EnqueueManualSyncInput) (*model.EnqueueManualSyncPayload, error)
 }
 type ProviderConnectionResolver interface {
 	SyncJobs(ctx context.Context, obj *model.ProviderConnection, first *int, after *scalar.Cursor) (*model.SyncJobConnection, error)
@@ -606,6 +635,25 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.BeginPasskeySignInPayload.Options(childComplexity), true
 
+	case "ConnectProviderPayload.authorizationURL":
+		if e.ComplexityRoot.ConnectProviderPayload.AuthorizationURL == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ConnectProviderPayload.AuthorizationURL(childComplexity), true
+	case "ConnectProviderPayload.connection":
+		if e.ComplexityRoot.ConnectProviderPayload.Connection == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ConnectProviderPayload.Connection(childComplexity), true
+	case "ConnectProviderPayload.errors":
+		if e.ComplexityRoot.ConnectProviderPayload.Errors == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ConnectProviderPayload.Errors(childComplexity), true
+
 	case "CreateSubjectPayload.errors":
 		if e.ComplexityRoot.CreateSubjectPayload.Errors == nil {
 			break
@@ -732,6 +780,19 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.DeletionRequestResult.Status(childComplexity), true
 
+	case "EnqueueManualSyncPayload.errors":
+		if e.ComplexityRoot.EnqueueManualSyncPayload.Errors == nil {
+			break
+		}
+
+		return e.ComplexityRoot.EnqueueManualSyncPayload.Errors(childComplexity), true
+	case "EnqueueManualSyncPayload.job":
+		if e.ComplexityRoot.EnqueueManualSyncPayload.Job == nil {
+			break
+		}
+
+		return e.ComplexityRoot.EnqueueManualSyncPayload.Job(childComplexity), true
+
 	case "FinishPasskeyRegistrationPayload.credential":
 		if e.ComplexityRoot.FinishPasskeyRegistrationPayload.Credential == nil {
 			break
@@ -770,6 +831,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.BeginPasskeySignIn(childComplexity), true
+	case "Mutation.connectProvider":
+		if e.ComplexityRoot.Mutation.ConnectProvider == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_connectProvider_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.ConnectProvider(childComplexity, args["input"].(model.ConnectProviderInput)), true
 	case "Mutation._contract":
 		if e.ComplexityRoot.Mutation.Contract == nil {
 			break
@@ -787,6 +859,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.CreateSubject(childComplexity, args["input"].(model.CreateSubjectInput)), true
+	case "Mutation.enqueueManualSync":
+		if e.ComplexityRoot.Mutation.EnqueueManualSync == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_enqueueManualSync_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.EnqueueManualSync(childComplexity, args["input"].(model.EnqueueManualSyncInput)), true
 	case "Mutation.finishPasskeyRegistration":
 		if e.ComplexityRoot.Mutation.FinishPasskeyRegistration == nil {
 			break
@@ -837,6 +920,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.RevokeOtherSessions(childComplexity), true
+	case "Mutation.revokeProviderConnection":
+		if e.ComplexityRoot.Mutation.RevokeProviderConnection == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_revokeProviderConnection_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.RevokeProviderConnection(childComplexity, args["input"].(model.RevokeProviderConnectionInput)), true
 	case "Mutation.revokeSession":
 		if e.ComplexityRoot.Mutation.RevokeSession == nil {
 			break
@@ -854,6 +948,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.SignOut(childComplexity), true
+	case "Mutation.updateProviderConnection":
+		if e.ComplexityRoot.Mutation.UpdateProviderConnection == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_updateProviderConnection_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.UpdateProviderConnection(childComplexity, args["input"].(model.UpdateProviderConnectionInput)), true
 	case "Mutation.updateSubject":
 		if e.ComplexityRoot.Mutation.UpdateSubject == nil {
 			break
@@ -1222,6 +1327,19 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.RevokeOtherSessionsPayload.Errors(childComplexity), true
 
+	case "RevokeProviderConnectionPayload.errors":
+		if e.ComplexityRoot.RevokeProviderConnectionPayload.Errors == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RevokeProviderConnectionPayload.Errors(childComplexity), true
+	case "RevokeProviderConnectionPayload.revokedConnectionID":
+		if e.ComplexityRoot.RevokeProviderConnectionPayload.RevokedConnectionID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RevokeProviderConnectionPayload.RevokedConnectionID(childComplexity), true
+
 	case "RevokeSessionPayload.errors":
 		if e.ComplexityRoot.RevokeSessionPayload.Errors == nil {
 			break
@@ -1531,6 +1649,19 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.SyncJobEdge.Node(childComplexity), true
 
+	case "UpdateProviderConnectionPayload.connection":
+		if e.ComplexityRoot.UpdateProviderConnectionPayload.Connection == nil {
+			break
+		}
+
+		return e.ComplexityRoot.UpdateProviderConnectionPayload.Connection(childComplexity), true
+	case "UpdateProviderConnectionPayload.errors":
+		if e.ComplexityRoot.UpdateProviderConnectionPayload.Errors == nil {
+			break
+		}
+
+		return e.ComplexityRoot.UpdateProviderConnectionPayload.Errors(childComplexity), true
+
 	case "UpdateSubjectPayload.errors":
 		if e.ComplexityRoot.UpdateSubjectPayload.Errors == nil {
 			break
@@ -1681,13 +1812,17 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 	opCtx := graphql.GetOperationContext(ctx)
 	ec := newExecutionContext(opCtx, e, make(chan graphql.DeferredResult))
 	inputUnmarshalMap := graphql.BuildUnmarshalerMap(
+		ec.unmarshalInputConnectProviderInput,
 		ec.unmarshalInputCreateSubjectInput,
 		ec.unmarshalInputDateRangeInput,
+		ec.unmarshalInputEnqueueManualSyncInput,
 		ec.unmarshalInputFinishPasskeyRegistrationInput,
 		ec.unmarshalInputFinishPasskeySignInInput,
 		ec.unmarshalInputRequestMagicLinkInput,
 		ec.unmarshalInputRequestSubjectDeletionInput,
+		ec.unmarshalInputRevokeProviderConnectionInput,
 		ec.unmarshalInputRevokeSessionInput,
+		ec.unmarshalInputUpdateProviderConnectionInput,
 		ec.unmarshalInputUpdateSubjectInput,
 		ec.unmarshalInputUpdateSubjectSettingsInput,
 		ec.unmarshalInputUpdateUserSettingsInput,
@@ -1975,6 +2110,67 @@ type CustomProviderConnection {
   edges: [CustomProviderEdge!]!
   pageInfo: PageInfo!
 }
+
+enum ProviderAuthMethod {
+  PUBLIC
+  TOKEN
+  OAUTH2
+}
+
+input ConnectProviderInput {
+  subjectID: ID!
+  providerID: String!
+  authMethod: ProviderAuthMethod!
+  "For TOKEN only. Never echoed in a Node or response."
+  token: String
+  scopes: [String!]
+  includePrivate: Boolean = false
+  "For OAUTH2 only; checked against the server's exact redirect allowlist."
+  redirectURI: String
+}
+
+type ConnectProviderPayload implements MutationPayload {
+  errors: [MutationError!]!
+  connection: ProviderConnection
+  authorizationURL: String
+}
+
+input UpdateProviderConnectionInput {
+  id: ID!
+  token: String
+  scopes: [String!]
+  enabled: Boolean
+}
+
+type UpdateProviderConnectionPayload implements MutationPayload {
+  errors: [MutationError!]!
+  connection: ProviderConnection
+}
+
+input RevokeProviderConnectionInput {
+  id: ID!
+}
+
+type RevokeProviderConnectionPayload implements MutationPayload {
+  errors: [MutationError!]!
+  "Relay ID to evict from normalized stores; revoked connections are no longer Nodes."
+  revokedConnectionID: ID
+}
+
+input EnqueueManualSyncInput {
+  connectionID: ID!
+  "8..255 chars; never echoed."
+  idempotencyKey: String!
+  from: Date
+  to: Date
+  force: Boolean = false
+  failurePolicy: FetchFailurePolicy
+}
+
+type EnqueueManualSyncPayload implements MutationPayload {
+  errors: [MutationError!]!
+  job: SyncJob
+}
 `, BuiltIn: false},
 	{Name: "../../../../../graphql/schema/mutation.graphqls", Input: `"A stable domain validation failure returned inside mutation payloads."
 type MutationError {
@@ -2004,6 +2200,10 @@ type Mutation {
   updateSubject(input: UpdateSubjectInput!): UpdateSubjectPayload!
   updateSubjectSettings(input: UpdateSubjectSettingsInput!): UpdateSubjectSettingsPayload!
   requestSubjectDeletion(input: RequestSubjectDeletionInput!): RequestSubjectDeletionPayload!
+  connectProvider(input: ConnectProviderInput!): ConnectProviderPayload!
+  updateProviderConnection(input: UpdateProviderConnectionInput!): UpdateProviderConnectionPayload!
+  revokeProviderConnection(input: RevokeProviderConnectionInput!): RevokeProviderConnectionPayload!
+  enqueueManualSync(input: EnqueueManualSyncInput!): EnqueueManualSyncPayload!
 }
 `, BuiltIn: false},
 	{Name: "../../../../../graphql/schema/node.graphqls", Input: `"A durable entity with an opaque, globally unique identity."
@@ -2328,6 +2528,18 @@ func (ec *executionContext) childFields_BeginPasskeySignInPayload(ctx context.Co
 	return nil, fmt.Errorf("no field named %q was found under type BeginPasskeySignInPayload", field.Name)
 }
 
+func (ec *executionContext) childFields_ConnectProviderPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "errors":
+		return ec.fieldContext_ConnectProviderPayload_errors(ctx, field)
+	case "connection":
+		return ec.fieldContext_ConnectProviderPayload_connection(ctx, field)
+	case "authorizationURL":
+		return ec.fieldContext_ConnectProviderPayload_authorizationURL(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ConnectProviderPayload", field.Name)
+}
+
 func (ec *executionContext) childFields_CreateSubjectPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "errors":
@@ -2402,6 +2614,16 @@ func (ec *executionContext) childFields_DeletionRequestResult(ctx context.Contex
 		return ec.fieldContext_DeletionRequestResult_status(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type DeletionRequestResult", field.Name)
+}
+
+func (ec *executionContext) childFields_EnqueueManualSyncPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "errors":
+		return ec.fieldContext_EnqueueManualSyncPayload_errors(ctx, field)
+	case "job":
+		return ec.fieldContext_EnqueueManualSyncPayload_job(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type EnqueueManualSyncPayload", field.Name)
 }
 
 func (ec *executionContext) childFields_FinishPasskeyRegistrationPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -2582,6 +2804,16 @@ func (ec *executionContext) childFields_RevokeOtherSessionsPayload(ctx context.C
 	return nil, fmt.Errorf("no field named %q was found under type RevokeOtherSessionsPayload", field.Name)
 }
 
+func (ec *executionContext) childFields_RevokeProviderConnectionPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "errors":
+		return ec.fieldContext_RevokeProviderConnectionPayload_errors(ctx, field)
+	case "revokedConnectionID":
+		return ec.fieldContext_RevokeProviderConnectionPayload_revokedConnectionID(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type RevokeProviderConnectionPayload", field.Name)
+}
+
 func (ec *executionContext) childFields_RevokeSessionPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "errors":
@@ -2746,6 +2978,16 @@ func (ec *executionContext) childFields_SyncJobEdge(ctx context.Context, field g
 		return ec.fieldContext_SyncJobEdge_node(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type SyncJobEdge", field.Name)
+}
+
+func (ec *executionContext) childFields_UpdateProviderConnectionPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "errors":
+		return ec.fieldContext_UpdateProviderConnectionPayload_errors(ctx, field)
+	case "connection":
+		return ec.fieldContext_UpdateProviderConnectionPayload_connection(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type UpdateProviderConnectionPayload", field.Name)
 }
 
 func (ec *executionContext) childFields_UpdateSubjectPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -2942,12 +3184,40 @@ func (ec *executionContext) childFields___Type(ctx context.Context, field graphq
 
 // region    ***************************** args.gotpl *****************************
 
+func (ec *executionContext) field_Mutation_connectProvider_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
+		func(ctx context.Context, v any) (model.ConnectProviderInput, error) {
+			return ec.unmarshalNConnectProviderInput2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐConnectProviderInput(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg0
+	return args, nil
+}
+
 func (ec *executionContext) field_Mutation_createSubject_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
 	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
 		func(ctx context.Context, v any) (model.CreateSubjectInput, error) {
 			return ec.unmarshalNCreateSubjectInput2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐCreateSubjectInput(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_enqueueManualSync_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
+		func(ctx context.Context, v any) (model.EnqueueManualSyncInput, error) {
+			return ec.unmarshalNEnqueueManualSyncInput2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐEnqueueManualSyncInput(ctx, v)
 		})
 	if err != nil {
 		return nil, err
@@ -3012,12 +3282,40 @@ func (ec *executionContext) field_Mutation_requestSubjectDeletion_args(ctx conte
 	return args, nil
 }
 
+func (ec *executionContext) field_Mutation_revokeProviderConnection_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
+		func(ctx context.Context, v any) (model.RevokeProviderConnectionInput, error) {
+			return ec.unmarshalNRevokeProviderConnectionInput2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐRevokeProviderConnectionInput(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg0
+	return args, nil
+}
+
 func (ec *executionContext) field_Mutation_revokeSession_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
 	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
 		func(ctx context.Context, v any) (model.RevokeSessionInput, error) {
 			return ec.unmarshalNRevokeSessionInput2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐRevokeSessionInput(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_updateProviderConnection_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
+		func(ctx context.Context, v any) (model.UpdateProviderConnectionInput, error) {
+			return ec.unmarshalNUpdateProviderConnectionInput2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐUpdateProviderConnectionInput(ctx, v)
 		})
 	if err != nil {
 		return nil, err
@@ -4076,6 +4374,93 @@ func (ec *executionContext) fieldContext_BeginPasskeySignInPayload_options(_ con
 	return fc, nil
 }
 
+func (ec *executionContext) _ConnectProviderPayload_errors(ctx context.Context, field graphql.CollectedField, obj *model.ConnectProviderPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ConnectProviderPayload_errors(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Errors, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*model.MutationError) graphql.Marshaler {
+			return ec.marshalNMutationError2ᚕᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐMutationErrorᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ConnectProviderPayload_errors(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ConnectProviderPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_MutationError(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ConnectProviderPayload_connection(ctx context.Context, field graphql.CollectedField, obj *model.ConnectProviderPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ConnectProviderPayload_connection(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Connection, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.ProviderConnection) graphql.Marshaler {
+			return ec.marshalOProviderConnection2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐProviderConnection(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_ConnectProviderPayload_connection(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ConnectProviderPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_ProviderConnection(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ConnectProviderPayload_authorizationURL(ctx context.Context, field graphql.CollectedField, obj *model.ConnectProviderPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ConnectProviderPayload_authorizationURL(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.AuthorizationURL, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_ConnectProviderPayload_authorizationURL(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ConnectProviderPayload", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
 func (ec *executionContext) _CreateSubjectPayload_errors(ctx context.Context, field graphql.CollectedField, obj *model.CreateSubjectPayload) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -4579,6 +4964,70 @@ func (ec *executionContext) _DeletionRequestResult_status(ctx context.Context, f
 }
 func (ec *executionContext) fieldContext_DeletionRequestResult_status(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("DeletionRequestResult", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _EnqueueManualSyncPayload_errors(ctx context.Context, field graphql.CollectedField, obj *model.EnqueueManualSyncPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_EnqueueManualSyncPayload_errors(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Errors, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*model.MutationError) graphql.Marshaler {
+			return ec.marshalNMutationError2ᚕᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐMutationErrorᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_EnqueueManualSyncPayload_errors(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "EnqueueManualSyncPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_MutationError(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _EnqueueManualSyncPayload_job(ctx context.Context, field graphql.CollectedField, obj *model.EnqueueManualSyncPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_EnqueueManualSyncPayload_job(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Job, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.SyncJob) graphql.Marshaler {
+			return ec.marshalOSyncJob2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐSyncJob(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_EnqueueManualSyncPayload_job(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "EnqueueManualSyncPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_SyncJob(ctx, field)
+		},
+	}
+	return fc, nil
 }
 
 func (ec *executionContext) _FinishPasskeyRegistrationPayload_errors(ctx context.Context, field graphql.CollectedField, obj *model.FinishPasskeyRegistrationPayload) (ret graphql.Marshaler) {
@@ -5250,6 +5699,182 @@ func (ec *executionContext) fieldContext_Mutation_requestSubjectDeletion(ctx con
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Mutation_requestSubjectDeletion_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_connectProvider(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_connectProvider(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().ConnectProvider(ctx, fc.Args["input"].(model.ConnectProviderInput))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.ConnectProviderPayload) graphql.Marshaler {
+			return ec.marshalNConnectProviderPayload2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐConnectProviderPayload(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_connectProvider(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_ConnectProviderPayload(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_connectProvider_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_updateProviderConnection(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_updateProviderConnection(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().UpdateProviderConnection(ctx, fc.Args["input"].(model.UpdateProviderConnectionInput))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.UpdateProviderConnectionPayload) graphql.Marshaler {
+			return ec.marshalNUpdateProviderConnectionPayload2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐUpdateProviderConnectionPayload(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_updateProviderConnection(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_UpdateProviderConnectionPayload(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_updateProviderConnection_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_revokeProviderConnection(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_revokeProviderConnection(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().RevokeProviderConnection(ctx, fc.Args["input"].(model.RevokeProviderConnectionInput))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.RevokeProviderConnectionPayload) graphql.Marshaler {
+			return ec.marshalNRevokeProviderConnectionPayload2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐRevokeProviderConnectionPayload(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_revokeProviderConnection(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_RevokeProviderConnectionPayload(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_revokeProviderConnection_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_enqueueManualSync(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_enqueueManualSync(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().EnqueueManualSync(ctx, fc.Args["input"].(model.EnqueueManualSyncInput))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.EnqueueManualSyncPayload) graphql.Marshaler {
+			return ec.marshalNEnqueueManualSyncPayload2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐEnqueueManualSyncPayload(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_enqueueManualSync(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_EnqueueManualSyncPayload(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_enqueueManualSync_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -6658,6 +7283,61 @@ func (ec *executionContext) fieldContext_RevokeOtherSessionsPayload_currentSessi
 	return fc, nil
 }
 
+func (ec *executionContext) _RevokeProviderConnectionPayload_errors(ctx context.Context, field graphql.CollectedField, obj *model.RevokeProviderConnectionPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_RevokeProviderConnectionPayload_errors(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Errors, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*model.MutationError) graphql.Marshaler {
+			return ec.marshalNMutationError2ᚕᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐMutationErrorᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_RevokeProviderConnectionPayload_errors(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RevokeProviderConnectionPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_MutationError(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RevokeProviderConnectionPayload_revokedConnectionID(ctx context.Context, field graphql.CollectedField, obj *model.RevokeProviderConnectionPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_RevokeProviderConnectionPayload_revokedConnectionID(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.RevokedConnectionID, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOID2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_RevokeProviderConnectionPayload_revokedConnectionID(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("RevokeProviderConnectionPayload", field, false, false, errors.New("field of type ID does not have child fields"))
+}
+
 func (ec *executionContext) _RevokeSessionPayload_errors(ctx context.Context, field graphql.CollectedField, obj *model.RevokeSessionPayload) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -7923,6 +8603,70 @@ func (ec *executionContext) fieldContext_SyncJobEdge_node(_ context.Context, fie
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return ec.childFields_SyncJob(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _UpdateProviderConnectionPayload_errors(ctx context.Context, field graphql.CollectedField, obj *model.UpdateProviderConnectionPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UpdateProviderConnectionPayload_errors(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Errors, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*model.MutationError) graphql.Marshaler {
+			return ec.marshalNMutationError2ᚕᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐMutationErrorᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UpdateProviderConnectionPayload_errors(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "UpdateProviderConnectionPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_MutationError(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _UpdateProviderConnectionPayload_connection(ctx context.Context, field graphql.CollectedField, obj *model.UpdateProviderConnectionPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UpdateProviderConnectionPayload_connection(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Connection, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.ProviderConnection) graphql.Marshaler {
+			return ec.marshalOProviderConnection2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐProviderConnection(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_UpdateProviderConnectionPayload_connection(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "UpdateProviderConnectionPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_ProviderConnection(ctx, field)
 		},
 	}
 	return fc, nil
@@ -9593,6 +10337,82 @@ func (ec *executionContext) fieldContext___Type_isOneOf(_ context.Context, field
 
 // region    **************************** input.gotpl *****************************
 
+func (ec *executionContext) unmarshalInputConnectProviderInput(ctx context.Context, obj any) (model.ConnectProviderInput, error) {
+	var it model.ConnectProviderInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	if _, present := asMap["includePrivate"]; !present {
+		asMap["includePrivate"] = false
+	}
+
+	fieldsInOrder := [...]string{"subjectID", "providerID", "authMethod", "token", "scopes", "includePrivate", "redirectURI"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "subjectID":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("subjectID"))
+			data, err := ec.unmarshalNID2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.SubjectID = data
+		case "providerID":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("providerID"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ProviderID = data
+		case "authMethod":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("authMethod"))
+			data, err := ec.unmarshalNProviderAuthMethod2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐProviderAuthMethod(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.AuthMethod = data
+		case "token":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("token"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Token = data
+		case "scopes":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("scopes"))
+			data, err := ec.unmarshalOString2ᚕstringᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Scopes = data
+		case "includePrivate":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("includePrivate"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.IncludePrivate = data
+		case "redirectURI":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("redirectURI"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.RedirectURI = data
+		}
+	}
+	return it, nil
+}
+
 func (ec *executionContext) unmarshalInputCreateSubjectInput(ctx context.Context, obj any) (model.CreateSubjectInput, error) {
 	var it model.CreateSubjectInput
 	if obj == nil {
@@ -9676,6 +10496,75 @@ func (ec *executionContext) unmarshalInputDateRangeInput(ctx context.Context, ob
 				return it, err
 			}
 			it.To = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputEnqueueManualSyncInput(ctx context.Context, obj any) (model.EnqueueManualSyncInput, error) {
+	var it model.EnqueueManualSyncInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	if _, present := asMap["force"]; !present {
+		asMap["force"] = false
+	}
+
+	fieldsInOrder := [...]string{"connectionID", "idempotencyKey", "from", "to", "force", "failurePolicy"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "connectionID":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("connectionID"))
+			data, err := ec.unmarshalNID2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ConnectionID = data
+		case "idempotencyKey":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("idempotencyKey"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.IdempotencyKey = data
+		case "from":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("from"))
+			data, err := ec.unmarshalODate2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋscalarᚐDate(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.From = data
+		case "to":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("to"))
+			data, err := ec.unmarshalODate2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋscalarᚐDate(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.To = data
+		case "force":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("force"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Force = data
+		case "failurePolicy":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("failurePolicy"))
+			data, err := ec.unmarshalOFetchFailurePolicy2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐFetchFailurePolicy(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.FailurePolicy = data
 		}
 	}
 	return it, nil
@@ -9829,6 +10718,36 @@ func (ec *executionContext) unmarshalInputRequestSubjectDeletionInput(ctx contex
 	return it, nil
 }
 
+func (ec *executionContext) unmarshalInputRevokeProviderConnectionInput(ctx context.Context, obj any) (model.RevokeProviderConnectionInput, error) {
+	var it model.RevokeProviderConnectionInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"id"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "id":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("id"))
+			data, err := ec.unmarshalNID2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ID = data
+		}
+	}
+	return it, nil
+}
+
 func (ec *executionContext) unmarshalInputRevokeSessionInput(ctx context.Context, obj any) (model.RevokeSessionInput, error) {
 	var it model.RevokeSessionInput
 	if obj == nil {
@@ -9854,6 +10773,57 @@ func (ec *executionContext) unmarshalInputRevokeSessionInput(ctx context.Context
 				return it, err
 			}
 			it.ID = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputUpdateProviderConnectionInput(ctx context.Context, obj any) (model.UpdateProviderConnectionInput, error) {
+	var it model.UpdateProviderConnectionInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"id", "token", "scopes", "enabled"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "id":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("id"))
+			data, err := ec.unmarshalNID2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ID = data
+		case "token":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("token"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Token = data
+		case "scopes":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("scopes"))
+			data, err := ec.unmarshalOString2ᚕstringᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Scopes = data
+		case "enabled":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("enabled"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Enabled = data
 		}
 	}
 	return it, nil
@@ -10066,6 +11036,13 @@ func (ec *executionContext) _MutationPayload(ctx context.Context, sel ast.Select
 			return graphql.Null
 		}
 		return ec._UpdateSubjectPayload(ctx, sel, obj)
+	case model.UpdateProviderConnectionPayload:
+		return ec._UpdateProviderConnectionPayload(ctx, sel, &obj)
+	case *model.UpdateProviderConnectionPayload:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._UpdateProviderConnectionPayload(ctx, sel, obj)
 	case model.SignOutPayload:
 		return ec._SignOutPayload(ctx, sel, &obj)
 	case *model.SignOutPayload:
@@ -10080,6 +11057,13 @@ func (ec *executionContext) _MutationPayload(ctx context.Context, sel ast.Select
 			return graphql.Null
 		}
 		return ec._RevokeSessionPayload(ctx, sel, obj)
+	case model.RevokeProviderConnectionPayload:
+		return ec._RevokeProviderConnectionPayload(ctx, sel, &obj)
+	case *model.RevokeProviderConnectionPayload:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._RevokeProviderConnectionPayload(ctx, sel, obj)
 	case model.RevokeOtherSessionsPayload:
 		return ec._RevokeOtherSessionsPayload(ctx, sel, &obj)
 	case *model.RevokeOtherSessionsPayload:
@@ -10115,6 +11099,13 @@ func (ec *executionContext) _MutationPayload(ctx context.Context, sel ast.Select
 			return graphql.Null
 		}
 		return ec._FinishPasskeyRegistrationPayload(ctx, sel, obj)
+	case model.EnqueueManualSyncPayload:
+		return ec._EnqueueManualSyncPayload(ctx, sel, &obj)
+	case *model.EnqueueManualSyncPayload:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._EnqueueManualSyncPayload(ctx, sel, obj)
 	case model.CreateSubjectPayload:
 		return ec._CreateSubjectPayload(ctx, sel, &obj)
 	case *model.CreateSubjectPayload:
@@ -10122,6 +11113,13 @@ func (ec *executionContext) _MutationPayload(ctx context.Context, sel ast.Select
 			return graphql.Null
 		}
 		return ec._CreateSubjectPayload(ctx, sel, obj)
+	case model.ConnectProviderPayload:
+		return ec._ConnectProviderPayload(ctx, sel, &obj)
+	case *model.ConnectProviderPayload:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._ConnectProviderPayload(ctx, sel, obj)
 	case model.BeginPasskeySignInPayload:
 		return ec._BeginPasskeySignInPayload(ctx, sel, &obj)
 	case *model.BeginPasskeySignInPayload:
@@ -10573,6 +11571,54 @@ func (ec *executionContext) _BeginPasskeySignInPayload(ctx context.Context, sel 
 	return out
 }
 
+var connectProviderPayloadImplementors = []string{"ConnectProviderPayload", "MutationPayload"}
+
+func (ec *executionContext) _ConnectProviderPayload(ctx context.Context, sel ast.SelectionSet, obj *model.ConnectProviderPayload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, connectProviderPayloadImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("ConnectProviderPayload")
+		case "errors":
+			out.Values[i] = ec._ConnectProviderPayload_errors(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "connection":
+			out.Values[i] = ec._ConnectProviderPayload_connection(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "authorizationURL":
+			out.Values[i] = ec._ConnectProviderPayload_authorizationURL(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
 var createSubjectPayloadImplementors = []string{"CreateSubjectPayload", "MutationPayload"}
 
 func (ec *executionContext) _CreateSubjectPayload(ctx context.Context, sel ast.SelectionSet, obj *model.CreateSubjectPayload) graphql.Marshaler {
@@ -10871,6 +11917,49 @@ func (ec *executionContext) _DeletionRequestResult(ctx context.Context, sel ast.
 	return out
 }
 
+var enqueueManualSyncPayloadImplementors = []string{"EnqueueManualSyncPayload", "MutationPayload"}
+
+func (ec *executionContext) _EnqueueManualSyncPayload(ctx context.Context, sel ast.SelectionSet, obj *model.EnqueueManualSyncPayload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, enqueueManualSyncPayloadImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("EnqueueManualSyncPayload")
+		case "errors":
+			out.Values[i] = ec._EnqueueManualSyncPayload_errors(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "job":
+			out.Values[i] = ec._EnqueueManualSyncPayload_job(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
 var finishPasskeyRegistrationPayloadImplementors = []string{"FinishPasskeyRegistrationPayload", "MutationPayload"}
 
 func (ec *executionContext) _FinishPasskeyRegistrationPayload(ctx context.Context, sel ast.SelectionSet, obj *model.FinishPasskeyRegistrationPayload) graphql.Marshaler {
@@ -11071,6 +12160,34 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 		case "requestSubjectDeletion":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Mutation_requestSubjectDeletion(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "connectProvider":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_connectProvider(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "updateProviderConnection":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_updateProviderConnection(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "revokeProviderConnection":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_revokeProviderConnection(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "enqueueManualSync":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_enqueueManualSync(ctx, field)
 			})
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
@@ -11887,6 +13004,49 @@ func (ec *executionContext) _RevokeOtherSessionsPayload(ctx context.Context, sel
 	return out
 }
 
+var revokeProviderConnectionPayloadImplementors = []string{"RevokeProviderConnectionPayload", "MutationPayload"}
+
+func (ec *executionContext) _RevokeProviderConnectionPayload(ctx context.Context, sel ast.SelectionSet, obj *model.RevokeProviderConnectionPayload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, revokeProviderConnectionPayloadImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("RevokeProviderConnectionPayload")
+		case "errors":
+			out.Values[i] = ec._RevokeProviderConnectionPayload_errors(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "revokedConnectionID":
+			out.Values[i] = ec._RevokeProviderConnectionPayload_revokedConnectionID(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
 var revokeSessionPayloadImplementors = []string{"RevokeSessionPayload", "MutationPayload"}
 
 func (ec *executionContext) _RevokeSessionPayload(ctx context.Context, sel ast.SelectionSet, obj *model.RevokeSessionPayload) graphql.Marshaler {
@@ -12627,6 +13787,49 @@ func (ec *executionContext) _SyncJobEdge(ctx context.Context, sel ast.SelectionS
 		case "node":
 			out.Values[i] = ec._SyncJobEdge_node(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var updateProviderConnectionPayloadImplementors = []string{"UpdateProviderConnectionPayload", "MutationPayload"}
+
+func (ec *executionContext) _UpdateProviderConnectionPayload(ctx context.Context, sel ast.SelectionSet, obj *model.UpdateProviderConnectionPayload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, updateProviderConnectionPayloadImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("UpdateProviderConnectionPayload")
+		case "errors":
+			out.Values[i] = ec._UpdateProviderConnectionPayload_errors(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "connection":
+			out.Values[i] = ec._UpdateProviderConnectionPayload_connection(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
 				out.Invalids++
 			}
 		default:
@@ -13606,6 +14809,25 @@ func (ec *executionContext) marshalNBoolean2bool(ctx context.Context, sel ast.Se
 	return res
 }
 
+func (ec *executionContext) unmarshalNConnectProviderInput2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐConnectProviderInput(ctx context.Context, v any) (model.ConnectProviderInput, error) {
+	res, err := ec.unmarshalInputConnectProviderInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNConnectProviderPayload2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐConnectProviderPayload(ctx context.Context, sel ast.SelectionSet, v model.ConnectProviderPayload) graphql.Marshaler {
+	return ec._ConnectProviderPayload(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNConnectProviderPayload2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐConnectProviderPayload(ctx context.Context, sel ast.SelectionSet, v *model.ConnectProviderPayload) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._ConnectProviderPayload(ctx, sel, v)
+}
+
 func (ec *executionContext) unmarshalNCreateSubjectInput2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐCreateSubjectInput(ctx context.Context, v any) (model.CreateSubjectInput, error) {
 	res, err := ec.unmarshalInputCreateSubjectInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
@@ -13704,6 +14926,25 @@ func (ec *executionContext) unmarshalNDateTime2githubᚗcomᚋmorealᚋjandibat�
 
 func (ec *executionContext) marshalNDateTime2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋscalarᚐDateTime(ctx context.Context, sel ast.SelectionSet, v scalar.DateTime) graphql.Marshaler {
 	return v
+}
+
+func (ec *executionContext) unmarshalNEnqueueManualSyncInput2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐEnqueueManualSyncInput(ctx context.Context, v any) (model.EnqueueManualSyncInput, error) {
+	res, err := ec.unmarshalInputEnqueueManualSyncInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNEnqueueManualSyncPayload2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐEnqueueManualSyncPayload(ctx context.Context, sel ast.SelectionSet, v model.EnqueueManualSyncPayload) graphql.Marshaler {
+	return ec._EnqueueManualSyncPayload(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNEnqueueManualSyncPayload2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐEnqueueManualSyncPayload(ctx context.Context, sel ast.SelectionSet, v *model.EnqueueManualSyncPayload) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._EnqueueManualSyncPayload(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalNFetchFailurePolicy2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐFetchFailurePolicy(ctx context.Context, v any) (model.FetchFailurePolicy, error) {
@@ -13842,6 +15083,16 @@ func (ec *executionContext) marshalNPageInfo2ᚖgithubᚗcomᚋmorealᚋjandibat
 	return ec._PageInfo(ctx, sel, v)
 }
 
+func (ec *executionContext) unmarshalNProviderAuthMethod2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐProviderAuthMethod(ctx context.Context, v any) (model.ProviderAuthMethod, error) {
+	var res model.ProviderAuthMethod
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNProviderAuthMethod2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐProviderAuthMethod(ctx context.Context, sel ast.SelectionSet, v model.ProviderAuthMethod) graphql.Marshaler {
+	return v
+}
+
 func (ec *executionContext) marshalNProviderCatalogItem2ᚕᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐProviderCatalogItemᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.ProviderCatalogItem) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
@@ -13954,6 +15205,25 @@ func (ec *executionContext) marshalNRevokeOtherSessionsPayload2ᚖgithubᚗcom�
 		return graphql.Null
 	}
 	return ec._RevokeOtherSessionsPayload(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNRevokeProviderConnectionInput2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐRevokeProviderConnectionInput(ctx context.Context, v any) (model.RevokeProviderConnectionInput, error) {
+	res, err := ec.unmarshalInputRevokeProviderConnectionInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNRevokeProviderConnectionPayload2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐRevokeProviderConnectionPayload(ctx context.Context, sel ast.SelectionSet, v model.RevokeProviderConnectionPayload) graphql.Marshaler {
+	return ec._RevokeProviderConnectionPayload(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNRevokeProviderConnectionPayload2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐRevokeProviderConnectionPayload(ctx context.Context, sel ast.SelectionSet, v *model.RevokeProviderConnectionPayload) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._RevokeProviderConnectionPayload(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalNRevokeSessionInput2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐRevokeSessionInput(ctx context.Context, v any) (model.RevokeSessionInput, error) {
@@ -14178,6 +15448,25 @@ func (ec *executionContext) unmarshalNTimeZone2githubᚗcomᚋmorealᚋjandibat�
 
 func (ec *executionContext) marshalNTimeZone2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋscalarᚐTimeZone(ctx context.Context, sel ast.SelectionSet, v scalar.TimeZone) graphql.Marshaler {
 	return v
+}
+
+func (ec *executionContext) unmarshalNUpdateProviderConnectionInput2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐUpdateProviderConnectionInput(ctx context.Context, v any) (model.UpdateProviderConnectionInput, error) {
+	res, err := ec.unmarshalInputUpdateProviderConnectionInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNUpdateProviderConnectionPayload2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐUpdateProviderConnectionPayload(ctx context.Context, sel ast.SelectionSet, v model.UpdateProviderConnectionPayload) graphql.Marshaler {
+	return ec._UpdateProviderConnectionPayload(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNUpdateProviderConnectionPayload2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐUpdateProviderConnectionPayload(ctx context.Context, sel ast.SelectionSet, v *model.UpdateProviderConnectionPayload) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._UpdateProviderConnectionPayload(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalNUpdateSubjectInput2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐUpdateSubjectInput(ctx context.Context, v any) (model.UpdateSubjectInput, error) {
@@ -14464,6 +15753,22 @@ func (ec *executionContext) marshalOCustomProviderConnection2ᚖgithubᚗcomᚋm
 	return ec._CustomProviderConnection(ctx, sel, v)
 }
 
+func (ec *executionContext) unmarshalODate2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋscalarᚐDate(ctx context.Context, v any) (*scalar.Date, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var res = new(scalar.Date)
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalODate2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋscalarᚐDate(ctx context.Context, sel ast.SelectionSet, v *scalar.Date) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return v
+}
+
 func (ec *executionContext) unmarshalODateTime2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋscalarᚐDateTime(ctx context.Context, v any) (*scalar.DateTime, error) {
 	if v == nil {
 		return nil, nil
@@ -14519,6 +15824,24 @@ func (ec *executionContext) marshalOHeatmapTheme2ᚖgithubᚗcomᚋmorealᚋjand
 	return v
 }
 
+func (ec *executionContext) unmarshalOID2ᚖstring(ctx context.Context, v any) (*string, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := graphql.UnmarshalID(v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalOID2ᚖstring(ctx context.Context, sel ast.SelectionSet, v *string) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	_ = sel
+	_ = ctx
+	res := graphql.MarshalID(*v)
+	return res
+}
+
 func (ec *executionContext) unmarshalOInt2ᚖint(ctx context.Context, v any) (*int, error) {
 	if v == nil {
 		return nil, nil
@@ -14556,6 +15879,13 @@ func (ec *executionContext) marshalOPasskeyOptions2ᚖgithubᚗcomᚋmorealᚋja
 		return graphql.Null
 	}
 	return ec._PasskeyOptions(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalOProviderConnection2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐProviderConnection(ctx context.Context, sel ast.SelectionSet, v *model.ProviderConnection) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._ProviderConnection(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalOProviderConnectionConnection2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐProviderConnectionConnection(ctx context.Context, sel ast.SelectionSet, v *model.ProviderConnectionConnection) graphql.Marshaler {
@@ -14637,6 +15967,13 @@ func (ec *executionContext) marshalOSubjectSettings2ᚖgithubᚗcomᚋmorealᚋj
 		return graphql.Null
 	}
 	return ec._SubjectSettings(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalOSyncJob2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐSyncJob(ctx context.Context, sel ast.SelectionSet, v *model.SyncJob) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._SyncJob(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalOSyncJobConnection2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐSyncJobConnection(ctx context.Context, sel ast.SelectionSet, v *model.SyncJobConnection) graphql.Marshaler {

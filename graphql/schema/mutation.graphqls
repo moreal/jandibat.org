@@ -26,4 +26,8 @@ type Mutation {
   updateSubject(input: UpdateSubjectInput!): UpdateSubjectPayload!
   updateSubjectSettings(input: UpdateSubjectSettingsInput!): UpdateSubjectSettingsPayload!
   requestSubjectDeletion(input: RequestSubjectDeletionInput!): RequestSubjectDeletionPayload!
+  connectProvider(input: ConnectProviderInput!): ConnectProviderPayload!
+  updateProviderConnection(input: UpdateProviderConnectionInput!): UpdateProviderConnectionPayload!
+  revokeProviderConnection(input: RevokeProviderConnectionInput!): RevokeProviderConnectionPayload!
+  enqueueManualSync(input: EnqueueManualSyncInput!): EnqueueManualSyncPayload!
 }

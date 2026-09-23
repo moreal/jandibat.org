@@ -624,6 +624,19 @@ func TestCockroachMaintenanceDeletionRequestJoinsPGXTransaction(t *testing.T) {
 	if err != nil || loaded.ID != stored.ID || loaded.Status != operations.DeletionRequested || loaded.AvailableAt.IsZero() {
 		t.Fatalf("committed deletion load=%+v err=%v", loaded, err)
 	}
+	err = appdb.InTx(ctx, pool, appdb.RetryOptions{}, func(txctx context.Context, _ pgx.Tx) error {
+		claimed, err := store.ClaimDeletion(txctx, request.RequestID, now.Add(time.Second), now.Add(time.Minute))
+		if err != nil || claimed.ClaimToken == "" || claimed.Attempts != 1 {
+			return fmt.Errorf("transactional deletion claim=%+v err=%v", claimed, err)
+		}
+		return rollback
+	})
+	if !errors.Is(err, rollback) {
+		t.Fatalf("deletion claim rollback = %v", err)
+	}
+	if err := admin.QueryRowContext(ctx, `SELECT count(*) FROM deletion_request_claims WHERE deletion_request_id=$1::UUID`, stored.ID).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("deletion claim escaped rollback: count=%d err=%v", count, err)
+	}
 }
 
 func TestCockroachDeletionResidualsSeeUncommittedPGXState(t *testing.T) {
@@ -1064,7 +1077,15 @@ func TestCockroachDeletionInboxPromotionAndLegalHoldResume(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	store, _ := New(db)
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	store, err := NewWithPGXPool(db, pool)
+	if err != nil {
+		t.Fatal(err)
+	}
 	suffix := strings.ReplaceAll(time.Now().UTC().Format("150405.000000000"), ".", "")
 	userID, subjectID := "inbox_user_"+suffix, "inbox_subject_"+suffix
 	requestID := "ops-inbox-" + suffix

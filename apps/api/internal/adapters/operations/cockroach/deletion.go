@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	generated "github.com/moreal/jandibat.org/apps/api/internal/adapters/operations/cockroach/generated"
 	appdb "github.com/moreal/jandibat.org/apps/api/internal/database"
@@ -320,6 +321,70 @@ FROM deletion_requests WHERE request_id = $1`, requestID))
 func (store *Store) ClaimDeletion(ctx context.Context, requestID string, now, leaseUntil time.Time) (operations.DeletionRequest, error) {
 	if strings.TrimSpace(requestID) == "" || now.IsZero() || !leaseUntil.After(now) {
 		return operations.DeletionRequest{}, operations.ErrInvalidDeletionRequest
+	}
+	if store.pool != nil {
+		var claimed operations.DeletionRequest
+		err := appdb.InTx(ctx, store.pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
+			active, err := generated.GetActiveDeletionId(txctx, tx, requestID)
+			if err != nil {
+				return fmt.Errorf("claim deletion request: lock request: %w", err)
+			}
+			var deletionID string
+			if active != nil {
+				deletionID = active.Id
+			} else {
+				inbox, err := generated.LockDeletionInboxForClaim(txctx, tx, requestID)
+				if err != nil {
+					return fmt.Errorf("claim deletion request: lock inbox: %w", err)
+				}
+				if inbox == nil {
+					return operations.ErrDeletionNotFound
+				}
+				if err := generated.PromoteDeletionInboxRequest(txctx, tx, requestID,
+					inbox.TargetType, inbox.TargetId, inbox.RequestedAt.UTC(), now.UTC()); err != nil {
+					return fmt.Errorf("claim deletion request: promote inbox: %w", err)
+				}
+				promoted, err := generated.GetDeletionIdForExactTarget(txctx, tx, requestID, inbox.TargetType, inbox.TargetId)
+				if err != nil {
+					return fmt.Errorf("claim deletion request: promote inbox: %w", err)
+				}
+				if promoted == nil {
+					return operations.ErrDeletionNotFound
+				}
+				deletionID = promoted.Id
+				if err := generated.DeletePromotedDeletionInbox(txctx, tx, requestID); err != nil {
+					return fmt.Errorf("claim deletion request: cleanup inbox: %w", err)
+				}
+			}
+			deletionUUID, err := uuid.Parse(deletionID)
+			if err != nil {
+				return fmt.Errorf("claim deletion request: invalid ID: %w", err)
+			}
+			if err := generated.BootstrapDeletionClaim(txctx, tx, deletionUUID, now.UTC()); err != nil {
+				return fmt.Errorf("claim deletion request: bootstrap: %w", err)
+			}
+			claimToken, err := operations.NewAuditEventID()
+			if err != nil {
+				return fmt.Errorf("claim deletion request: token: %w", err)
+			}
+			claimUUID, err := uuid.Parse(claimToken)
+			if err != nil {
+				return fmt.Errorf("claim deletion request: token: %w", err)
+			}
+			count, err := generated.AcquireDeletionClaim(txctx, tx, now.UTC(), claimUUID, leaseUntil.UTC(), deletionUUID)
+			if err != nil {
+				return fmt.Errorf("claim deletion request: update: %w", err)
+			}
+			if count != 1 {
+				return operations.ErrDeletionLeaseLost
+			}
+			claimed, err = store.LoadDeletion(txctx, requestID)
+			return err
+		})
+		if err != nil {
+			return operations.DeletionRequest{}, err
+		}
+		return claimed, nil
 	}
 	tx, err := store.db.BeginTx(ctx, nil)
 	if err != nil {

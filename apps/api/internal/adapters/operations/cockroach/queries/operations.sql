@@ -176,6 +176,51 @@ SET status = CASE WHEN attempts >= $5::INT8 THEN 'dead' ELSE 'pending' END,
 WHERE id = $1::UUID AND claim_token = $2::UUID AND status = 'processing'
 RETURNING status;
 
+-- @name GetActiveDeletionID
+-- @returns :opt
+SELECT id::STRING AS id FROM deletion_requests
+WHERE request_id = $1::STRING AND status <> 'completed';
+
+-- @name LockDeletionInboxForClaim
+-- @returns :opt
+SELECT target_type, target_id, requested_at
+FROM deletion_request_inbox
+WHERE request_id = $1::STRING AND status = 'requested'
+FOR UPDATE;
+
+-- @name PromoteDeletionInboxRequest
+-- @returns :exec
+INSERT INTO deletion_requests (
+  request_id, target_type, target_id, status, last_completed_stage,
+  subject_ids, requested_at, updated_at
+) VALUES ($1::STRING, $2::STRING, $3::STRING, 'requested', 'requested',
+  ARRAY[]::STRING[], $4::TIMESTAMPTZ, $5::TIMESTAMPTZ)
+ON CONFLICT DO NOTHING;
+
+-- @name GetDeletionIDForExactTarget
+-- @returns :opt
+SELECT id::STRING AS id FROM deletion_requests
+WHERE request_id = $1::STRING AND target_type = $2::STRING AND target_id = $3::STRING;
+
+-- @name DeletePromotedDeletionInbox
+-- @returns :exec
+DELETE FROM deletion_request_inbox WHERE request_id = $1::STRING;
+
+-- @name BootstrapDeletionClaim
+-- @returns :exec
+INSERT INTO deletion_request_claims (deletion_request_id, available_at, updated_at)
+VALUES ($1::UUID, $2::TIMESTAMPTZ, $2::TIMESTAMPTZ)
+ON CONFLICT (deletion_request_id) DO NOTHING;
+
+-- @name AcquireDeletionClaim
+-- @returns :exec_result
+UPDATE deletion_request_claims SET
+  claim_token = $2::UUID, lease_until = $3::TIMESTAMPTZ,
+  attempts = attempts + 1, updated_at = $1::TIMESTAMPTZ
+WHERE deletion_request_id = $4::UUID
+  AND attempts < 100 AND available_at <= $1::TIMESTAMPTZ
+  AND (lease_until IS NULL OR lease_until <= $1::TIMESTAMPTZ);
+
 -- @name GetMaintenanceCheckpoint
 -- @returns :opt
 SELECT operation, scope, payload, updated_at

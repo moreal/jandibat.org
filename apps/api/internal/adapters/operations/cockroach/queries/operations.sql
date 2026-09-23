@@ -262,6 +262,69 @@ ORDER BY claim.available_at, claim.updated_at, claim.deletion_request_id
 LIMIT $2::INT8
 FOR UPDATE OF claim SKIP LOCKED;
 
+-- @name LockUnclaimedDeletionRequest
+-- @returns :opt
+SELECT NOT EXISTS (
+  SELECT 1 FROM deletion_request_claims AS claim
+  WHERE claim.deletion_request_id = deletion_requests.id AND claim.claim_token IS NOT NULL
+) AS unclaimed
+FROM deletion_requests
+WHERE request_id = $1::STRING
+FOR UPDATE;
+
+-- @name LockDeletionLease
+-- @returns :opt
+SELECT COALESCE(claim.claim_token::STRING, '') AS claim_token,
+  claim.lease_until > current_timestamp AS lease_active
+FROM deletion_request_claims AS claim
+JOIN deletion_requests AS request ON request.id = claim.deletion_request_id
+WHERE request.request_id = $1::STRING
+FOR UPDATE OF claim;
+
+-- @name HasActiveDeletionHold
+-- @returns :one
+SELECT EXISTS (
+  SELECT 1 FROM legal_holds AS hold
+  WHERE hold.expires_at > $3::TIMESTAMPTZ
+    AND (
+      (hold.target_type = $1::STRING AND hold.target_id = $2::STRING)
+      OR ($1::STRING = 'account' AND hold.target_type = 'subject' AND EXISTS (
+        SELECT 1 FROM subjects WHERE subjects.id = hold.target_id AND subjects.owner_user_id = $2::STRING
+      ))
+      OR ($1::STRING = 'subject' AND hold.target_type = 'account' AND EXISTS (
+        SELECT 1 FROM subjects WHERE subjects.id = $2::STRING AND subjects.owner_user_id = hold.target_id
+      ))
+    )
+) AS active;
+
+-- @name GetSubjectForDeletion
+-- @returns :opt
+SELECT id FROM subjects WHERE id = $1::STRING;
+
+-- @name EnqueueDeletionTokenRevocations
+-- @returns :exec
+INSERT INTO provider_token_revocation_jobs (
+  connection_id, provider_id, token_ciphertext, token_key_id,
+  status, attempts, available_at, created_at, updated_at
+)
+SELECT connection.id, COALESCE(connection.sync_cursor->>'provider_id', ''),
+  connection.access_token_ciphertext, connection.access_token_key_id,
+  'pending', 0, $2::TIMESTAMPTZ, $2::TIMESTAMPTZ, $2::TIMESTAMPTZ
+FROM provider_connections AS connection
+WHERE connection.subject_id = ANY($1::STRING[])
+  AND connection.auth_method = 'oauth2'
+  AND connection.access_token_ciphertext IS NOT NULL
+  AND COALESCE(NULLIF(connection.sync_cursor->>'provider_id', ''), '') <> ''
+ON CONFLICT (connection_id) DO NOTHING;
+
+-- @name MarkDeletionCredentialsRevoked
+-- @returns :exec_result
+UPDATE deletion_requests SET
+  status = 'deleting_primary', last_completed_stage = 'credentials_revoked',
+  error_code = NULL, subject_ids = $2::STRING[], updated_at = $3::TIMESTAMPTZ,
+  completed_at = NULL, backup_expiry_at = NULL, audit_event_id = NULL
+WHERE request_id = $1::STRING;
+
 -- @name GetMaintenanceCheckpoint
 -- @returns :opt
 SELECT operation, scope, payload, updated_at

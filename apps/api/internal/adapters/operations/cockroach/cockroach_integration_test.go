@@ -650,6 +650,66 @@ func TestCockroachMaintenanceDeletionRequestJoinsPGXTransaction(t *testing.T) {
 	if err := admin.QueryRowContext(ctx, `SELECT count(*) FROM deletion_request_claims WHERE deletion_request_id=$1::UUID`, stored.ID).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("deletion batch escaped rollback: count=%d err=%v", count, err)
 	}
+	userID := "scythe-delete-owner-" + unique
+	if _, err := admin.ExecContext(ctx, `INSERT INTO users (id,primary_email,status) VALUES ($1,$2,'active')`, userID, unique+"-delete@example.invalid"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.ExecContext(ctx, `INSERT INTO subjects (id,owner_user_id,handle,timezone) VALUES ($1,$2,$3,'UTC')`, request.TargetID, userID, "delete-"+unique); err != nil {
+		t.Fatal(err)
+	}
+	environmentID := "scythe:delete:env:" + unique
+	connectionID := "f47d0f6a-04ae-4e72-b2f3-" + unique[:12]
+	if _, err := admin.ExecContext(ctx, `INSERT INTO environments (id,key,name,scope,owner_subject_id) VALUES ($1,$1,$1,'subject',$2)`, environmentID, request.TargetID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.ExecContext(ctx, `INSERT INTO provider_connections (id,subject_id,environment_id,auth_method,status,access_token_ciphertext,sync_cursor) VALUES ($1::UUID,$2,$3,'oauth2','active',$4,jsonb_build_object('provider_id','github'))`, connectionID, request.TargetID, environmentID, []byte("synthetic-ciphertext")); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = admin.ExecContext(context.Background(), `DELETE FROM users WHERE id=$1`, userID)
+	})
+	t.Cleanup(func() {
+		_, _ = admin.ExecContext(context.Background(), `DELETE FROM provider_token_revocation_jobs WHERE connection_id=$1::UUID`, connectionID)
+		_, _ = admin.ExecContext(context.Background(), `DELETE FROM provider_connections WHERE id=$1::UUID`, connectionID)
+		_, _ = admin.ExecContext(context.Background(), `DELETE FROM environments WHERE id=$1`, environmentID)
+	})
+	claimed, err := store.ClaimDeletion(ctx, request.RequestID, now.Add(3*time.Second), now.Add(time.Minute))
+	if err != nil || claimed.ClaimToken == "" {
+		t.Fatalf("committed deletion claim=%+v err=%v", claimed, err)
+	}
+	err = appdb.InTx(ctx, pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
+		updated, err := store.RevokeDeletionCredentials(txctx, claimed, now.Add(4*time.Second))
+		if err != nil || updated.Status != operations.DeletionDeletingPrimary || len(updated.SubjectIDs) != 1 || updated.SubjectIDs[0] != request.TargetID {
+			return fmt.Errorf("transactional credential revocation status=%s subject_count=%d err=%v", updated.Status, len(updated.SubjectIDs), err)
+		}
+		var queued int
+		if err := tx.QueryRow(txctx, `SELECT count(*) FROM provider_token_revocation_jobs WHERE connection_id=$1::UUID`, connectionID).Scan(&queued); err != nil || queued != 1 {
+			return fmt.Errorf("transactional revocation queue count=%d err=%v", queued, err)
+		}
+		return rollback
+	})
+	if !errors.Is(err, rollback) {
+		t.Fatalf("credential revocation rollback = %v", err)
+	}
+	var status string
+	if err := admin.QueryRowContext(ctx, `SELECT status FROM deletion_requests WHERE request_id=$1`, request.RequestID).Scan(&status); err != nil || status != "requested" {
+		t.Fatalf("credential revocation escaped rollback: status=%q err=%v", status, err)
+	}
+	if err := admin.QueryRowContext(ctx, `SELECT count(*) FROM provider_token_revocation_jobs WHERE connection_id=$1::UUID`, connectionID).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("token revocation enqueue escaped rollback: count=%d err=%v", count, err)
+	}
+	stale := claimed
+	stale.ClaimToken = "00000000-0000-4000-8000-000000000000"
+	if _, err := store.RevokeDeletionCredentials(ctx, stale, now.Add(5*time.Second)); !errors.Is(err, operations.ErrDeletionLeaseLost) {
+		t.Fatalf("stale deletion claim error=%v", err)
+	}
+	committed, err := store.RevokeDeletionCredentials(ctx, claimed, now.Add(5*time.Second))
+	if err != nil || committed.Status != operations.DeletionDeletingPrimary {
+		t.Fatalf("committed credential revocation status=%s err=%v", committed.Status, err)
+	}
+	if err := admin.QueryRowContext(ctx, `SELECT count(*) FROM provider_token_revocation_jobs WHERE connection_id=$1::UUID`, connectionID).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("committed token revocation queue count=%d err=%v", count, err)
+	}
 }
 
 func TestCockroachDeletionResidualsSeeUncommittedPGXState(t *testing.T) {

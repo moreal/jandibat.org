@@ -600,6 +600,41 @@ WHERE id = $1::UUID AND status = 'requested'`, request.id)
 }
 
 func (store *Store) RevokeDeletionCredentials(ctx context.Context, request operations.DeletionRequest, now time.Time) (operations.DeletionRequest, error) {
+	if store.pool != nil && request.TargetType == operations.DeletionTargetSubject {
+		var updated operations.DeletionRequest
+		err := appdb.InTx(ctx, store.pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
+			if err := lockDeletionLeasePGX(txctx, tx, request); err != nil {
+				return err
+			}
+			if err := rejectActiveDeletionHoldPGX(txctx, tx, request, now); err != nil {
+				return err
+			}
+			subject, err := generated.GetSubjectForDeletion(txctx, tx, request.TargetID)
+			if err != nil {
+				return fmt.Errorf("freeze subject: %w", err)
+			}
+			if subject == nil {
+				return operations.ErrDeletionNotFound
+			}
+			subjectIDs := []string{subject.Id}
+			if err := generated.EnqueueDeletionTokenRevocations(txctx, tx, subjectIDs, now.UTC()); err != nil {
+				return fmt.Errorf("enqueue deletion token revocations: %w", err)
+			}
+			count, err := generated.MarkDeletionCredentialsRevoked(txctx, tx, request.RequestID, subjectIDs, now.UTC())
+			if err != nil {
+				return fmt.Errorf("update deletion request: %w", err)
+			}
+			if count != 1 {
+				return operations.ErrDeletionNotFound
+			}
+			updated, err = store.LoadDeletion(txctx, request.RequestID)
+			return err
+		})
+		if err != nil {
+			return request, err
+		}
+		return updated, nil
+	}
 	tx, err := store.db.BeginTx(ctx, nil)
 	if err != nil {
 		return request, fmt.Errorf("revoke deletion credentials: begin: %w", err)
@@ -697,6 +732,44 @@ ON CONFLICT (connection_id) DO NOTHING`, subjectIDs, now.UTC()); err != nil {
 		return request, fmt.Errorf("revoke deletion credentials: commit: %w", err)
 	}
 	return updated, nil
+}
+
+func lockDeletionLeasePGX(ctx context.Context, tx pgx.Tx, request operations.DeletionRequest) error {
+	if request.ClaimToken == "" {
+		row, err := generated.LockUnclaimedDeletionRequest(ctx, tx, request.RequestID)
+		if err != nil {
+			return fmt.Errorf("lock unclaimed deletion request: %w", err)
+		}
+		if row == nil {
+			return operations.ErrDeletionNotFound
+		}
+		if !row.Unclaimed {
+			return operations.ErrDeletionLeaseLost
+		}
+		return nil
+	}
+	row, err := generated.LockDeletionLease(ctx, tx, request.RequestID)
+	if err != nil {
+		return fmt.Errorf("lock deletion lease: %w", err)
+	}
+	if row == nil {
+		return operations.ErrDeletionNotFound
+	}
+	if row.ClaimToken != request.ClaimToken || row.LeaseActive == nil || !*row.LeaseActive {
+		return operations.ErrDeletionLeaseLost
+	}
+	return nil
+}
+
+func rejectActiveDeletionHoldPGX(ctx context.Context, tx pgx.Tx, request operations.DeletionRequest, asOf time.Time) error {
+	row, err := generated.HasActiveDeletionHold(ctx, tx, string(request.TargetType), request.TargetID, asOf.UTC())
+	if err != nil {
+		return fmt.Errorf("check deletion legal hold: %w", err)
+	}
+	if row.Active {
+		return operations.ErrLegalHoldActive
+	}
+	return nil
 }
 
 func (store *Store) DeletePrimaryData(ctx context.Context, request operations.DeletionRequest, now time.Time) (operations.DeletionRequest, error) {

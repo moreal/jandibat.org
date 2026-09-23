@@ -42,9 +42,9 @@ M2 구현·격리 DB 검증은 완료했다. Task 7의 upstream issue/PR 제출�
 
 ## M3. GraphQL·Relay 계약
 
-- [ ] M3-01: GraphQL SDL을 추가하고 gqlgen generation/drift check를 구성한다.
-- [ ] M3-02: Relay global ID codec, `Node` query와 durable entity identity test를 구현한다.
-- [ ] M3-03: ActivitySnapshot query와 `generatedAt`, `dataUpdatedAt`, `revision` 의미를 구현한다.
+- [x] M3-01: GraphQL SDL을 추가하고 gqlgen generation/drift check를 구성한다.
+- [x] M3-02: Relay global ID codec, `Node` query와 durable entity identity test를 구현한다.
+- [x] M3-03: ActivitySnapshot query와 `generatedAt`, `dataUpdatedAt`, `revision` 의미를 구현한다.
 - [ ] M3-04: sessions/sync jobs에 cursor connection을 적용하고 bounded list는 배열로 유지한다.
 - [ ] M3-05: 기존 REST domain endpoint를 GraphQL query/mutation으로 옮긴다.
 - [ ] M3-06: OpenAPI를 health/SVG/callback/ingest endpoint로 축소하고 contract change log를
@@ -54,6 +54,11 @@ M2 구현·격리 DB 검증은 완료했다. Task 7의 upstream issue/PR 제출�
 - [ ] M3-08: 공식 Solid 2 UI를 generated Relay artifact와 normalized store로 전환한다.
 - [ ] M3-09: 수동 `AppStateProvider` 서버 상태와 OpenAPI-generated domain DTO를 제거한다.
 - [ ] M3-10: 정적 GraphQL 소비자 활용 가이드와 TypeScript/curl 예제를 추가한다.
+
+M3-01~03은 생성물 drift, API/race·격리 Cockroach 통합 테스트, 스키마·권한 검사를
+통과했다. GraphQL HTTP 경계와 공식 UI 전환은 아직 남아 있어 외부 서비스가 새 query를
+호출할 수 있는 단계로 간주하지 않는다. `dataUpdatedAt`은 조회 범위에 반영된 변경이
+한 번도 없을 때만 `null`이며, 기존 DB의 migration history와 데이터는 이전하지 않는다.
 
 ## M4. 이미지와 런타임 계약
 

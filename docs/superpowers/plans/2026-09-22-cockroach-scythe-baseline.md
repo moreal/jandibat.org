@@ -13,6 +13,7 @@
 ## Global Constraints
 
 - Existing CockroachDB data and migration history may be destroyed; do not build data-copy compatibility code.
+- The single `0001_baseline.sql` is the canonical initial schema that replaced the old 13-file history. After that reset is verified, new additive migrations may advance live development databases without rewriting the already-applied baseline; migration-history tests must distinguish these later versions from the discarded legacy history.
 - Destructive database/PVC removal still requires an explicit operator confirmation at deployment time.
 - Test the official unmodified Scythe build first; add a repository patch only for a minimized, reproducible defect.
 - Schema/query generated files must be deterministic and checked for drift in CI.

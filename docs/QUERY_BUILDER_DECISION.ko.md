@@ -9,6 +9,11 @@
 - 단일 baseline `db/migrations/0001_baseline.sql`과 공식 Scythe v0.17.0의
   `cockroachdb` / `go-pgx` 엔진을 기준으로 한다. 정적 SQL은 Scythe가 생성한
   pgx 함수로 전환하며, 동적 식별자는 별도 allowlist를 적용한다.
+- 초기 13개 migration은 `0001_baseline.sql` 하나로 교체해 빈 DB에서 검증했다.
+  이후 예약 소유권 경쟁을 막기 위해 `0002_ingest_reservation_token.sql`을
+  추가했다. 이는 폐기 대상인 기존 history의 연장이 아니라 새 baseline 이후의
+  additive 변경이다. 이미 적용한 격리 DB의 baseline을 다시 쓰거나 DB를
+  삭제하지 않으며, migration 테스트는 두 새 버전과 legacy history 거부를 검증한다.
 - 공식 원본 v0.9.0과 v0.17.0 모두 최소 `UPSERT` fixture를 파싱하지 못했다.
   v0.17.0의 live check는 최소 단일 테이블 CockroachDB에서
   `pg_class/schema_rank`를 int4로 읽다가 panic했다. 원본 Go 생성 함수는

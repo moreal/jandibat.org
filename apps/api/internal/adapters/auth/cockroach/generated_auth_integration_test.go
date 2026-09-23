@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -398,5 +399,47 @@ func TestGeneratedAuthRepositoryVerticalSlice(t *testing.T) {
 	status, err := store.RetryMagicLinkDelivery(ctx, retryDelivery.ID, retryClaimed[0].ClaimToken, now.Add(5*time.Second), now.Add(6*time.Second), 1)
 	if err != nil || status != coreauth.MagicLinkDeliveryDead {
 		t.Fatalf("RetryMagicLinkDelivery() = (%s, %v)", status, err)
+	}
+}
+
+func TestGeneratedUserLookupPreservesDeletionPendingIdentity(t *testing.T) {
+	adminDSN := os.Getenv("JANDIBAT_TEST_DATABASE_URL")
+	apiDSN := os.Getenv("JANDIBAT_TEST_API_DATABASE_URL")
+	if adminDSN == "" || apiDSN == "" {
+		t.Skip("set JANDIBAT_TEST_DATABASE_URL and JANDIBAT_TEST_API_DATABASE_URL")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	admin, err := pgxpool.New(ctx, adminDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, err := pgxpool.New(ctx, apiDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pool.Close(); admin.Close() })
+	store, err := New(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := "deletion-pending-user-" + uuid.NewString()
+	email := id + "@example.invalid"
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	if _, err := admin.Exec(ctx, `INSERT INTO users (id, primary_email, status, email_verified_at, created_at, updated_at) VALUES ($1, $2, 'deletion_pending', $3, $3, $3)`, id, email, now); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = admin.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, id) })
+	got, err := store.GetOrCreateUserByEmail(ctx, " "+strings.ToUpper(email)+" ", "replacement-"+id, now.Add(time.Second))
+	if err != nil || got.ID != id || got.PrimaryEmail != email || got.Status != coreauth.UserStatusDeletionPending || got.EmailVerifiedAt == nil || !got.EmailVerifiedAt.Equal(now) {
+		t.Fatalf("existing deletion-pending user changed: id=%q status=%q email=%q verified=%t err=%v", got.ID, got.Status, got.PrimaryEmail, got.EmailVerifiedAt != nil, err)
+	}
+	loaded, err := store.GetUserByID(ctx, id)
+	if err != nil || loaded.ID != id || loaded.Status != coreauth.UserStatusDeletionPending || loaded.EmailVerifiedAt == nil || !loaded.EmailVerifiedAt.Equal(now) {
+		t.Fatalf("GetUserByID did not preserve deletion-pending user: id=%q status=%q verified=%t err=%v", loaded.ID, loaded.Status, loaded.EmailVerifiedAt != nil, err)
+	}
+	var count int
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM users WHERE primary_email=$1`, email).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("user identity count=%d err=%v", count, err)
 	}
 }

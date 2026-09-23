@@ -1,7 +1,6 @@
 package cockroach
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql/driver"
@@ -15,7 +14,6 @@ import (
 	generated "github.com/moreal/jandibat.org/apps/api/internal/adapters/auth/cockroach/generated"
 	"github.com/moreal/jandibat.org/apps/api/internal/adapters/internal/fakedb"
 	coreauth "github.com/moreal/jandibat.org/apps/api/internal/auth"
-	"github.com/moreal/jandibat.org/apps/api/internal/identity"
 )
 
 func TestNewRejectsNilDatabase(t *testing.T) {
@@ -63,61 +61,22 @@ func TestSessionOperationsRequireGeneratedPGXStore(t *testing.T) {
 	}
 }
 
-func TestGetUserByIDThroughDatabaseSQL(t *testing.T) {
-	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
-	script := fakedb.New(fakedb.Step{
-		Operation: fakedb.Query,
-		Columns:   []string{"id", "email", "status", "verified", "created", "updated"},
-		Rows: [][]driver.Value{{
-			"user-1", "person@example.com", "active", now, now, now,
-		}},
-	})
+func TestUserOperationsRequireGeneratedPGXStore(t *testing.T) {
+	script := fakedb.New()
 	db := script.Open()
 	t.Cleanup(func() { _ = db.Close() })
-	store, _ := New(db)
-
-	user, err := store.GetUserByID(context.Background(), "user-1")
-	if err != nil {
-		t.Fatalf("GetUserByID() error = %v", err)
-	}
-	if user.ID != "user-1" || user.Status != coreauth.UserStatusActive || user.EmailVerifiedAt == nil {
-		t.Fatalf("GetUserByID() = %#v", user)
-	}
-	call := script.Calls()[0]
-	if !strings.Contains(call.Query, "FROM users WHERE id = $1") || call.Args[0].Value != "user-1" {
-		t.Fatalf("query call = %#v", call)
-	}
-}
-
-func TestGetOrCreateUserChecksEveryDeletedIdentityHMACRotationKey(t *testing.T) {
-	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
-	script := fakedb.New(fakedb.Step{Operation: fakedb.Query, Columns: make([]string, 6)})
-	db := script.Open()
-	t.Cleanup(func() { _ = db.Close() })
-	keys := map[string][]byte{
-		"z-new": []byte("new-key-0123456789abcdef01234567"),
-		"a-old": []byte("old-key-0123456789abcdef01234567"),
-	}
-	store, err := NewWithDeletedIdentityHMACKeys(db, keys)
+	store, err := New(db)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.GetOrCreateUserByEmail(context.Background(), " PERSON@Example.COM ", "user-new", now); !errors.Is(err, coreauth.ErrUserDisabled) {
-		t.Fatalf("GetOrCreateUserByEmail() error = %v, want ErrUserDisabled", err)
+	if _, err := store.GetUserByID(context.Background(), "user-1"); !errors.Is(err, ErrNilDB) {
+		t.Fatalf("SQL-only GetUserByID error = %v, want ErrNilDB", err)
 	}
-	calls := script.Calls()
-	if len(calls) != 1 || !strings.Contains(calls[0].Query, "deleted_identity_tombstones_v2") ||
-		!strings.Contains(calls[0].Query, "(identity_key_id, identity_digest) IN (($5, $6), ($7, $8))") {
-		t.Fatalf("rotation query = %#v", calls)
+	if _, err := store.GetOrCreateUserByEmail(context.Background(), "person@example.com", "user-1", time.Now().UTC()); !errors.Is(err, ErrNilDB) {
+		t.Fatalf("SQL-only GetOrCreateUserByEmail error = %v, want ErrNilDB", err)
 	}
-	if calls[0].Args[4].Value != "a-old" || calls[0].Args[6].Value != "z-new" {
-		t.Fatalf("key order = %#v", calls[0].Args)
-	}
-	for index, id := range []string{"a-old", "z-new"} {
-		want, ok := identity.EmailHMAC("person@example.com", keys[id])
-		if !ok || !bytes.Equal(calls[0].Args[5+index*2].Value.([]byte), want[:]) {
-			t.Fatalf("digest for %s = %#v", id, calls[0].Args[5+index*2].Value)
-		}
+	if calls := script.Calls(); len(calls) != 0 {
+		t.Fatalf("SQL-only user operations made legacy queries: %#v", calls)
 	}
 }
 
@@ -262,55 +221,6 @@ func TestConsumeMagicLinkPurposeMismatchIsNotClaimed(t *testing.T) {
 		!strings.Contains(calls[1].Query, "purpose = $2") ||
 		!strings.Contains(calls[2].Query, "purpose = $2") {
 		t.Fatalf("purpose-bound consume calls = %#v", calls)
-	}
-}
-
-func TestGetOrCreateUserPreservesDeletionPendingStatus(t *testing.T) {
-	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
-	script := fakedb.New(fakedb.Step{
-		Operation: fakedb.Query,
-		Columns:   []string{"id", "email", "status", "verified", "created", "updated"},
-		Rows: [][]driver.Value{{
-			"user-1", "person@example.com", "deletion_pending", now, now, now,
-		}},
-	})
-	db := script.Open()
-	t.Cleanup(func() { _ = db.Close() })
-	store, _ := New(db)
-
-	user, err := store.GetOrCreateUserByEmail(context.Background(), "person@example.com", "new-user", now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if user.Status != coreauth.UserStatusDeletionPending {
-		t.Fatalf("status = %q, want deletion_pending", user.Status)
-	}
-	call := script.Calls()[0]
-	if query := call.Query; strings.Contains(query, "status = excluded.status") || !strings.Contains(query, "ON CONFLICT (primary_email)") ||
-		!strings.Contains(query, "deleted_identity_tombstones") || !strings.Contains(query, "expires_at > $3") {
-		t.Fatalf("unsafe get-or-create query = %s", query)
-	}
-	wantHash := sha256.Sum256([]byte("person@example.com"))
-	if got, ok := call.Args[3].Value.([]byte); !ok || string(got) != string(wantHash[:]) {
-		t.Fatalf("email tombstone digest = %x, want %x", got, wantHash)
-	}
-}
-
-func TestGetOrCreateUserRejectsRetainedDeletionTombstone(t *testing.T) {
-	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
-	script := fakedb.New(fakedb.Step{Operation: fakedb.Query, Columns: make([]string, 6)})
-	db := script.Open()
-	t.Cleanup(func() { _ = db.Close() })
-	store, _ := New(db)
-
-	_, err := store.GetOrCreateUserByEmail(context.Background(), "Deleted@Example.com", "new-user", now)
-	if !errors.Is(err, coreauth.ErrUserDisabled) {
-		t.Fatalf("GetOrCreateUserByEmail() error = %v, want ErrUserDisabled", err)
-	}
-	call := script.Calls()[0]
-	wantHash := sha256.Sum256([]byte("deleted@example.com"))
-	if got, ok := call.Args[3].Value.([]byte); !ok || string(got) != string(wantHash[:]) {
-		t.Fatalf("canonical email digest = %x, want %x", got, wantHash)
 	}
 }
 

@@ -1,0 +1,38 @@
+"A stable domain validation failure returned inside mutation payloads."
+type MutationError {
+  code: String!
+  message: String!
+  field: String
+}
+
+"Mutation results carry typed data and validation errors; transport failures use GraphQL errors."
+interface MutationPayload {
+  errors: [MutationError!]!
+}
+
+"Mutation root; domain mutations are added after their authorization tests."
+type Mutation {
+  _contract: Boolean!
+}
+
+"A durable entity with an opaque, globally unique identity."
+interface Node {
+  id: ID!
+}
+
+"Root of the domain API. Domain fields are added with resolver authorization."
+type Query {
+  _contract: Boolean!
+}
+
+"Calendar date in ISO 8601 YYYY-MM-DD form."
+scalar Date
+
+"UTC instant in RFC 3339 form."
+scalar DateTime
+
+"IANA timezone identifier."
+scalar TimeZone
+
+"Opaque pagination position; clients must not parse it."
+scalar Cursor

@@ -25,6 +25,7 @@
     "openapi:check": "yarn openapi:lint && sh scripts/check-openapi-types.sh"
   },
   "devDependencies": {
-    "@redocly/cli": "2.46.1"
+    "@redocly/cli": "2.46.1",
+    "relay-compiler": "21.0.1"
   }
 }

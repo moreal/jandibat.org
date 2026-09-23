@@ -1,0 +1,6 @@
+{
+  "src": "./graphql/fixtures",
+  "schema": "./graphql/schema.graphql",
+  "language": "typescript",
+  "noSourceControl": true
+}

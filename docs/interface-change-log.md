@@ -1,7 +1,20 @@
 # Interface Change Log
 
-API 계약 변경 시 이 파일과 `openapi/jandibat.yaml`을 같은 변경에 포함합니다.
+API 계약 변경 시 이 파일과 GraphQL SDL(도메인) 또는 `openapi/jandibat.yaml`(HTTP edge)을 같은 변경에 포함합니다.
 각 항목에는 날짜, 호환성, 영향받는 operation/schema, 백엔드·프론트엔드 후속 작업을 기록합니다.
+
+## 2026-09-24 — GraphQL SDL 도메인 계약 도입
+
+호환성: 최종 프로토콜 전환은 breaking change입니다. 이 단계에서는 신규 도메인 계약의
+권위를 GraphQL SDL로 옮기고 gqlgen·Relay 생성 검사를 추가합니다. 기존 REST 도메인
+operation은 공식 프론트엔드의 Relay 전환 전까지 임시로 유지하며, OpenAPI를 edge
+endpoint로 축소하는 별도 cutover에서 제거합니다.
+
+- GraphQL SDL은 도메인 query/mutation, Relay Node identity, ActivitySnapshot의 계약입니다.
+- OpenAPI의 최종 범위는 health, SVG render, OAuth/magic-link callback, custom activity ingest입니다.
+- Backend: gqlgen resolver를 기존 application port에 연결하고 authorization regression을 검증합니다.
+- Frontend: Solid 2를 유지하며 pinned relay-runtime·solid-relay 어댑터 뒤의 normalized store로 전환합니다.
+- Coordination: SDL·generated artifact drift를 CI에서 검사하고 REST 제거 시 이 로그를 갱신합니다.
 
 ## 2026-08-12 — 운영·보안 계약 강화 (`1.1.0`)
 

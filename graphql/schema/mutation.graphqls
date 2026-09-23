@@ -1,0 +1,16 @@
+"A stable domain validation failure returned inside mutation payloads."
+type MutationError {
+  code: String!
+  message: String!
+  field: String
+}
+
+"Mutation results carry typed data and validation errors; transport failures use GraphQL errors."
+interface MutationPayload {
+  errors: [MutationError!]!
+}
+
+"Mutation root; domain mutations are added after their authorization tests."
+type Mutation {
+  _contract: Boolean!
+}

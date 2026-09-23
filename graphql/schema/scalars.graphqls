@@ -1,0 +1,11 @@
+"Calendar date in ISO 8601 YYYY-MM-DD form."
+scalar Date
+
+"UTC instant in RFC 3339 form."
+scalar DateTime
+
+"IANA timezone identifier."
+scalar TimeZone
+
+"Opaque pagination position; clients must not parse it."
+scalar Cursor

@@ -23,21 +23,25 @@ case "$base_ref" in
 		changed=$(git diff --name-only "$base_ref" HEAD)
 		;;
 esac
-if ! printf '%s\n' "$changed" | grep -qx 'openapi/jandibat.yaml'; then
-	echo "contract change check: OpenAPI is unchanged"
-	exit 0
-fi
-
 missing=0
-for required in apps/web/src/generated/api.ts docs/interface-change-log.md; do
-	if ! printf '%s\n' "$changed" | grep -qx "$required"; then
-		echo "contract change check failed: openapi/jandibat.yaml changed without $required" >&2
+if printf '%s\n' "$changed" | grep -Eq '^graphql/schema/.+\.graphqls$'; then
+	if ! printf '%s\n' "$changed" | grep -qx 'docs/interface-change-log.md'; then
+		echo 'contract change check failed: GraphQL SDL changed without docs/interface-change-log.md' >&2
 		missing=1
 	fi
-done
+fi
+
+if printf '%s\n' "$changed" | grep -qx 'openapi/jandibat.yaml'; then
+	for required in apps/web/src/generated/api.ts docs/interface-change-log.md; do
+		if ! printf '%s\n' "$changed" | grep -qx "$required"; then
+			echo "contract change check failed: openapi/jandibat.yaml changed without $required" >&2
+			missing=1
+		fi
+	done
+fi
 
 if [ "$missing" -ne 0 ]; then
 	exit 1
 fi
 
-echo "contract change check: OpenAPI, generated types, and change log moved together"
+echo 'contract change check: GraphQL SDL/OpenAPI changes retain their required artifacts'

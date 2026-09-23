@@ -1807,6 +1807,7 @@ __metadata:
   resolution: "jandibat-org@workspace:."
   dependencies:
     "@redocly/cli": "npm:2.46.1"
+    relay-compiler: "npm:21.0.1"
   languageName: unknown
   linkType: soft
 
@@ -2336,6 +2337,15 @@ __metadata:
   version: 17.0.2
   resolution: "react-is@npm:17.0.2"
   checksum: 10c0/2bdb6b93fbb1820b024b496042cce405c57e2f85e777c9aabd55f9b26d145408f9f74f5934676ffdc46f3dcff656d78413a6e43968e7b3f92eea35b3052e9053
+  languageName: node
+  linkType: hard
+
+"relay-compiler@npm:21.0.1":
+  version: 21.0.1
+  resolution: "relay-compiler@npm:21.0.1"
+  bin:
+    relay-compiler: cli.js
+  checksum: 10c0/b8d59a181386b1df019f36bf4375afd43a3c6208789a037d84b20047d01f3c6765fde958aa8e1870aab5c784ff134ac5012f1626da14bb69524d5562f28d78f7
   languageName: node
   linkType: hard
 

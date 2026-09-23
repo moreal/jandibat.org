@@ -34,6 +34,8 @@ jobs:
         run: nix develop --command make install
       - name: Lint OpenAPI and detect generated type drift
         run: nix develop --command make openapi-check
+      - name: Validate GraphQL SDL and generated server/client artifacts
+        run: nix develop --command make graphql-check
       - name: Enforce the single CI toolchain authority
         run: nix develop --command make ci-version-authority-check
       - name: Require contract artifacts to move together

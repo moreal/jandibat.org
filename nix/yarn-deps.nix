@@ -11,7 +11,7 @@ let
 
   yarnOfflineCache = yarn.fetchYarnBerryDeps {
     yarnLock = ../yarn.lock;
-    hash = "sha256-1LcmKG9dDMiHplpLAqRusixbdoV9Rv9txcN3D6uo6dI=";
+    hash = "sha256-CBjZ3YaSwelIuOzi03bxl3yvq6w1hSHNCWOeojDzJDo=";
     inherit missingHashes;
   };
 in

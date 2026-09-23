@@ -1,0 +1,4 @@
+"A durable entity with an opaque, globally unique identity."
+interface Node {
+  id: ID!
+}

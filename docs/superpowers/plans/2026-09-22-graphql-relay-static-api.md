@@ -19,6 +19,7 @@
 - Cursor connections are for unbounded collections; bounded catalogs and activity days remain lists.
 - Health, SVG render, OAuth/magic-link callback, and custom ingest remain HTTP/OpenAPI operations.
 - Breaking changes are allowed, but schema drift and authorization regressions are not.
+- Task 1 establishes GraphQL SDL authority while existing REST domain operations remain transitional; Task 8 enforces the final edge-only OpenAPI path list after the Relay UI migration. This resolves the otherwise contradictory Task 1/Task 8 ordering without a red plan-end contract gate.
 
 ## Review Focus
 

@@ -559,6 +559,9 @@ func (store *durableCustomStore) SaveIngestedActivities(ctx context.Context, act
 }
 
 func (store *durableCustomStore) CreateIngestIdempotencyKey(_ context.Context, record IngestIdempotencyRecord) (bool, error) {
+	if record.ReservationToken == "" {
+		return false, errors.New("reservation token is required before mutation")
+	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	key := durableCustomIdempotencyKey(record.ProviderID, record.KeyHash)
@@ -581,19 +584,19 @@ func (store *durableCustomStore) CompleteIngestIdempotencyKey(_ context.Context,
 	defer store.mu.Unlock()
 	key := durableCustomIdempotencyKey(record.ProviderID, record.KeyHash)
 	pending, found := store.idempotency[key]
-	if !found || pending.ResponseStatus != 0 || !bytes.Equal(pending.RequestHash, record.RequestHash) {
+	if !found || pending.ResponseStatus != 0 || !bytes.Equal(pending.RequestHash, record.RequestHash) || pending.ReservationToken != record.ReservationToken {
 		return false, nil
 	}
 	store.idempotency[key] = cloneIngestIdempotencyRecord(record)
 	return true, nil
 }
 
-func (store *durableCustomStore) ReleaseIngestIdempotencyKey(_ context.Context, providerID string, keyHash, requestHash []byte) error {
+func (store *durableCustomStore) ReleaseIngestIdempotencyKey(_ context.Context, providerID string, keyHash, requestHash []byte, reservationToken string) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	key := durableCustomIdempotencyKey(providerID, keyHash)
 	record, found := store.idempotency[key]
-	if found && record.ResponseStatus == 0 && bytes.Equal(record.RequestHash, requestHash) {
+	if found && record.ResponseStatus == 0 && bytes.Equal(record.RequestHash, requestHash) && record.ReservationToken == reservationToken {
 		delete(store.idempotency, key)
 	}
 	return nil

@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -799,7 +800,8 @@ VALUES ($1, $2, $3, 'UTC', true, now(), now())`, subjectID, userID, handle); err
 			<-startReservations
 			created, err := integrationDB.CreateIngestIdempotencyKey(ctx, integrations.IngestIdempotencyRecord{
 				ProviderID: provider.ID, KeyHash: reservationKey[:], RequestHash: requestHashes[index][:],
-				ResponseStatus: 0, ResponseBody: []byte(`{}`), CreatedAt: time.Now().UTC(),
+				ReservationToken: uuid.NewString(),
+				ResponseStatus:   0, ResponseBody: []byte(`{}`), CreatedAt: time.Now().UTC(),
 				ExpiresAt: time.Now().UTC().Add(24 * time.Hour),
 			})
 			reservationResults <- reservationResult{index: index, created: created, err: err}
@@ -826,7 +828,7 @@ VALUES ($1, $2, $3, 'UTC', true, now(), now())`, subjectID, userID, handle); err
 	if err != nil || !found || !bytes.Equal(reserved.RequestHash, requestHashes[winner][:]) || reserved.ResponseStatus != 0 {
 		t.Fatalf("stored reservation = %#v, found=%v, error=%v", reserved, found, err)
 	}
-	if err := integrationDB.ReleaseIngestIdempotencyKey(ctx, provider.ID, reservationKey[:], requestHashes[winner][:]); err != nil {
+	if err := integrationDB.ReleaseIngestIdempotencyKey(ctx, provider.ID, reservationKey[:], requestHashes[winner][:], reserved.ReservationToken); err != nil {
 		t.Fatalf("release concurrent reservation: %v", err)
 	}
 

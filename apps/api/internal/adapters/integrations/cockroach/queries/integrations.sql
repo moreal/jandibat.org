@@ -212,12 +212,13 @@ ON CONFLICT (id) DO UPDATE SET
 -- @returns :exec_result
 INSERT INTO ingest_idempotency_keys (
   custom_provider_id, key_hash, request_hash, response_status, response_body,
-  created_at, expires_at
+  created_at, expires_at, reservation_token
 )
 VALUES ($1::UUID, $2::BYTES, $3::BYTES, $4::INT, $5::JSONB,
-  $6::TIMESTAMPTZ, $7::TIMESTAMPTZ)
+  $6::TIMESTAMPTZ, $7::TIMESTAMPTZ, $8::UUID)
 ON CONFLICT (custom_provider_id, key_hash) DO UPDATE SET
   request_hash = excluded.request_hash,
+  reservation_token = excluded.reservation_token,
   response_status = excluded.response_status,
   response_body = excluded.response_body,
   created_at = excluded.created_at,
@@ -227,10 +228,11 @@ WHERE ingest_idempotency_keys.expires_at <= now();
 -- @name CompleteIngestKey
 -- @returns :exec_result
 UPDATE ingest_idempotency_keys
-SET response_status = $4::INT, response_body = $5::JSONB, expires_at = $6::TIMESTAMPTZ
+SET response_status = $5::INT, response_body = $6::JSONB, expires_at = $7::TIMESTAMPTZ
 WHERE custom_provider_id = $1::UUID
   AND key_hash = $2::BYTES
   AND request_hash = $3::BYTES
+  AND reservation_token = $4::UUID
   AND response_status = 0
   AND expires_at > now();
 
@@ -240,18 +242,24 @@ DELETE FROM ingest_idempotency_keys
 WHERE custom_provider_id = $1::UUID
   AND key_hash = $2::BYTES
   AND request_hash = $3::BYTES
+  AND reservation_token = $4::UUID
   AND response_status = 0;
 
 -- @name GetActiveIngestKey
 -- @returns :opt
 SELECT custom_provider_id::STRING AS provider_id, key_hash, request_hash,
-  response_status, response_body, created_at, expires_at
+  reservation_token::STRING AS reservation_token, response_status, response_body, created_at, expires_at
 FROM ingest_idempotency_keys
 WHERE custom_provider_id = $1::UUID AND key_hash = $2::BYTES AND expires_at > now();
 
 -- @name LockProviderForIngest
 -- @returns :opt
-SELECT id::STRING AS id FROM custom_providers WHERE id = $1::UUID FOR UPDATE;
+SELECT id::STRING AS id, status FROM custom_providers WHERE id = $1::UUID FOR UPDATE;
+
+-- @name LockCustomProviderSecretForIngest
+-- @returns :opt
+SELECT ingest_token_hash FROM custom_provider_secrets
+WHERE provider_id = $1::UUID FOR UPDATE;
 
 -- @name InsertCustomActivity
 -- @returns :opt

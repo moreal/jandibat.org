@@ -31,7 +31,8 @@ func TestCustomProviderOperationsRejectLegacySQLOnlyStore(t *testing.T) {
 	}
 	key := integrations.IngestIdempotencyRecord{
 		ProviderID: id, KeyHash: []byte{1}, RequestHash: []byte{2},
-		ResponseBody: []byte(`{}`), CreatedAt: now, ExpiresAt: now.Add(time.Hour),
+		ReservationToken: "018f0000-0000-7000-8000-000000000003",
+		ResponseBody:     []byte(`{}`), CreatedAt: now, ExpiresAt: now.Add(time.Hour),
 	}
 	operations := []struct {
 		name string
@@ -51,7 +52,9 @@ func TestCustomProviderOperationsRejectLegacySQLOnlyStore(t *testing.T) {
 		{"list activities", func() error { _, err := store.ListIngestedActivities(ctx, id); return err }},
 		{"reserve key", func() error { _, err := store.CreateIngestIdempotencyKey(ctx, key); return err }},
 		{"complete key", func() error { _, err := store.CompleteIngestIdempotencyKey(ctx, key); return err }},
-		{"release key", func() error { return store.ReleaseIngestIdempotencyKey(ctx, id, key.KeyHash, key.RequestHash) }},
+		{"release key", func() error {
+			return store.ReleaseIngestIdempotencyKey(ctx, id, key.KeyHash, key.RequestHash, key.ReservationToken)
+		}},
 		{"get key", func() error { _, _, err := store.GetIngestIdempotencyKey(ctx, id, key.KeyHash); return err }},
 	}
 	for _, operation := range operations {

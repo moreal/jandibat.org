@@ -93,12 +93,26 @@ type IngestIdempotencyStore interface {
 
 // AtomicIngestIdempotencyStore extends the durable replay store with a
 // pre-mutation reservation lifecycle. A reservation has ResponseStatus zero;
-// completion may only replace that pending record for the same request hash,
-// and release may only remove that same pending record.
+// completion and release require both the same request hash and the unique
+// reservation token, so a previous owner cannot mutate a replacement lease.
 type AtomicIngestIdempotencyStore interface {
 	IngestIdempotencyStore
 	CompleteIngestIdempotencyKey(context.Context, IngestIdempotencyRecord) (bool, error)
-	ReleaseIngestIdempotencyKey(context.Context, string, []byte, []byte) error
+	ReleaseIngestIdempotencyKey(context.Context, string, []byte, []byte, string) error
+}
+
+// AtomicCustomIngestStore is the production transaction boundary for durable
+// custom ingest. The callback performs only database work through the same
+// transaction context; the implementation locks and rechecks current provider
+// status and secret before allowing any reservation or activity write.
+type AtomicCustomIngestStore interface {
+	RunAuthenticatedIngest(context.Context, string, []byte, func(context.Context, CustomProviderRecord) error) error
+}
+
+// TransactionalActivitySink refuses custom-ingest fact writes unless its
+// Cockroach pool owns the active transaction in ctx.
+type TransactionalActivitySink interface {
+	SaveFactsInCurrentTransaction(context.Context, activity.SaveFactsInput) error
 }
 
 type SyncJobStore interface {

@@ -170,13 +170,14 @@ type IngestedActivity struct {
 }
 
 type IngestIdempotencyRecord struct {
-	ProviderID     string
-	KeyHash        []byte
-	RequestHash    []byte
-	ResponseStatus int
-	ResponseBody   json.RawMessage
-	CreatedAt      time.Time
-	ExpiresAt      time.Time
+	ProviderID       string
+	KeyHash          []byte
+	RequestHash      []byte
+	ReservationToken string
+	ResponseStatus   int
+	ResponseBody     json.RawMessage
+	CreatedAt        time.Time
+	ExpiresAt        time.Time
 }
 
 type SyncJobStatus string

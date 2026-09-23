@@ -226,6 +226,9 @@ func (s *Store) SaveIngestedActivities(ctx context.Context, activities []integra
 		if locked == nil {
 			return notFound("custom provider", providerID)
 		}
+		if locked.Status != string(integrations.CustomProviderActive) {
+			return integrations.ErrProviderDisabled
+		}
 		accepted = make([]integrations.IngestedActivity, 0, len(activities))
 		for _, item := range activities {
 			metadata := item.Metadata
@@ -319,12 +322,16 @@ func (s *Store) CreateIngestIdempotencyKey(ctx context.Context, record integrati
 	if err != nil {
 		return false, integrations.ErrInvalidIdentifier
 	}
+	reservationToken, err := uuid.Parse(record.ReservationToken)
+	if err != nil {
+		return false, integrations.ErrInvalidIdentifier
+	}
 	if record.ResponseStatus < 0 || record.ResponseStatus > math.MaxInt32 {
 		return false, integrations.ErrInvalidProvider
 	}
 	count, err := generated.ReserveIngestKey(ctx, appdb.PGXExecutorFor(ctx, s.pool), id,
 		record.KeyHash, record.RequestHash, int32(record.ResponseStatus), record.ResponseBody,
-		record.CreatedAt, record.ExpiresAt)
+		record.CreatedAt, record.ExpiresAt, reservationToken)
 	if err != nil {
 		return false, fmt.Errorf("create ingest idempotency key: %w", err)
 	}
@@ -332,8 +339,8 @@ func (s *Store) CreateIngestIdempotencyKey(ctx context.Context, record integrati
 }
 
 // CompleteIngestIdempotencyKey transitions this request's pending reservation
-// to its replayable response. The request hash and pending status form a CAS so
-// a different request can never complete the reservation.
+// to its replayable response. The request hash, reservation token, and pending
+// status form a CAS, including after an expired key is re-reserved.
 func (s *Store) CompleteIngestIdempotencyKey(ctx context.Context, record integrations.IngestIdempotencyRecord) (bool, error) {
 	if s.pool == nil {
 		return false, ErrNilDB
@@ -342,11 +349,15 @@ func (s *Store) CompleteIngestIdempotencyKey(ctx context.Context, record integra
 	if err != nil {
 		return false, integrations.ErrInvalidIdentifier
 	}
+	reservationToken, err := uuid.Parse(record.ReservationToken)
+	if err != nil {
+		return false, integrations.ErrInvalidIdentifier
+	}
 	if record.ResponseStatus < 0 || record.ResponseStatus > math.MaxInt32 {
 		return false, integrations.ErrInvalidProvider
 	}
 	count, err := generated.CompleteIngestKey(ctx, appdb.PGXExecutorFor(ctx, s.pool), id,
-		record.KeyHash, record.RequestHash, int32(record.ResponseStatus), record.ResponseBody,
+		record.KeyHash, record.RequestHash, reservationToken, int32(record.ResponseStatus), record.ResponseBody,
 		record.ExpiresAt)
 	if err != nil {
 		return false, fmt.Errorf("complete ingest idempotency key: %w", err)
@@ -357,7 +368,7 @@ func (s *Store) CompleteIngestIdempotencyKey(ctx context.Context, record integra
 // ReleaseIngestIdempotencyKey removes only this request's pending reservation,
 // allowing a retry after validation, event persistence, or projection fails.
 // Completed responses and reservations for another request are untouched.
-func (s *Store) ReleaseIngestIdempotencyKey(ctx context.Context, providerID string, keyHash, requestHash []byte) error {
+func (s *Store) ReleaseIngestIdempotencyKey(ctx context.Context, providerID string, keyHash, requestHash []byte, reservationToken string) error {
 	if s.pool == nil {
 		return ErrNilDB
 	}
@@ -365,7 +376,11 @@ func (s *Store) ReleaseIngestIdempotencyKey(ctx context.Context, providerID stri
 	if err != nil {
 		return integrations.ErrInvalidIdentifier
 	}
-	if err := generated.ReleaseIngestKey(ctx, appdb.PGXExecutorFor(ctx, s.pool), id, keyHash, requestHash); err != nil {
+	token, err := uuid.Parse(reservationToken)
+	if err != nil {
+		return integrations.ErrInvalidIdentifier
+	}
+	if err := generated.ReleaseIngestKey(ctx, appdb.PGXExecutorFor(ctx, s.pool), id, keyHash, requestHash, token); err != nil {
 		return fmt.Errorf("release ingest idempotency key: %w", err)
 	}
 	return nil
@@ -391,8 +406,9 @@ func (s *Store) GetIngestIdempotencyKey(ctx context.Context, providerID string, 
 	return integrations.IngestIdempotencyRecord{
 		ProviderID: row.ProviderId, KeyHash: append([]byte(nil), row.KeyHash...),
 		RequestHash: append([]byte(nil), row.RequestHash...), ResponseStatus: int(row.ResponseStatus),
-		ResponseBody: append(json.RawMessage(nil), row.ResponseBody...),
-		CreatedAt:    row.CreatedAt, ExpiresAt: row.ExpiresAt,
+		ReservationToken: row.ReservationToken,
+		ResponseBody:     append(json.RawMessage(nil), row.ResponseBody...),
+		CreatedAt:        row.CreatedAt, ExpiresAt: row.ExpiresAt,
 	}, true, nil
 }
 

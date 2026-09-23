@@ -301,16 +301,52 @@ func (service *CustomProviderService) Ingest(ctx context.Context, input IngestCu
 	if err != nil {
 		return IngestCustomActivitiesResult{}, fmt.Errorf("fingerprint custom ingest request: %w", err)
 	}
+	if atomicStore, ok := service.store.(AtomicCustomIngestStore); ok {
+		transactionalSink, ok := service.sink.(TransactionalActivitySink)
+		if !ok {
+			return IngestCustomActivitiesResult{}, ErrAtomicIngestUnavailable
+		}
+		var committed IngestCustomActivitiesResult
+		err := atomicStore.RunAuthenticatedIngest(ctx, input.ProviderID, record.EncryptedIngestSecret,
+			func(txctx context.Context, current CustomProviderRecord) error {
+				var attemptErr error
+				committed, attemptErr = service.ingestPrepared(txctx, input, current, now, fingerprint,
+					transactionalSink.SaveFactsInCurrentTransaction, true)
+				return attemptErr
+			})
+		if err != nil {
+			return IngestCustomActivitiesResult{}, err
+		}
+		return committed, nil
+	}
+	return service.ingestPrepared(ctx, input, record, now, fingerprint, service.sink.SaveFacts, false)
+}
+
+func (service *CustomProviderService) ingestPrepared(
+	ctx context.Context,
+	input IngestCustomActivitiesInput,
+	record CustomProviderRecord,
+	now time.Time,
+	fingerprint [sha256.Size]byte,
+	saveFacts func(context.Context, activity.SaveFactsInput) error,
+	atomic bool,
+) (result IngestCustomActivitiesResult, err error) {
 	var durableIdempotency AtomicIngestIdempotencyStore
 	var idempotencyKeyHash [sha256.Size]byte
+	var reservationToken string
 	reservationAcquired := false
 	if input.IdempotencyKey != "" {
 		idempotencyKeyHash = sha256.Sum256([]byte(input.IdempotencyKey))
 		if store, ok := service.store.(AtomicIngestIdempotencyStore); ok {
 			durableIdempotency = store
+			reservationToken, err = service.ids.NewID()
+			if err != nil {
+				return IngestCustomActivitiesResult{}, fmt.Errorf("generate ingest reservation token: %w", err)
+			}
 			created, err := store.CreateIngestIdempotencyKey(ctx, IngestIdempotencyRecord{
 				ProviderID: input.ProviderID, KeyHash: idempotencyKeyHash[:], RequestHash: fingerprint[:],
-				ResponseStatus: 0, ResponseBody: json.RawMessage(`{}`), CreatedAt: now,
+				ReservationToken: reservationToken,
+				ResponseStatus:   0, ResponseBody: json.RawMessage(`{}`), CreatedAt: now,
 				ExpiresAt: now.Add(customIdempotencyRetention),
 			})
 			if err != nil {
@@ -334,7 +370,7 @@ func (service *CustomProviderService) Ingest(ctx context.Context, input IngestCu
 				cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 				defer cancel()
 				if releaseErr := durableIdempotency.ReleaseIngestIdempotencyKey(
-					cleanupCtx, input.ProviderID, idempotencyKeyHash[:], fingerprint[:],
+					cleanupCtx, input.ProviderID, idempotencyKeyHash[:], fingerprint[:], reservationToken,
 				); releaseErr != nil {
 					err = errors.Join(err, fmt.Errorf("release ingest idempotency reservation: %w", releaseErr))
 				}
@@ -401,7 +437,7 @@ func (service *CustomProviderService) Ingest(ctx context.Context, input IngestCu
 		for index, item := range canonical {
 			facts[index] = customActivityFact(record.Provider, item)
 		}
-		if err := service.sink.SaveFacts(ctx, activity.SaveFactsInput{
+		if err := saveFacts(ctx, activity.SaveFactsInput{
 			Subject: activity.SubjectID(record.Provider.SubjectID),
 			Facts:   facts,
 		}); err != nil {
@@ -416,12 +452,16 @@ func (service *CustomProviderService) Ingest(ctx context.Context, input IngestCu
 			}
 			completed, err := durableIdempotency.CompleteIngestIdempotencyKey(ctx, IngestIdempotencyRecord{
 				ProviderID: input.ProviderID, KeyHash: idempotencyKeyHash[:], RequestHash: fingerprint[:],
-				ResponseStatus: 202, ResponseBody: body, CreatedAt: now, ExpiresAt: now.Add(customIdempotencyRetention),
+				ReservationToken: reservationToken,
+				ResponseStatus:   202, ResponseBody: body, CreatedAt: now, ExpiresAt: now.Add(customIdempotencyRetention),
 			})
 			if err != nil {
 				return IngestCustomActivitiesResult{}, err
 			}
 			if !completed {
+				if atomic {
+					return IngestCustomActivitiesResult{}, idempotencyInProgressError()
+				}
 				previous, found, err := durableIdempotency.GetIngestIdempotencyKey(ctx, input.ProviderID, idempotencyKeyHash[:])
 				if err != nil {
 					return IngestCustomActivitiesResult{}, fmt.Errorf("resolve ingest idempotency completion: %w", err)

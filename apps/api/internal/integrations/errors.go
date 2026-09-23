@@ -37,6 +37,7 @@ var (
 	ErrEmptyIngestSecret           = errors.New("integrations: ingest secret is required")
 	ErrIngestSecretTooShort        = errors.New("integrations: ingest secret must contain at least 32 characters")
 	ErrProviderDisabled            = errors.New("integrations: custom provider is disabled")
+	ErrAtomicIngestUnavailable     = errors.New("integrations: atomic custom ingest requires a transaction-bound activity sink")
 	ErrEmptyActivities             = errors.New("integrations: at least one activity is required")
 	ErrTooManyActivities           = errors.New("integrations: ingest batch is too large")
 	ErrEmptyExternalID             = errors.New("integrations: external id is required")

@@ -12,7 +12,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	coreauth "github.com/moreal/jandibat.org/apps/api/internal/auth"
-	appdb "github.com/moreal/jandibat.org/apps/api/internal/database"
 )
 
 var ErrNilDB = errors.New("auth cockroach: database is required")
@@ -22,14 +21,6 @@ type Store struct {
 	db                      *sql.DB
 	pool                    *pgxpool.Pool
 	deletedIdentityHMACKeys []identityHMACKey
-}
-
-func (store *Store) mutationExecutor(ctx context.Context) (appdb.Executor, error) {
-	return appdb.MutationExecutor(ctx, store.db)
-}
-
-func (store *Store) beginMutation(ctx context.Context) (context.Context, *appdb.Scope, error) {
-	return appdb.Begin(ctx, store.db, nil)
 }
 
 type identityHMACKey struct {
@@ -99,10 +90,6 @@ func (store *Store) Close() error {
 	return nil
 }
 
-type scanner interface {
-	Scan(dest ...any) error
-}
-
 func persistenceError(err error) error {
 	if err == nil {
 		return nil
@@ -121,15 +108,4 @@ func persistenceError(err error) error {
 	default:
 		return err
 	}
-}
-
-func rowsAffected(result sql.Result, err error) (int64, error) {
-	if err != nil {
-		return 0, persistenceError(err)
-	}
-	count, err := result.RowsAffected()
-	if err != nil {
-		return 0, err
-	}
-	return count, nil
 }

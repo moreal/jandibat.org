@@ -171,6 +171,13 @@ WHERE table_schema = current_schema() AND table_name = 'magic_link_mail_outbox'
 		ID: id("20bb2480-3560-4e93-b5ef-"), Email: email, TokenHash: firstDigest, Purpose: coreauth.MagicLinkPurposeSignIn,
 		CreatedAt: now.Add(2 * time.Second), ExpiresAt: now.Add(17 * time.Minute),
 	}
+	if err := workerStore.ActivateMagicLinkDelivery(ctx, claimed[0].ID, "00000000-0000-4000-8000-000000000000", firstLink); !errors.Is(err, coreauth.ErrConflict) {
+		t.Fatalf("stale claim activation error = %v, want ErrConflict", err)
+	}
+	var staleDigestCount int
+	if err := adminDB.QueryRowContext(ctx, `SELECT count(*) FROM magic_link_mail_outbox WHERE id = $1 AND token_hash IS NOT NULL`, claimed[0].ID).Scan(&staleDigestCount); err != nil || staleDigestCount != 0 {
+		t.Fatalf("stale claim wrote digest: count=%d, error=%v", staleDigestCount, err)
+	}
 	if err := workerStore.ActivateMagicLinkDelivery(ctx, claimed[0].ID, claimed[0].ClaimToken, firstLink); err != nil {
 		t.Fatalf("worker-role activate: %v", err)
 	}

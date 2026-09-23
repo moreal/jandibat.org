@@ -21,4 +21,9 @@ type Mutation {
   signOut: SignOutPayload!
   revokeSession(input: RevokeSessionInput!): RevokeSessionPayload!
   revokeOtherSessions: RevokeOtherSessionsPayload!
+  updateUserSettings(input: UpdateUserSettingsInput!): UpdateUserSettingsPayload!
+  createSubject(input: CreateSubjectInput!): CreateSubjectPayload!
+  updateSubject(input: UpdateSubjectInput!): UpdateSubjectPayload!
+  updateSubjectSettings(input: UpdateSubjectSettingsInput!): UpdateSubjectSettingsPayload!
+  requestSubjectDeletion(input: RequestSubjectDeletionInput!): RequestSubjectDeletionPayload!
 }

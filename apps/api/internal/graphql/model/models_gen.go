@@ -3,6 +3,11 @@
 package model
 
 import (
+	"bytes"
+	"fmt"
+	"io"
+	"strconv"
+
 	"github.com/moreal/jandibat.org/apps/api/internal/graphql/scalar"
 )
 
@@ -95,6 +100,30 @@ func (this BeginPasskeySignInPayload) GetErrors() []*MutationError {
 	return interfaceSlice
 }
 
+type CreateSubjectInput struct {
+	Handle      string          `json:"handle"`
+	DisplayName *string         `json:"displayName,omitempty"`
+	Timezone    scalar.TimeZone `json:"timezone"`
+	IsPublic    *bool           `json:"isPublic,omitempty"`
+}
+
+type CreateSubjectPayload struct {
+	Errors  []*MutationError `json:"errors"`
+	Subject *Subject         `json:"subject,omitempty"`
+}
+
+func (CreateSubjectPayload) IsMutationPayload() {}
+func (this CreateSubjectPayload) GetErrors() []*MutationError {
+	if this.Errors == nil {
+		return nil
+	}
+	interfaceSlice := make([]*MutationError, 0, len(this.Errors))
+	for _, concrete := range this.Errors {
+		interfaceSlice = append(interfaceSlice, concrete)
+	}
+	return interfaceSlice
+}
+
 type CustomProvider struct {
 	ID string `json:"id"`
 }
@@ -110,6 +139,11 @@ type DateRange struct {
 type DateRangeInput struct {
 	From scalar.Date `json:"from"`
 	To   scalar.Date `json:"to"`
+}
+
+type DeletionRequestResult struct {
+	RequestID string `json:"requestID"`
+	Status    string `json:"status"`
 }
 
 type FinishPasskeyRegistrationInput struct {
@@ -229,6 +263,27 @@ func (this RequestMagicLinkPayload) GetErrors() []*MutationError {
 	return interfaceSlice
 }
 
+type RequestSubjectDeletionInput struct {
+	SubjectID string `json:"subjectID"`
+}
+
+type RequestSubjectDeletionPayload struct {
+	Errors  []*MutationError       `json:"errors"`
+	Request *DeletionRequestResult `json:"request,omitempty"`
+}
+
+func (RequestSubjectDeletionPayload) IsMutationPayload() {}
+func (this RequestSubjectDeletionPayload) GetErrors() []*MutationError {
+	if this.Errors == nil {
+		return nil
+	}
+	interfaceSlice := make([]*MutationError, 0, len(this.Errors))
+	for _, concrete := range this.Errors {
+		interfaceSlice = append(interfaceSlice, concrete)
+	}
+	return interfaceSlice
+}
+
 type RevokeOtherSessionsPayload struct {
 	Errors         []*MutationError `json:"errors"`
 	CurrentSession *Session         `json:"currentSession,omitempty"`
@@ -308,13 +363,42 @@ func (this SignOutPayload) GetErrors() []*MutationError {
 }
 
 type Subject struct {
-	ID string `json:"id"`
+	ID          string          `json:"id"`
+	Handle      string          `json:"handle"`
+	DisplayName *string         `json:"displayName,omitempty"`
+	Timezone    scalar.TimeZone `json:"timezone"`
+	IsPublic    bool            `json:"isPublic"`
+	CreatedAt   scalar.DateTime `json:"createdAt"`
+	UpdatedAt   scalar.DateTime `json:"updatedAt"`
+	// Owner-only settings; null for anonymous or non-owner readers.
+	Settings *SubjectSettings `json:"settings,omitempty"`
 	// A bounded, static projection; non-owners see only public activity.
 	ActivitySnapshot *ActivitySnapshot `json:"activitySnapshot"`
 }
 
 func (Subject) IsNode()            {}
 func (this Subject) GetID() string { return this.ID }
+
+type SubjectConnection struct {
+	Edges    []*SubjectEdge `json:"edges"`
+	PageInfo *PageInfo      `json:"pageInfo"`
+}
+
+type SubjectEdge struct {
+	Cursor scalar.Cursor `json:"cursor"`
+	Node   *Subject      `json:"node"`
+}
+
+type SubjectSettings struct {
+	Timezone            scalar.TimeZone    `json:"timezone"`
+	IsPublic            bool               `json:"isPublic"`
+	DefaultTheme        HeatmapTheme       `json:"defaultTheme"`
+	WeekStart           WeekStart          `json:"weekStart"`
+	SyncEnabled         bool               `json:"syncEnabled"`
+	SyncIntervalMinutes int                `json:"syncIntervalMinutes"`
+	FailurePolicy       FetchFailurePolicy `json:"failurePolicy"`
+	UpdatedAt           scalar.DateTime    `json:"updatedAt"`
+}
 
 type SyncJob struct {
 	ID        string          `json:"id"`
@@ -337,6 +421,83 @@ type SyncJobEdge struct {
 	Node   *SyncJob      `json:"node"`
 }
 
+type UpdateSubjectInput struct {
+	ID          string  `json:"id"`
+	Handle      *string `json:"handle,omitempty"`
+	DisplayName *string `json:"displayName,omitempty"`
+	// Explicitly clear displayName; mutually exclusive with a supplied value.
+	ClearDisplayName *bool `json:"clearDisplayName,omitempty"`
+}
+
+type UpdateSubjectPayload struct {
+	Errors  []*MutationError `json:"errors"`
+	Subject *Subject         `json:"subject,omitempty"`
+}
+
+func (UpdateSubjectPayload) IsMutationPayload() {}
+func (this UpdateSubjectPayload) GetErrors() []*MutationError {
+	if this.Errors == nil {
+		return nil
+	}
+	interfaceSlice := make([]*MutationError, 0, len(this.Errors))
+	for _, concrete := range this.Errors {
+		interfaceSlice = append(interfaceSlice, concrete)
+	}
+	return interfaceSlice
+}
+
+type UpdateSubjectSettingsInput struct {
+	SubjectID           string              `json:"subjectID"`
+	Timezone            *scalar.TimeZone    `json:"timezone,omitempty"`
+	IsPublic            *bool               `json:"isPublic,omitempty"`
+	DefaultTheme        *HeatmapTheme       `json:"defaultTheme,omitempty"`
+	WeekStart           *WeekStart          `json:"weekStart,omitempty"`
+	SyncEnabled         *bool               `json:"syncEnabled,omitempty"`
+	SyncIntervalMinutes *int                `json:"syncIntervalMinutes,omitempty"`
+	FailurePolicy       *FetchFailurePolicy `json:"failurePolicy,omitempty"`
+}
+
+type UpdateSubjectSettingsPayload struct {
+	Errors   []*MutationError `json:"errors"`
+	Settings *SubjectSettings `json:"settings,omitempty"`
+	Subject  *Subject         `json:"subject,omitempty"`
+}
+
+func (UpdateSubjectSettingsPayload) IsMutationPayload() {}
+func (this UpdateSubjectSettingsPayload) GetErrors() []*MutationError {
+	if this.Errors == nil {
+		return nil
+	}
+	interfaceSlice := make([]*MutationError, 0, len(this.Errors))
+	for _, concrete := range this.Errors {
+		interfaceSlice = append(interfaceSlice, concrete)
+	}
+	return interfaceSlice
+}
+
+type UpdateUserSettingsInput struct {
+	Locale   *string          `json:"locale,omitempty"`
+	Timezone *scalar.TimeZone `json:"timezone,omitempty"`
+	Theme    *HeatmapTheme    `json:"theme,omitempty"`
+}
+
+type UpdateUserSettingsPayload struct {
+	Errors   []*MutationError `json:"errors"`
+	Settings *UserSettings    `json:"settings,omitempty"`
+}
+
+func (UpdateUserSettingsPayload) IsMutationPayload() {}
+func (this UpdateUserSettingsPayload) GetErrors() []*MutationError {
+	if this.Errors == nil {
+		return nil
+	}
+	interfaceSlice := make([]*MutationError, 0, len(this.Errors))
+	for _, concrete := range this.Errors {
+		interfaceSlice = append(interfaceSlice, concrete)
+	}
+	return interfaceSlice
+}
+
 type UserProfile struct {
 	ID              string           `json:"id"`
 	PrimaryEmail    string           `json:"primaryEmail"`
@@ -346,9 +507,190 @@ type UserProfile struct {
 	UpdatedAt       scalar.DateTime  `json:"updatedAt"`
 }
 
+type UserSettings struct {
+	Locale    string          `json:"locale"`
+	Timezone  scalar.TimeZone `json:"timezone"`
+	Theme     HeatmapTheme    `json:"theme"`
+	UpdatedAt scalar.DateTime `json:"updatedAt"`
+}
+
 // The viewer is a scoped value object, not a globally addressable Node.
 type Viewer struct {
-	User *UserProfile `json:"user"`
+	User     *UserProfile  `json:"user"`
+	Settings *UserSettings `json:"settings"`
+	// Forward page; first: 1..100, default 25.
+	Subjects *SubjectConnection `json:"subjects"`
 	// Forward page; first: 1..100, default 25.
 	Sessions *SessionConnection `json:"sessions"`
+}
+
+type FetchFailurePolicy string
+
+const (
+	FetchFailurePolicyKeepStale FetchFailurePolicy = "KEEP_STALE"
+	FetchFailurePolicyPurge     FetchFailurePolicy = "PURGE"
+)
+
+var AllFetchFailurePolicy = []FetchFailurePolicy{
+	FetchFailurePolicyKeepStale,
+	FetchFailurePolicyPurge,
+}
+
+func (e FetchFailurePolicy) IsValid() bool {
+	switch e {
+	case FetchFailurePolicyKeepStale, FetchFailurePolicyPurge:
+		return true
+	}
+	return false
+}
+
+func (e FetchFailurePolicy) String() string {
+	return string(e)
+}
+
+func (e *FetchFailurePolicy) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = FetchFailurePolicy(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid FetchFailurePolicy", str)
+	}
+	return nil
+}
+
+func (e FetchFailurePolicy) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *FetchFailurePolicy) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e FetchFailurePolicy) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type HeatmapTheme string
+
+const (
+	HeatmapThemeSystem      HeatmapTheme = "SYSTEM"
+	HeatmapThemeLight       HeatmapTheme = "LIGHT"
+	HeatmapThemeDark        HeatmapTheme = "DARK"
+	HeatmapThemeGithubLight HeatmapTheme = "GITHUB_LIGHT"
+	HeatmapThemeGithubDark  HeatmapTheme = "GITHUB_DARK"
+)
+
+var AllHeatmapTheme = []HeatmapTheme{
+	HeatmapThemeSystem,
+	HeatmapThemeLight,
+	HeatmapThemeDark,
+	HeatmapThemeGithubLight,
+	HeatmapThemeGithubDark,
+}
+
+func (e HeatmapTheme) IsValid() bool {
+	switch e {
+	case HeatmapThemeSystem, HeatmapThemeLight, HeatmapThemeDark, HeatmapThemeGithubLight, HeatmapThemeGithubDark:
+		return true
+	}
+	return false
+}
+
+func (e HeatmapTheme) String() string {
+	return string(e)
+}
+
+func (e *HeatmapTheme) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = HeatmapTheme(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid HeatmapTheme", str)
+	}
+	return nil
+}
+
+func (e HeatmapTheme) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *HeatmapTheme) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e HeatmapTheme) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type WeekStart string
+
+const (
+	WeekStartSunday WeekStart = "SUNDAY"
+	WeekStartMonday WeekStart = "MONDAY"
+)
+
+var AllWeekStart = []WeekStart{
+	WeekStartSunday,
+	WeekStartMonday,
+}
+
+func (e WeekStart) IsValid() bool {
+	switch e {
+	case WeekStartSunday, WeekStartMonday:
+		return true
+	}
+	return false
+}
+
+func (e WeekStart) String() string {
+	return string(e)
+}
+
+func (e *WeekStart) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = WeekStart(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid WeekStart", str)
+	}
+	return nil
+}
+
+func (e WeekStart) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *WeekStart) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e WeekStart) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
 }

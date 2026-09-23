@@ -57,6 +57,31 @@ func (r *mutationResolver) RevokeOtherSessions(ctx context.Context) (*model.Revo
 	return resolveRevokeOtherSessions(ctx)
 }
 
+// UpdateUserSettings is the resolver for the updateUserSettings field.
+func (r *mutationResolver) UpdateUserSettings(ctx context.Context, input model.UpdateUserSettingsInput) (*model.UpdateUserSettingsPayload, error) {
+	return resolveUpdateUserSettings(ctx, input)
+}
+
+// CreateSubject is the resolver for the createSubject field.
+func (r *mutationResolver) CreateSubject(ctx context.Context, input model.CreateSubjectInput) (*model.CreateSubjectPayload, error) {
+	return resolveCreateSubject(ctx, input)
+}
+
+// UpdateSubject is the resolver for the updateSubject field.
+func (r *mutationResolver) UpdateSubject(ctx context.Context, input model.UpdateSubjectInput) (*model.UpdateSubjectPayload, error) {
+	return resolveUpdateSubject(ctx, input)
+}
+
+// UpdateSubjectSettings is the resolver for the updateSubjectSettings field.
+func (r *mutationResolver) UpdateSubjectSettings(ctx context.Context, input model.UpdateSubjectSettingsInput) (*model.UpdateSubjectSettingsPayload, error) {
+	return resolveUpdateSubjectSettings(ctx, input)
+}
+
+// RequestSubjectDeletion is the resolver for the requestSubjectDeletion field.
+func (r *mutationResolver) RequestSubjectDeletion(ctx context.Context, input model.RequestSubjectDeletionInput) (*model.RequestSubjectDeletionPayload, error) {
+	return resolveRequestSubjectDeletion(ctx, input)
+}
+
 // SyncJobs is the resolver for the syncJobs field.
 func (r *providerConnectionResolver) SyncJobs(ctx context.Context, obj *model.ProviderConnection, first *int, after *scalar.Cursor) (*model.SyncJobConnection, error) {
 	return resolveSyncJobs(ctx, obj, first, after)
@@ -82,9 +107,24 @@ func (r *queryResolver) Viewer(ctx context.Context) (*model.Viewer, error) {
 	return r.resolveViewer(ctx)
 }
 
+// Settings is the resolver for the settings field.
+func (r *subjectResolver) Settings(ctx context.Context, obj *model.Subject) (*model.SubjectSettings, error) {
+	return resolveSubjectSettings(ctx, obj)
+}
+
 // ActivitySnapshot is the resolver for the activitySnapshot field.
 func (r *subjectResolver) ActivitySnapshot(ctx context.Context, obj *model.Subject, rangeArg model.DateRangeInput, timezone scalar.TimeZone, environmentIDs []string) (*model.ActivitySnapshot, error) {
 	return r.resolveActivitySnapshot(ctx, obj, rangeArg, timezone, environmentIDs)
+}
+
+// Settings is the resolver for the settings field.
+func (r *viewerResolver) Settings(ctx context.Context, obj *model.Viewer) (*model.UserSettings, error) {
+	return resolveViewerSettings(ctx, obj)
+}
+
+// Subjects is the resolver for the subjects field.
+func (r *viewerResolver) Subjects(ctx context.Context, obj *model.Viewer, first *int, after *scalar.Cursor) (*model.SubjectConnection, error) {
+	return resolveViewerSubjects(ctx, obj, first, after)
 }
 
 // Sessions is the resolver for the sessions field.

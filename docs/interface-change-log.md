@@ -80,6 +80,21 @@ Magic Link 소비는 브라우저 callback HTTP edge에 남기고, 요청은 Gra
   처리합니다. Task 5의 operation-aware 감사·CSRF·cookie 경계가 완성되기 전에는
   새 mutation을 공개 라우트에 연결하지 않습니다.
 
+## 2026-09-24 — Subject·설정 GraphQL 계약
+
+호환성: GraphQL 도메인 계약에 `viewer.subjects`, 공개/소유자 Subject 프로필,
+사용자·Subject 설정과 typed 변경 payload를 추가합니다. `Subject`만 Node이며 설정,
+connection edge와 삭제 요청은 값 객체입니다.
+
+- 목록은 `(createdAt,id)`의 종류별 불투명 커서를 사용하고 `first=1..100`으로 제한합니다.
+- Subject 설정은 소유자에게만 보이며 공개 Subject의 비소유자는 `settings: null`입니다.
+- `updateSubject`에서 `clearDisplayName`은 명시적 삭제를 뜻하고 새 값과 동시에 지정할
+  수 없습니다. GraphQL의 생략/null 차이를 암묵적으로 DB 변경에 사용하지 않습니다.
+- 삭제는 즉시 Node를 지우지 않고 durable 삭제 요청의 ID·상태를 반환합니다.
+- Backend: 검증된 사용자 ID·Subject 소유권을 각 resolver에서 재검사하고 기존
+  application service 및 삭제 workflow만 호출합니다. Task 5 전에는 공개 라우트에
+  mutation을 연결하지 않습니다.
+
 ## 2026-08-12 — 운영·보안 계약 강화 (`1.1.0`)
 
 호환성: `1.0.0` 개발 기준선 대비 breaking change. 아직 배포되지 않은 계약의 Phase 3 완료 조건을 명시적으로 고정합니다.

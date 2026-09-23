@@ -101,7 +101,7 @@ func (r *queryResolver) resolveNode(ctx context.Context, id string) (model.Node,
 		if subject.ID != raw {
 			return nil, errNodeLookup
 		}
-		return &model.Subject{ID: relayid.Encode(relayid.Subject, subject.ID)}, nil
+		return projectSubject(subject)
 	case relayid.ProviderConnection:
 		if identity.userID == "" {
 			return nil, nil
@@ -215,7 +215,7 @@ func (r *queryResolver) resolveSubject(ctx context.Context, handleOrID string) (
 	if subject.ID == "" {
 		return nil, errNodeLookup
 	}
-	return &model.Subject{ID: relayid.Encode(relayid.Subject, subject.ID)}, nil
+	return projectSubject(subject)
 }
 
 func ownsSubject(ctx context.Context, service interface {

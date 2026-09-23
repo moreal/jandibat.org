@@ -34,8 +34,14 @@ models:
     fields:
       activitySnapshot:
         resolver: true
+      settings:
+        resolver: true
   Viewer:
     fields:
+      settings:
+        resolver: true
+      subjects:
+        resolver: true
       sessions:
         resolver: true
   ProviderConnection:

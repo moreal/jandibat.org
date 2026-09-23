@@ -1,0 +1,112 @@
+enum HeatmapTheme {
+  SYSTEM
+  LIGHT
+  DARK
+  GITHUB_LIGHT
+  GITHUB_DARK
+}
+
+enum WeekStart {
+  SUNDAY
+  MONDAY
+}
+
+enum FetchFailurePolicy {
+  KEEP_STALE
+  PURGE
+}
+
+type UserSettings {
+  locale: String!
+  timezone: TimeZone!
+  theme: HeatmapTheme!
+  updatedAt: DateTime!
+}
+
+type SubjectSettings {
+  timezone: TimeZone!
+  isPublic: Boolean!
+  defaultTheme: HeatmapTheme!
+  weekStart: WeekStart!
+  syncEnabled: Boolean!
+  syncIntervalMinutes: Int!
+  failurePolicy: FetchFailurePolicy!
+  updatedAt: DateTime!
+}
+
+type SubjectEdge {
+  cursor: Cursor!
+  node: Subject!
+}
+
+type SubjectConnection {
+  edges: [SubjectEdge!]!
+  pageInfo: PageInfo!
+}
+
+input UpdateUserSettingsInput {
+  locale: String
+  timezone: TimeZone
+  theme: HeatmapTheme
+}
+
+type UpdateUserSettingsPayload implements MutationPayload {
+  errors: [MutationError!]!
+  settings: UserSettings
+}
+
+input CreateSubjectInput {
+  handle: String!
+  displayName: String
+  timezone: TimeZone!
+  isPublic: Boolean
+}
+
+type CreateSubjectPayload implements MutationPayload {
+  errors: [MutationError!]!
+  subject: Subject
+}
+
+input UpdateSubjectInput {
+  id: ID!
+  handle: String
+  displayName: String
+  "Explicitly clear displayName; mutually exclusive with a supplied value."
+  clearDisplayName: Boolean = false
+}
+
+type UpdateSubjectPayload implements MutationPayload {
+  errors: [MutationError!]!
+  subject: Subject
+}
+
+input UpdateSubjectSettingsInput {
+  subjectID: ID!
+  timezone: TimeZone
+  isPublic: Boolean
+  defaultTheme: HeatmapTheme
+  weekStart: WeekStart
+  syncEnabled: Boolean
+  syncIntervalMinutes: Int
+  failurePolicy: FetchFailurePolicy
+}
+
+type UpdateSubjectSettingsPayload implements MutationPayload {
+  errors: [MutationError!]!
+  settings: SubjectSettings
+  subject: Subject
+}
+
+input RequestSubjectDeletionInput {
+  subjectID: ID!
+}
+
+type DeletionRequestResult {
+  requestID: String!
+  status: String!
+}
+
+type RequestSubjectDeletionPayload implements MutationPayload {
+  errors: [MutationError!]!
+  request: DeletionRequestResult
+}

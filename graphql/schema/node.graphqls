@@ -5,6 +5,14 @@ interface Node {
 
 type Subject implements Node {
   id: ID!
+  handle: String!
+  displayName: String
+  timezone: TimeZone!
+  isPublic: Boolean!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  "Owner-only settings; null for anonymous or non-owner readers."
+  settings: SubjectSettings
   "A bounded, static projection; non-owners see only public activity."
   activitySnapshot(
     range: DateRangeInput!

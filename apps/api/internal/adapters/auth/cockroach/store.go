@@ -2,15 +2,12 @@
 package cockroach
 
 import (
-	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"sort"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
-	_ "github.com/jackc/pgx/v5/stdlib"
 	coreauth "github.com/moreal/jandibat.org/apps/api/internal/auth"
 )
 
@@ -18,7 +15,6 @@ var ErrNilDB = errors.New("auth cockroach: database is required")
 
 // Store implements auth.Repository. The caller owns configured handles.
 type Store struct {
-	db                      *sql.DB
 	pool                    *pgxpool.Pool
 	deletedIdentityHMACKeys []identityHMACKey
 }
@@ -30,24 +26,16 @@ type identityHMACKey struct {
 
 var _ coreauth.Repository = (*Store)(nil)
 
-func New(database any) (*Store, error) {
-	return NewWithDeletedIdentityHMACKeys(database, nil)
+func New(pool *pgxpool.Pool) (*Store, error) {
+	return NewWithDeletedIdentityHMACKeys(pool, nil)
 }
 
 // NewWithDeletedIdentityHMACKeys configures every retained read key. During
 // rotation, old keys must remain here until every tombstone written under them
 // has expired. New tombstones are written by maintenance with only its active
 // key; the auth boundary intentionally has no active/write distinction.
-func NewWithDeletedIdentityHMACKeys(database any, keys map[string][]byte) (*Store, error) {
-	var db *sql.DB
-	var pool *pgxpool.Pool
-	switch handle := database.(type) {
-	case *sql.DB:
-		db = handle
-	case *pgxpool.Pool:
-		pool = handle
-	}
-	if db == nil && pool == nil {
+func NewWithDeletedIdentityHMACKeys(pool *pgxpool.Pool, keys map[string][]byte) (*Store, error) {
+	if pool == nil {
 		return nil, ErrNilDB
 	}
 	ids := make([]string, 0, len(keys))
@@ -62,31 +50,11 @@ func NewWithDeletedIdentityHMACKeys(database any, keys map[string][]byte) (*Stor
 	for _, id := range ids {
 		configured = append(configured, identityHMACKey{id: id, material: append([]byte(nil), keys[id]...)})
 	}
-	return &Store{db: db, pool: pool, deletedIdentityHMACKeys: configured}, nil
-}
-
-func Open(ctx context.Context, dsn string) (*Store, error) {
-	db, err := sql.Open("pgx", dsn)
-	if err != nil {
-		return nil, fmt.Errorf("auth cockroach: open database: %w", err)
-	}
-	if err := db.PingContext(ctx); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("auth cockroach: ping database: %w", err)
-	}
-	return &Store{db: db}, nil
+	return &Store{pool: pool, deletedIdentityHMACKeys: configured}, nil
 }
 
 func (store *Store) Close() error {
-	if store == nil {
-		return nil
-	}
-	if store.pool != nil {
-		store.pool.Close()
-	}
-	if store.db != nil {
-		return store.db.Close()
-	}
+	// The pool is shared with other adapters and owned by the caller.
 	return nil
 }
 

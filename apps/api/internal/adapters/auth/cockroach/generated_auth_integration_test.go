@@ -100,6 +100,30 @@ func TestCockroachSessionAuthenticationDoesNotStartPendingAuditTransaction(t *te
 	}
 }
 
+func TestStoreCloseDoesNotCloseCallerOwnedPool(t *testing.T) {
+	dsn := os.Getenv("JANDIBAT_TEST_API_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("set JANDIBAT_TEST_API_DATABASE_URL")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	store, err := New(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.Ping(ctx); err != nil {
+		t.Fatalf("caller-owned pool was closed by store: %v", err)
+	}
+}
+
 func TestGeneratedSessionsEnforceUserAndRevocationBoundaries(t *testing.T) {
 	adminDSN := os.Getenv("JANDIBAT_TEST_DATABASE_URL")
 	apiDSN := os.Getenv("JANDIBAT_TEST_API_DATABASE_URL")

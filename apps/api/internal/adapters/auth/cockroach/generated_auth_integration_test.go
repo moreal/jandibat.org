@@ -99,6 +99,125 @@ func TestCockroachSessionAuthenticationDoesNotStartPendingAuditTransaction(t *te
 	}
 }
 
+func TestGeneratedSessionsEnforceUserAndRevocationBoundaries(t *testing.T) {
+	adminDSN := os.Getenv("JANDIBAT_TEST_DATABASE_URL")
+	apiDSN := os.Getenv("JANDIBAT_TEST_API_DATABASE_URL")
+	if adminDSN == "" || apiDSN == "" {
+		t.Skip("set JANDIBAT_TEST_DATABASE_URL and JANDIBAT_TEST_API_DATABASE_URL")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	admin, err := pgxpool.New(ctx, adminDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, err := pgxpool.New(ctx, apiDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pool.Close(); admin.Close() })
+	store, err := New(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	suffix := uuid.NewString()
+	activeUser := "session-active-" + suffix
+	disabledUser := "session-disabled-" + suffix
+	for _, user := range []struct{ id, status string }{{activeUser, "active"}, {disabledUser, "disabled"}} {
+		if _, err := admin.Exec(ctx, `INSERT INTO users (id,primary_email,status) VALUES ($1,$2,$3)`, user.id, user.id+"@example.invalid", user.status); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = admin.Exec(context.Background(), `DELETE FROM users WHERE id IN ($1,$2)`, activeUser, disabledUser)
+	})
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	newSession := func(userID, label string, created, expires time.Time) coreauth.Session {
+		return coreauth.Session{
+			ID: uuid.NewString(), UserID: userID,
+			TokenHash: coreauth.Digest(sha256.Sum256([]byte(label + suffix))),
+			CreatedAt: created, ExpiresAt: expires,
+		}
+	}
+	blocked := newSession(disabledUser, "blocked", now, now.Add(time.Hour))
+	if err := store.SaveSession(ctx, blocked); !errors.Is(err, coreauth.ErrUserDisabled) {
+		t.Fatalf("SaveSession(disabled user) = %v, want ErrUserDisabled", err)
+	}
+	keep := newSession(activeUser, "keep", now, now.Add(time.Hour))
+	keep.IPAddress = "203.0.113.7"
+	keep.UserAgent = "session-boundary-test"
+	other := newSession(activeUser, "other", now.Add(time.Second), now.Add(time.Hour))
+	expired := newSession(activeUser, "expired", now.Add(-2*time.Hour), now.Add(-time.Hour))
+	for _, session := range []coreauth.Session{keep, other, expired} {
+		if err := store.SaveSession(ctx, session); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stored, err := store.GetSession(ctx, keep.TokenHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.ID != keep.ID || stored.UserID != activeUser || stored.TokenHash != keep.TokenHash ||
+		!stored.CreatedAt.Equal(keep.CreatedAt) || !stored.ExpiresAt.Equal(keep.ExpiresAt) ||
+		stored.RevokedAt != nil || stored.LastSeenAt != nil ||
+		stored.IPAddress != "203.0.113.7/32" || stored.UserAgent != keep.UserAgent {
+		t.Fatalf("GetSession did not preserve stored session fields: %+v", stored)
+	}
+	if _, err := admin.Exec(ctx, `UPDATE users SET status='disabled' WHERE id=$1`, activeUser); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UseSession(ctx, keep.TokenHash, now); !errors.Is(err, coreauth.ErrConflict) {
+		t.Fatalf("UseSession(disabled user) = %v, want ErrConflict", err)
+	}
+	if _, err := admin.Exec(ctx, `UPDATE users SET status='active' WHERE id=$1`, activeUser); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UseSession(ctx, expired.TokenHash, now); !errors.Is(err, coreauth.ErrExpired) {
+		t.Fatalf("UseSession(expired) = %v, want ErrExpired", err)
+	}
+	missing := coreauth.Digest(sha256.Sum256([]byte("missing" + suffix)))
+	if _, err := store.GetSession(ctx, missing); !errors.Is(err, coreauth.ErrNotFound) {
+		t.Fatalf("GetSession(missing) = %v, want ErrNotFound", err)
+	}
+	if err := store.RevokeSession(ctx, missing, now); !errors.Is(err, coreauth.ErrNotFound) {
+		t.Fatalf("RevokeSession(missing) = %v, want ErrNotFound", err)
+	}
+	if err := store.RevokeOtherSessions(ctx, activeUser, missing, now); !errors.Is(err, coreauth.ErrNotFound) {
+		t.Fatalf("RevokeOtherSessions(missing exception) = %v, want ErrNotFound", err)
+	}
+	if err := store.RevokeOtherSessions(ctx, activeUser, keep.TokenHash, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UseSession(ctx, keep.TokenHash, now); err != nil {
+		t.Fatalf("UseSession(kept) = %v", err)
+	}
+	if _, err := store.UseSession(ctx, other.TokenHash, now); !errors.Is(err, coreauth.ErrConsumed) {
+		t.Fatalf("UseSession(other) = %v, want ErrConsumed", err)
+	}
+	if err := store.RevokeSessionByID(ctx, disabledUser, keep.ID, now); !errors.Is(err, coreauth.ErrNotFound) {
+		t.Fatalf("RevokeSessionByID(wrong user) = %v, want ErrNotFound", err)
+	}
+	if err := store.RevokeSessionByID(ctx, activeUser, keep.ID, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RevokeSessionByID(ctx, activeUser, keep.ID, now.Add(time.Second)); err != nil {
+		t.Fatalf("RevokeSessionByID(repeated) = %v", err)
+	}
+	if err := store.RevokeSession(ctx, keep.TokenHash, now.Add(2*time.Second)); err != nil {
+		t.Fatalf("RevokeSession(already revoked) = %v", err)
+	}
+	stored, err = store.GetSession(ctx, keep.TokenHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.RevokedAt == nil || !stored.RevokedAt.Equal(now) {
+		t.Fatalf("repeated revocation changed first timestamp: revoked=%v", stored.RevokedAt)
+	}
+	if _, err := store.UseSession(ctx, keep.TokenHash, now); !errors.Is(err, coreauth.ErrConsumed) {
+		t.Fatalf("UseSession(revoked by ID) = %v, want ErrConsumed", err)
+	}
+}
+
 func TestGeneratedAuthRepositoryVerticalSlice(t *testing.T) {
 	dsn := os.Getenv("JANDIBAT_TEST_DATABASE_URL")
 	if dsn == "" {

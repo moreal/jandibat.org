@@ -15,7 +15,6 @@ import (
 	generated "github.com/moreal/jandibat.org/apps/api/internal/adapters/auth/cockroach/generated"
 	"github.com/moreal/jandibat.org/apps/api/internal/adapters/internal/fakedb"
 	coreauth "github.com/moreal/jandibat.org/apps/api/internal/auth"
-	appdb "github.com/moreal/jandibat.org/apps/api/internal/database"
 	"github.com/moreal/jandibat.org/apps/api/internal/identity"
 )
 
@@ -23,6 +22,44 @@ func TestNewRejectsNilDatabase(t *testing.T) {
 	store, err := New(nil)
 	if !errors.Is(err, ErrNilDB) || store != nil {
 		t.Fatalf("New(nil) = (%v, %v), want (nil, ErrNilDB)", store, err)
+	}
+}
+
+func TestSessionOperationsRequireGeneratedPGXStore(t *testing.T) {
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	digest := sha256.Sum256([]byte("session pgx boundary"))
+	script := fakedb.New()
+	db := script.Open()
+	t.Cleanup(func() { _ = db.Close() })
+	store, err := New(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checks := []struct {
+		name string
+		run  func() error
+	}{
+		{"save", func() error {
+			return store.SaveSession(context.Background(), coreauth.Session{ID: "cf0e620a-9568-4771-a0c9-54d8833f0950", UserID: "user-1", TokenHash: digest, CreatedAt: now, ExpiresAt: now.Add(time.Hour)})
+		}},
+		{"use", func() error { _, err := store.UseSession(context.Background(), digest, now); return err }},
+		{"get", func() error { _, err := store.GetSession(context.Background(), digest); return err }},
+		{"list", func() error { _, err := store.ListSessionsByUser(context.Background(), "user-1"); return err }},
+		{"revoke", func() error { return store.RevokeSession(context.Background(), digest, now) }},
+		{"revoke others", func() error { return store.RevokeOtherSessions(context.Background(), "user-1", digest, now) }},
+		{"revoke by ID", func() error {
+			return store.RevokeSessionByID(context.Background(), "user-1", "cf0e620a-9568-4771-a0c9-54d8833f0950", now)
+		}},
+	}
+	for _, check := range checks {
+		t.Run(check.name, func(t *testing.T) {
+			if err := check.run(); !errors.Is(err, ErrNilDB) {
+				t.Fatalf("SQL-only session operation error = %v, want ErrNilDB", err)
+			}
+		})
+	}
+	if calls := script.Calls(); len(calls) != 0 {
+		t.Fatalf("SQL-only session operations made legacy queries: %#v", calls)
 	}
 }
 
@@ -225,100 +262,6 @@ func TestConsumeMagicLinkPurposeMismatchIsNotClaimed(t *testing.T) {
 		!strings.Contains(calls[1].Query, "purpose = $2") ||
 		!strings.Contains(calls[2].Query, "purpose = $2") {
 		t.Fatalf("purpose-bound consume calls = %#v", calls)
-	}
-}
-
-func TestUseSessionReturnsClaimedSession(t *testing.T) {
-	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
-	digest := sha256.Sum256([]byte("session"))
-	script := fakedb.New(fakedb.Step{
-		Operation: fakedb.Query,
-		Columns:   []string{"id", "user", "hash", "created", "expires", "revoked", "seen", "ip", "agent"},
-		Rows: [][]driver.Value{{
-			"cf0e620a-9568-4771-a0c9-54d8833f0950", "user-1", digest[:], now.Add(-time.Hour),
-			now.Add(time.Hour), nil, now, "127.0.0.1", "browser",
-		}},
-	})
-	db := script.Open()
-	t.Cleanup(func() { _ = db.Close() })
-	store, _ := New(db)
-
-	session, err := store.UseSession(context.Background(), digest, now)
-	if err != nil {
-		t.Fatalf("UseSession() error = %v", err)
-	}
-	if session.LastSeenAt == nil || !session.LastSeenAt.Equal(now) || session.IPAddress != "127.0.0.1" {
-		t.Fatalf("UseSession() = %#v", session)
-	}
-	if query := script.Calls()[0].Query; !strings.Contains(query, "revoked_at IS NULL AND expires_at > $2") ||
-		!strings.Contains(query, "users.status = 'active'") {
-		t.Fatalf("session claim query = %s", query)
-	}
-}
-
-func TestSessionAuthenticationJoinsOnlyAnAlreadyActiveLazyTransaction(t *testing.T) {
-	now := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
-	digest := sha256.Sum256([]byte("session boundary"))
-	row := fakedb.Step{
-		Operation: fakedb.Query,
-		Columns:   []string{"id", "user", "hash", "created", "expires", "revoked", "seen", "ip", "agent"},
-		Rows: [][]driver.Value{{
-			"cf0e620a-9568-4771-a0c9-54d8833f0950", "user-1", digest[:], now.Add(-time.Hour),
-			now.Add(time.Hour), nil, now, "", "",
-		}},
-	}
-	t.Run("inactive does not begin", func(t *testing.T) {
-		script := fakedb.New(row)
-		db := script.Open()
-		t.Cleanup(func() { _ = db.Close() })
-		store, _ := New(db)
-		ctx, lazy := appdb.WithLazyTransaction(context.Background(), db)
-		if _, err := store.UseSession(ctx, digest, now); err != nil {
-			t.Fatal(err)
-		}
-		if _, active := lazy.Transaction(); active || len(script.Calls()) != 1 || script.Calls()[0].Operation != fakedb.Query {
-			t.Fatalf("inactive lazy transaction calls=%#v active=%t", script.Calls(), active)
-		}
-	})
-	t.Run("active is reused", func(t *testing.T) {
-		script := fakedb.New(fakedb.Step{Operation: fakedb.Begin}, row, fakedb.Step{Operation: fakedb.Rollback})
-		db := script.Open()
-		t.Cleanup(func() { _ = db.Close() })
-		store, _ := New(db)
-		ctx, lazy := appdb.WithLazyTransaction(context.Background(), db)
-		if _, err := appdb.MutationExecutor(ctx, db); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := store.UseSession(ctx, digest, now); err != nil {
-			t.Fatal(err)
-		}
-		if err := lazy.Rollback(); err != nil {
-			t.Fatal(err)
-		}
-		calls := script.Calls()
-		if len(calls) != 3 || calls[0].Operation != fakedb.Begin || calls[1].Operation != fakedb.Query || calls[2].Operation != fakedb.Rollback {
-			t.Fatalf("active lazy transaction calls=%#v", calls)
-		}
-	})
-}
-
-func TestSaveSessionRequiresActiveUserInInsertStatement(t *testing.T) {
-	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
-	digest := sha256.Sum256([]byte("session"))
-	script := fakedb.New(fakedb.Step{Operation: fakedb.Exec, Affected: 0})
-	db := script.Open()
-	t.Cleanup(func() { _ = db.Close() })
-	store, _ := New(db)
-
-	err := store.SaveSession(context.Background(), coreauth.Session{
-		ID: "cf0e620a-9568-4771-a0c9-54d8833f0950", UserID: "user-1", TokenHash: digest,
-		CreatedAt: now, ExpiresAt: now.Add(time.Hour),
-	})
-	if !errors.Is(err, coreauth.ErrUserDisabled) {
-		t.Fatalf("SaveSession() error = %v, want ErrUserDisabled", err)
-	}
-	if query := script.Calls()[0].Query; !strings.Contains(query, "FROM users") || !strings.Contains(query, "status = 'active'") {
-		t.Fatalf("session insert query = %s", query)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	generated "github.com/moreal/jandibat.org/apps/api/internal/adapters/auth/cockroach/generated"
 	coreauth "github.com/moreal/jandibat.org/apps/api/internal/auth"
 	appdb "github.com/moreal/jandibat.org/apps/api/internal/database"
 	"github.com/moreal/jandibat.org/apps/api/internal/identity"
@@ -16,7 +17,23 @@ import (
 const userColumns = `id, primary_email, status, email_verified_at, created_at, updated_at`
 
 func (store *Store) GetUserByID(ctx context.Context, id string) (coreauth.User, error) {
+	if store.pool != nil {
+		row, err := generated.GetUserById(ctx, appdb.PGXExecutorFor(ctx, store.pool), id)
+		if err != nil {
+			return coreauth.User{}, persistenceError(err)
+		}
+		return userFromGenerated(row)
+	}
 	return scanUser(appdb.ExecutorFor(ctx, store.db).QueryRowContext(ctx, `SELECT `+userColumns+` FROM users WHERE id = $1`, id))
+}
+
+func userFromGenerated(row generated.GetUserByIdRow) (coreauth.User, error) {
+	user := coreauth.User{ID: row.Id, PrimaryEmail: row.PrimaryEmail, Status: coreauth.UserStatus(row.Status), CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
+	if row.EmailVerifiedAt != nil {
+		verified := *row.EmailVerifiedAt
+		user.EmailVerifiedAt = &verified
+	}
+	return user, nil
 }
 
 func (store *Store) GetOrCreateUserByEmail(ctx context.Context, email, suggestedID string, now time.Time) (coreauth.User, error) {

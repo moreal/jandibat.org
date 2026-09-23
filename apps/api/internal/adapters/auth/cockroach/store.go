@@ -9,6 +9,7 @@ import (
 	"sort"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	coreauth "github.com/moreal/jandibat.org/apps/api/internal/auth"
 	appdb "github.com/moreal/jandibat.org/apps/api/internal/database"
@@ -16,9 +17,10 @@ import (
 
 var ErrNilDB = errors.New("auth cockroach: database is required")
 
-// Store implements auth.Repository using database/sql. The caller owns db.
+// Store implements auth.Repository. The caller owns configured handles.
 type Store struct {
 	db                      *sql.DB
+	pool                    *pgxpool.Pool
 	deletedIdentityHMACKeys []identityHMACKey
 }
 
@@ -37,16 +39,24 @@ type identityHMACKey struct {
 
 var _ coreauth.Repository = (*Store)(nil)
 
-func New(db *sql.DB) (*Store, error) {
-	return NewWithDeletedIdentityHMACKeys(db, nil)
+func New(database any) (*Store, error) {
+	return NewWithDeletedIdentityHMACKeys(database, nil)
 }
 
 // NewWithDeletedIdentityHMACKeys configures every retained read key. During
 // rotation, old keys must remain here until every tombstone written under them
 // has expired. New tombstones are written by maintenance with only its active
 // key; the auth boundary intentionally has no active/write distinction.
-func NewWithDeletedIdentityHMACKeys(db *sql.DB, keys map[string][]byte) (*Store, error) {
-	if db == nil {
+func NewWithDeletedIdentityHMACKeys(database any, keys map[string][]byte) (*Store, error) {
+	var db *sql.DB
+	var pool *pgxpool.Pool
+	switch handle := database.(type) {
+	case *sql.DB:
+		db = handle
+	case *pgxpool.Pool:
+		pool = handle
+	}
+	if db == nil && pool == nil {
 		return nil, ErrNilDB
 	}
 	ids := make([]string, 0, len(keys))
@@ -61,7 +71,7 @@ func NewWithDeletedIdentityHMACKeys(db *sql.DB, keys map[string][]byte) (*Store,
 	for _, id := range ids {
 		configured = append(configured, identityHMACKey{id: id, material: append([]byte(nil), keys[id]...)})
 	}
-	return &Store{db: db, deletedIdentityHMACKeys: configured}, nil
+	return &Store{db: db, pool: pool, deletedIdentityHMACKeys: configured}, nil
 }
 
 func Open(ctx context.Context, dsn string) (*Store, error) {
@@ -77,10 +87,16 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 }
 
 func (store *Store) Close() error {
-	if store == nil || store.db == nil {
+	if store == nil {
 		return nil
 	}
-	return store.db.Close()
+	if store.pool != nil {
+		store.pool.Close()
+	}
+	if store.db != nil {
+		return store.db.Close()
+	}
+	return nil
 }
 
 type scanner interface {

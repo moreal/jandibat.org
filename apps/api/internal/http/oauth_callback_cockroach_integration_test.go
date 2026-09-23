@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	integrationstore "github.com/moreal/jandibat.org/apps/api/internal/adapters/integrations/cockroach"
 	adapteroauth "github.com/moreal/jandibat.org/apps/api/internal/adapters/integrations/oauth"
@@ -109,7 +110,12 @@ func TestCockroachOAuthCallbackOutboxFailureConsumesStateRollsBackConnectionAndR
 		_, _ = admin.ExecContext(cleanup, `DELETE FROM users WHERE id=$1`, userID)
 	})
 
-	stateStore, err := oauthstore.New(apiDB)
+	statePool, err := pgxpool.New(ctx, apiDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(statePool.Close)
+	stateStore, err := oauthstore.New(statePool)
 	if err != nil {
 		t.Fatal(err)
 	}

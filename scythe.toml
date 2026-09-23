@@ -40,3 +40,13 @@ queries = ["apps/api/internal/adapters/storage/cockroach/queries/activity.sql"]
 [[sql.gen]]
 backend = "go-pgx"
 output = "apps/api/internal/adapters/storage/cockroach/generated"
+
+[[sql]]
+name = "oauth-state"
+engine = "cockroachdb"
+schema = ["db/migrations/0001_baseline.sql"]
+queries = ["apps/api/internal/adapters/integrations/oauth/cockroach/queries/state.sql"]
+
+[[sql.gen]]
+backend = "go-pgx"
+output = "apps/api/internal/adapters/integrations/oauth/cockroach/generated"

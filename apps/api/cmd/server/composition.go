@@ -258,7 +258,7 @@ func buildApplication(ctx context.Context, settings config.Config, logger *zap.L
 	}
 	oauthState := oauth.StateStore(oauth.NewMemoryStateStore(nil))
 	if stores.db != nil {
-		oauthState, err = oauthstore.New(stores.db)
+		oauthState, err = oauthstore.New(stores.pool)
 		if err != nil {
 			return nil, fmt.Errorf("runtime: construct OAuth state store: %w", err)
 		}

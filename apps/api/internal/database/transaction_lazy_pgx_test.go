@@ -92,6 +92,25 @@ func TestLazyPGXStartsOnMutationButNotPreflightRead(t *testing.T) {
 	}
 }
 
+func TestLazyPGXJoinsCompoundWritesUntilOwnerCommits(t *testing.T) {
+	pool := &lazyPGXTestPool{tx: &lazyPGXTestTx{}}
+	ctx, lazy := WithLazyPGXTransaction(context.Background(), pool)
+	for _, query := range []string{
+		"UPDATE first_state SET value = 1",
+		"INSERT INTO second_state VALUES (1)",
+	} {
+		if _, err := PGXExecutorFor(ctx, pool).Exec(ctx, query); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if pool.begins != 1 || pool.tx.writes != 2 || pool.tx.commits != 0 {
+		t.Fatalf("compound writes escaped shared transaction: begins=%d writes=%d commits=%d", pool.begins, pool.tx.writes, pool.tx.commits)
+	}
+	if err := lazy.Commit(); err != nil || pool.tx.commits != 1 {
+		t.Fatalf("owner commit = %v, commits=%d", err, pool.tx.commits)
+	}
+}
+
 func TestInTxJoinsLazyPGXWithoutCommittingIt(t *testing.T) {
 	pool := &lazyPGXTestPool{tx: &lazyPGXTestTx{}}
 	ctx, lazy := WithLazyPGXTransaction(context.Background(), pool)
@@ -146,5 +165,17 @@ func TestLazyPGXRejectsDifferentPoolInsteadOfEscapingAudit(t *testing.T) {
 	}
 	if second.reads != 0 || second.begins != 0 || lazy.Active() {
 		t.Fatalf("other pool escaped audit: reads=%d begins=%d active=%t", second.reads, second.begins, lazy.Active())
+	}
+}
+
+func TestLazyPGXRejectsMutationThroughDifferentPool(t *testing.T) {
+	first := &lazyPGXTestPool{tx: &lazyPGXTestTx{}}
+	second := &lazyPGXTestPool{tx: &lazyPGXTestTx{}}
+	ctx, lazy := WithLazyPGXTransaction(context.Background(), first)
+	if _, err := PGXExecutorFor(ctx, second).Exec(ctx, "UPDATE users SET status='active'"); !errors.Is(err, ErrTransactionPoolMismatch) {
+		t.Fatalf("other-pool mutation error = %v", err)
+	}
+	if first.begins != 0 || second.begins != 0 || first.tx.writes != 0 || second.tx.writes != 0 || lazy.Active() {
+		t.Fatalf("other-pool mutation escaped audit: first begins=%d second begins=%d first writes=%d second writes=%d active=%t", first.begins, second.begins, first.tx.writes, second.tx.writes, lazy.Active())
 	}
 }

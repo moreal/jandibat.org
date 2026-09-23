@@ -14,6 +14,13 @@ type Node interface {
 	GetID() string
 }
 
+type CustomProvider struct {
+	ID string `json:"id"`
+}
+
+func (CustomProvider) IsNode()            {}
+func (this CustomProvider) GetID() string { return this.ID }
+
 // Mutation root; domain mutations are added after their authorization tests.
 type Mutation struct {
 }
@@ -25,6 +32,34 @@ type MutationError struct {
 	Field   *string `json:"field,omitempty"`
 }
 
+type ProviderConnection struct {
+	ID string `json:"id"`
+}
+
+func (ProviderConnection) IsNode()            {}
+func (this ProviderConnection) GetID() string { return this.ID }
+
 // Root of the domain API. Domain fields are added with resolver authorization.
 type Query struct {
 }
+
+type Session struct {
+	ID string `json:"id"`
+}
+
+func (Session) IsNode()            {}
+func (this Session) GetID() string { return this.ID }
+
+type Subject struct {
+	ID string `json:"id"`
+}
+
+func (Subject) IsNode()            {}
+func (this Subject) GetID() string { return this.ID }
+
+type SyncJob struct {
+	ID string `json:"id"`
+}
+
+func (SyncJob) IsNode()            {}
+func (this SyncJob) GetID() string { return this.ID }

@@ -6,6 +6,7 @@ import (
 	"context"
 
 	"github.com/moreal/jandibat.org/apps/api/internal/graphql/generated"
+	"github.com/moreal/jandibat.org/apps/api/internal/graphql/model"
 )
 
 type Resolver struct{}
@@ -18,6 +19,11 @@ func (r *mutationResolver) Contract(ctx context.Context) (bool, error) {
 // Contract is the resolver for the _contract field.
 func (r *queryResolver) Contract(ctx context.Context) (bool, error) {
 	return true, nil
+}
+
+// Node is the resolver for the node field.
+func (r *queryResolver) Node(ctx context.Context, id string) (model.Node, error) {
+	return r.resolveNode(ctx, id)
 }
 
 // Mutation returns generated.MutationResolver implementation.

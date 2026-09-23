@@ -72,7 +72,7 @@ func TestCockroachAPIRolePasskeyFailureConsumesCeremonyWithDeniedOutbox(t *testi
 	if err := authRepository.SaveCeremony(ctx, ceremony); err != nil {
 		t.Fatalf("save ceremony: %v", err)
 	}
-	operationStore, err := NewWithPGXPool(api, pool)
+	operationStore, err := New(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestCockroachAPIRoleStateAndMutationAuditCommitOrRollbackTogether(t *testin
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	operationStore, err := NewWithPGXPool(api, pool)
+	operationStore, err := New(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,7 +226,7 @@ func TestCockroachMutationAuditOutboxWorkerRoleDeliveryAndFence(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	store, err := NewWithPGXPool(worker, pool)
+	store, err := New(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -338,7 +338,7 @@ func TestCockroachMutationAuditOutboxLeaseReclaimFencesPreviousWorker(t *testing
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	store, err := NewWithPGXPool(worker, pool)
+	store, err := New(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -424,7 +424,7 @@ func TestCockroachMaintenanceCheckpointJoinsPGXTransaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { pool.Close(); _ = maintenance.Close(); _ = admin.Close() })
-	store, err := NewWithPGXPool(maintenance, pool)
+	store, err := New(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -511,7 +511,7 @@ func TestCockroachMaintenanceAuditSinkJoinsPGXTransaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { pool.Close(); _ = maintenance.Close(); _ = admin.Close() })
-	store, err := NewWithPGXPool(maintenance, pool)
+	store, err := New(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -578,7 +578,7 @@ func TestCockroachMaintenanceDeletionRequestJoinsPGXTransaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { pool.Close(); _ = maintenance.Close(); _ = admin.Close() })
-	store, err := NewWithPGXPool(maintenance, pool)
+	store, err := New(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -765,7 +765,7 @@ func TestCockroachDeletionResidualsSeeUncommittedPGXState(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { pool.Close(); _ = db.Close() })
-	store, err := NewWithPGXPool(db, pool)
+	store, err := New(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -814,7 +814,7 @@ func TestCockroachMaintenanceBatchClaimPromotesInboxAtomically(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { pool.Close(); _ = maintenance.Close(); _ = admin.Close() })
-	store, err := NewWithPGXPool(maintenance, pool)
+	store, err := New(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -892,7 +892,7 @@ func TestCockroachMaintenanceAccountCredentialRevocationIsAtomic(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { pool.Close(); _ = maintenance.Close(); _ = admin.Close() })
-	store, err := NewWithPGXPool(maintenance, pool)
+	store, err := New(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1099,7 +1099,7 @@ func TestCockroachReencryptionListSeesUncommittedPGXSecret(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { pool.Close(); _ = db.Close() })
-	store, err := NewWithPGXPool(db, pool)
+	store, err := New(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1168,7 +1168,7 @@ func TestCockroachOperationsSchemaReadiness(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	store, err := NewWithPGXPool(db, pool)
+	store, err := New(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1195,7 +1195,7 @@ func TestCockroachDeletionRevokesEmailOnlyMagicLinksAndPreservesValidOAuthRevoca
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	store, err := NewWithPGXPool(db, pool)
+	store, err := New(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1344,7 +1344,7 @@ func TestCockroachAccountDeletionFailsClosedWithoutIdentityHMAC(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	store, err := NewWithPGXPool(db, pool)
+	store, err := New(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1403,7 +1403,7 @@ func TestCockroachDeletionClaimLeasePreventsDuplicateAndReclaimsAfterCrash(t *te
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	store, err := NewWithPGXPool(db, pool)
+	store, err := New(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1509,7 +1509,7 @@ func TestCockroachDeletionInboxPromotionAndLegalHoldResume(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	store, err := NewWithPGXPool(db, pool)
+	store, err := New(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1619,7 +1619,7 @@ func TestCockroachDeletionInboxReadPreflightAndWriteUseLazyPGXAuditBoundary(t *t
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	store, err := NewWithPGXPool(admin, pool)
+	store, err := New(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1698,7 +1698,7 @@ func TestCockroachReencryptionDryRunAndExecuteReportSourceKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	store, err := NewWithPGXPool(db, pool)
+	store, err := New(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1781,7 +1781,7 @@ func TestCockroachRetentionDryRunAndExecuteRespectLegalHoldBoundary(t *testing.T
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { pool.Close(); _ = maintenance.Close(); _ = db.Close() })
-	store, err := NewWithPGXPool(maintenance, pool)
+	store, err := New(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1856,7 +1856,7 @@ func TestCockroachMagicLinkMailOutboxRetentionIsTerminalBoundedAndHeld(t *testin
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	store, err := NewWithPGXPool(maintenanceDB, pool)
+	store, err := New(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1969,7 +1969,7 @@ func TestCockroachMutationAuditOutboxRetentionUsesMaintenanceRoleAndLegalHoldBou
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	store, err := NewWithPGXPool(maintenanceDB, pool)
+	store, err := New(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2084,7 +2084,7 @@ func TestCockroachOrphanedPrivateEnvironmentRetentionUsesMaintenanceRoleAndAllRe
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	store, err := NewWithPGXPool(maintenanceDB, pool)
+	store, err := New(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2297,7 +2297,7 @@ func TestCockroachOperationsSchemaChecksJoinPGXTransactionWithoutSQLHandle(t *te
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	store, err := NewWithPGXPool(nil, pool)
+	store, err := New(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2345,7 +2345,7 @@ func TestCockroachRetentionPurgeJoinsPGXTransaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { pool.Close(); _ = maintenance.Close(); _ = admin.Close() })
-	store, err := NewWithPGXPool(maintenance, pool)
+	store, err := New(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2401,7 +2401,7 @@ func TestCockroachCompletedDeletionRetentionWaitsForBackupExpiryAndLegalHold(t *
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { pool.Close(); _ = maintenance.Close(); _ = db.Close() })
-	store, err := NewWithPGXPool(maintenance, pool)
+	store, err := New(pool)
 	if err != nil {
 		t.Fatal(err)
 	}

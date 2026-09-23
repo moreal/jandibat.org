@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
-	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -140,16 +139,7 @@ var (
 	_ operations.DependencyProbe            = (*Store)(nil)
 )
 
-func New(db *sql.DB, extraSensitiveAuditKeys ...string) (*Store, error) {
-	if db == nil {
-		return nil, ErrNilDB
-	}
-	return &Store{redactor: operations.NewRedactor(extraSensitiveAuditKeys...)}, nil
-}
-
-// NewWithPGXPool uses only pool; the SQL handle argument remains for callers
-// that have not yet switched to a PGX-only constructor signature.
-func NewWithPGXPool(_ *sql.DB, pool *pgxpool.Pool, extraSensitiveAuditKeys ...string) (*Store, error) {
+func New(pool *pgxpool.Pool, extraSensitiveAuditKeys ...string) (*Store, error) {
 	if pool == nil {
 		return nil, ErrNilDB
 	}

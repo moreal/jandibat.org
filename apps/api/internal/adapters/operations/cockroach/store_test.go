@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
-	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -12,40 +11,35 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/moreal/jandibat.org/apps/api/internal/adapters/internal/fakedb"
 	"github.com/moreal/jandibat.org/apps/api/internal/operations"
 )
 
-func TestNewRejectsNilDB(t *testing.T) {
-	if store, err := New(nil); store != nil || !errors.Is(err, ErrNilDB) {
-		t.Fatalf("New(nil) = %#v, %v", store, err)
-	}
-}
-
-func TestNewWithPGXPoolAcceptsPoolWithoutSQLHandle(t *testing.T) {
+func TestNewAcceptsPGXPoolAndConfiguresRedaction(t *testing.T) {
 	pool := new(pgxpool.Pool)
-	store, err := NewWithPGXPool(nil, pool, "private_field")
+	store, err := New(pool, "private_field")
 	if err != nil {
-		t.Fatalf("NewWithPGXPool(nil, pool) error = %v", err)
+		t.Fatalf("New(pool) error = %v", err)
 	}
 	if store == nil || store.pool != pool {
-		t.Fatalf("NewWithPGXPool(nil, pool) = %#v; want store using supplied pool", store)
+		t.Fatalf("New(pool) = %#v; want store using supplied pool", store)
+	}
+	metadata, err := store.redactor.RedactMetadata(map[string]any{"private_field": "secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata["private_field"] != operations.RedactedValue {
+		t.Fatalf("extra sensitive audit field = %#v; want redacted", metadata)
 	}
 }
 
-func TestNewWithPGXPoolRejectsNilPool(t *testing.T) {
-	if store, err := NewWithPGXPool(nil, nil); store != nil || !errors.Is(err, ErrNilDB) {
-		t.Fatalf("NewWithPGXPool(nil, nil) = %#v, %v; want ErrNilDB", store, err)
+func TestNewRejectsNilPool(t *testing.T) {
+	if store, err := New(nil); store != nil || !errors.Is(err, ErrNilDB) {
+		t.Fatalf("New(nil) = %#v, %v; want ErrNilDB", store, err)
 	}
 }
 
 func TestDeletionMethodsRequirePGXPool(t *testing.T) {
-	db := fakedb.New().Open()
-	t.Cleanup(func() { _ = db.Close() })
-	store, err := New(db)
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := &Store{}
 	now := time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC)
 	request := operations.DeletionRequest{
 		RequestID: "request-1", TargetType: operations.DeletionTargetSubject,
@@ -328,16 +322,7 @@ func TestAuditRetentionMapsEventSubjectAndAccountLegalHolds(t *testing.T) {
 
 func TestCheckpointRequiresPGXPool(t *testing.T) {
 	now := time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC)
-	script := fakedb.New(
-		fakedb.Step{Operation: fakedb.Exec, Affected: 1},
-		fakedb.Step{Operation: fakedb.Query, Columns: []string{"operation", "scope", "payload", "updated_at"}, Rows: [][]driver.Value{{
-			string(operations.MaintenanceRetention), "release-1", []byte(`{"rule_index":1}`), now,
-		}}},
-		fakedb.Step{Operation: fakedb.Exec, Affected: 1},
-	)
-	db := script.Open()
-	defer db.Close()
-	store, _ := New(db)
+	store := &Store{}
 	checkpoint := operations.MaintenanceCheckpoint{
 		Operation: operations.MaintenanceRetention, Scope: "release-1", Payload: []byte(`{"rule_index":1}`), UpdatedAt: now,
 	}
@@ -354,10 +339,7 @@ func TestCheckpointRequiresPGXPool(t *testing.T) {
 }
 
 func TestDeletedIdentityHMACConfigurationIsVersionedAndCanonical(t *testing.T) {
-	script := fakedb.New()
-	db := script.Open()
-	defer db.Close()
-	store, _ := New(db)
+	store := &Store{}
 	if err := store.ConfigureDeletedIdentityHMAC("", make([]byte, 32)); !errors.Is(err, ErrInvalidDeletedIdentityHMAC) {
 		t.Fatalf("empty active key ID error = %v", err)
 	}

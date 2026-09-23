@@ -42,7 +42,7 @@ func TestMaintenanceReencryptionUsesPGXForEverySealedSecretKind(t *testing.T) {
 	if err := legacy.Close(); err != nil {
 		t.Fatal(err)
 	}
-	store, err := NewWithPGXPool(legacy, pool)
+	store, err := New(pool)
 	if err != nil {
 		t.Fatal(err)
 	}

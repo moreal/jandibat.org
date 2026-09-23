@@ -5,23 +5,13 @@ import (
 	"errors"
 	"strings"
 	"testing"
-
-	"github.com/moreal/jandibat.org/apps/api/internal/adapters/internal/fakedb"
 )
 
-// Readiness must not silently probe through a legacy SQL handle. A closed
-// handle makes the wrong path observable without depending on query text.
+// Readiness requires a pgx pool; an unconfigured store fails closed.
 func TestOperationsSchemaProbeRequiresPGXPool(t *testing.T) {
-	db := fakedb.New().Open()
-	store, err := New(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
+	store := &Store{}
 	if err := store.Check(context.Background()); !errors.Is(err, ErrNilDB) {
-		t.Fatalf("Check with only a closed SQL handle = %v, want ErrNilDB", err)
+		t.Fatalf("Check without a pgx pool = %v, want ErrNilDB", err)
 	}
 }
 

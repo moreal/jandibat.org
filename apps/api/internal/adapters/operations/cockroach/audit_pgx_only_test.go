@@ -6,19 +6,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/moreal/jandibat.org/apps/api/internal/adapters/internal/fakedb"
 	"github.com/moreal/jandibat.org/apps/api/internal/operations"
 )
 
-// Audit/outbox writes must not silently use the legacy database/sql handle:
-// they participate in the same pgx transaction boundary as state mutations.
+// Audit/outbox writes require the pgx transaction boundary used by state mutations.
 func TestAuditOutboxPublicMethodsRequirePGXPool(t *testing.T) {
-	db := fakedb.New().Open()
-	t.Cleanup(func() { _ = db.Close() })
-	store, err := New(db)
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := &Store{}
 	ctx := context.Background()
 	now := time.Date(2026, 9, 24, 0, 0, 0, 0, time.UTC)
 	id := "a31ca7e5-43bd-46de-ae62-8f39e11374cc"

@@ -401,6 +401,33 @@ func (s *MemoryStore) RevokeOtherSessions(ctx context.Context, userID string, ex
 	return nil
 }
 
+func (s *MemoryStore) RevokeOtherSessionsExceptID(ctx context.Context, userID, sessionID string, now time.Time) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	currentFound := false
+	for _, session := range s.sessions {
+		if session.UserID == userID && session.ID == sessionID && session.RevokedAt == nil && now.Before(session.ExpiresAt) {
+			currentFound = true
+			break
+		}
+	}
+	if !currentFound {
+		return ErrNotFound
+	}
+	for key, session := range s.sessions {
+		if session.UserID != userID || session.ID == sessionID || session.RevokedAt != nil {
+			continue
+		}
+		when := now
+		session.RevokedAt = &when
+		s.sessions[key] = session
+	}
+	return nil
+}
+
 func (s *MemoryStore) RevokeSessionByID(ctx context.Context, userID, sessionID string, now time.Time) error {
 	if err := contextError(ctx); err != nil {
 		return err

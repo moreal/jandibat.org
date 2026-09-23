@@ -304,6 +304,32 @@ func (s *Service) RevokeOtherSessions(ctx context.Context, userID, currentToken 
 	return nil
 }
 
+// RevokeOtherSessionsExceptID is for a request whose actor and current
+// session have already been verified by the authentication boundary. The
+// repository rechecks ownership and liveness atomically with revocation. The
+// liveness cutoff is captured when this call begins; a row-lock wait may
+// finish after that instant, but the request's authenticated identity is not
+// reinterpreted mid-operation.
+func (s *Service) RevokeOtherSessionsExceptID(ctx context.Context, userID, sessionID string) error {
+	if strings.TrimSpace(userID) == "" {
+		return ErrInvalidInput
+	}
+	id, err := uuid.Parse(sessionID)
+	if err != nil {
+		return ErrInvalidInput
+	}
+	if _, err := s.activeUser(ctx, userID); err != nil {
+		return err
+	}
+	if err := s.repository.RevokeOtherSessionsExceptID(ctx, userID, id.String(), s.now().UTC()); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("revoke other sessions by id: %w", err)
+	}
+	return nil
+}
+
 func (s *Service) RevokeSessionByID(ctx context.Context, userID, sessionID string) error {
 	if strings.TrimSpace(userID) == "" || strings.TrimSpace(sessionID) == "" {
 		return ErrInvalidInput

@@ -39,6 +39,9 @@ type SessionRepository interface {
 	// ordered by created_at DESC, id ASC. The extra row is a lookahead.
 	ListSessionsPage(ctx context.Context, userID string, after *SessionCursor, first int) ([]Session, error)
 	RevokeOtherSessions(ctx context.Context, userID string, exceptTokenHash Digest, now time.Time) error
+	// RevokeOtherSessionsExceptID atomically validates a live, owned current
+	// session before revoking its peers. No bearer material crosses this port.
+	RevokeOtherSessionsExceptID(ctx context.Context, userID, sessionID string, now time.Time) error
 	RevokeSessionByID(ctx context.Context, userID, sessionID string, now time.Time) error
 }
 

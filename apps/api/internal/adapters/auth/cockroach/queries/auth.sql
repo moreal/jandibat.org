@@ -119,6 +119,19 @@ SELECT EXISTS (SELECT 1 FROM user_sessions WHERE user_id = $1::STRING AND sessio
 UPDATE user_sessions SET revoked_at = COALESCE(revoked_at, $3::TIMESTAMPTZ)
 WHERE user_id = $1::STRING AND session_token_hash != $2::BYTES;
 
+-- @name LockActiveOwnedSessionById
+-- @returns :opt
+SELECT id::STRING AS id FROM user_sessions
+WHERE user_id = $1::STRING AND id = $2::UUID AND revoked_at IS NULL
+  AND expires_at > $3::TIMESTAMPTZ
+  AND EXISTS (SELECT 1 FROM users WHERE users.id = user_sessions.user_id AND users.status = 'active')
+FOR UPDATE;
+
+-- @name RevokeOtherSessionsById
+-- @returns :exec
+UPDATE user_sessions SET revoked_at = COALESCE(revoked_at, $3::TIMESTAMPTZ)
+WHERE user_id = $1::STRING AND id != $2::UUID;
+
 -- @name RevokeSessionById
 -- @returns :exec_result
 UPDATE user_sessions SET revoked_at = COALESCE(revoked_at, $3::TIMESTAMPTZ)

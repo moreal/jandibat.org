@@ -204,6 +204,29 @@ func (store *Store) RevokeOtherSessions(ctx context.Context, userID string, exce
 	})
 }
 
+func (store *Store) RevokeOtherSessionsExceptID(ctx context.Context, userID, sessionID string, now time.Time) error {
+	if store.pool == nil {
+		return ErrNilDB
+	}
+	if userID == "" {
+		return coreauth.ErrInvalidInput
+	}
+	id, err := uuid.Parse(sessionID)
+	if err != nil {
+		return coreauth.ErrInvalidInput
+	}
+	return appdb.InTx(ctx, store.pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
+		current, err := generated.LockActiveOwnedSessionById(txctx, tx, userID, id, now)
+		if err != nil {
+			return persistenceError(err)
+		}
+		if current == nil {
+			return coreauth.ErrNotFound
+		}
+		return persistenceError(generated.RevokeOtherSessionsById(txctx, tx, userID, id, now))
+	})
+}
+
 func (store *Store) RevokeSessionByID(ctx context.Context, userID, sessionID string, now time.Time) error {
 	if store.pool == nil {
 		return ErrNilDB

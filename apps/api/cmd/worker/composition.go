@@ -78,7 +78,7 @@ func buildWorker(ctx context.Context, settings config.Config, logger *zap.Logger
 	if err != nil {
 		return nil, fmt.Errorf("worker: construct auth store: %w", err)
 	}
-	operationStore, err := operationsstore.New(db)
+	operationStore, err := operationsstore.NewWithPGXPool(db, database.Pool)
 	if err != nil {
 		return nil, fmt.Errorf("worker: construct operations store: %w", err)
 	}

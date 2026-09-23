@@ -190,6 +190,46 @@ func (store *Store) ClaimMutationAudits(ctx context.Context, now time.Time, leas
 	if err != nil {
 		return nil, err
 	}
+	if store.pool != nil {
+		claimID, err := uuid.Parse(claim)
+		if err != nil {
+			return nil, err
+		}
+		var result []operations.MutationAuditDelivery
+		err = appdb.InTx(ctx, store.pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
+			if err := generated.DeadExpiredMutationAudits(txctx, tx, now, int64(maxAttempts)); err != nil {
+				return err
+			}
+			if err := generated.ClaimMutationAuditBatch(txctx, tx, now, now.Add(lease), claimID, int64(maxAttempts), int64(limit)); err != nil {
+				return err
+			}
+			rows, err := generated.ListClaimedMutationAudits(txctx, tx, claimID)
+			if err != nil {
+				return err
+			}
+			result = make([]operations.MutationAuditDelivery, 0, len(rows))
+			for _, row := range rows {
+				if row.ClaimToken == nil || row.Attempts < 0 || int64(int(row.Attempts)) != row.Attempts {
+					return operations.ErrInvalidAuditOutbox
+				}
+				item := operations.MutationAuditDelivery{
+					ID: row.Id, ClaimToken: *row.ClaimToken, Attempts: int(row.Attempts),
+					Event: operations.AuditEvent{
+						ID: row.AuditEventId, RequestID: row.RequestId, OccurredAt: row.OccurredAt,
+						Actor:  operations.AuditActor{Type: row.ActorType, ID: row.ActorId},
+						Action: row.Action, Target: operations.AuditTarget{Type: row.TargetType, ID: row.TargetId},
+						Outcome: operations.AuditOutcome(row.Outcome),
+					},
+				}
+				if err := json.Unmarshal(row.Metadata, &item.Event.Metadata); err != nil {
+					return operations.ErrInvalidAuditOutbox
+				}
+				result = append(result, item)
+			}
+			return nil
+		})
+		return result, err
+	}
 	tx, err := store.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -249,6 +289,42 @@ func (store *Store) DeliverMutationAudit(ctx context.Context, id, claim string, 
 	if id == "" || claim == "" || now.IsZero() {
 		return operations.ErrInvalidAuditOutbox
 	}
+	if store.pool != nil {
+		outboxID, err := uuid.Parse(id)
+		if err != nil {
+			return operations.ErrInvalidAuditOutbox
+		}
+		claimID, err := uuid.Parse(claim)
+		if err != nil {
+			return operations.ErrInvalidAuditOutbox
+		}
+		return appdb.InTx(ctx, store.pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
+			row, err := generated.GetMutationAuditForDelivery(txctx, tx, outboxID, claimID)
+			if err != nil {
+				return err
+			}
+			if row == nil {
+				return operations.ErrInvalidAuditOutbox
+			}
+			eventID, err := uuid.Parse(row.AuditEventId)
+			if err != nil {
+				return operations.ErrInvalidAuditOutbox
+			}
+			if err := generated.InsertDeliveredMutationAudit(txctx, tx, eventID, row.OccurredAt,
+				row.ActorType, &row.ActorId, row.Action, row.TargetType, &row.TargetId,
+				row.Outcome, row.RequestId, row.Metadata); err != nil {
+				return err
+			}
+			count, err := generated.MarkMutationAuditDelivered(txctx, tx, outboxID, claimID, now)
+			if err != nil {
+				return err
+			}
+			if count != 1 {
+				return operations.ErrInvalidAuditOutbox
+			}
+			return nil
+		})
+	}
 	tx, err := store.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -295,6 +371,33 @@ WHERE id = $1::UUID AND claim_token = $2::UUID AND status = 'processing'`, id, c
 func (store *Store) RetryMutationAudit(ctx context.Context, id, claim string, now, next time.Time, maxAttempts int, reason string) (string, error) {
 	if id == "" || claim == "" || now.IsZero() || !next.After(now) || maxAttempts <= 0 || maxAttempts > 5 || reason == "" {
 		return "", operations.ErrInvalidAuditOutbox
+	}
+	if store.pool != nil {
+		outboxID, err := uuid.Parse(id)
+		if err != nil {
+			return "", operations.ErrInvalidAuditOutbox
+		}
+		claimID, err := uuid.Parse(claim)
+		if err != nil {
+			return "", operations.ErrInvalidAuditOutbox
+		}
+		var status string
+		err = appdb.InTx(ctx, store.pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
+			row, err := generated.RetryMutationAuditClaim(txctx, tx,
+				outboxID, claimID, now, next, int64(maxAttempts), reason)
+			if err != nil {
+				return err
+			}
+			if row == nil {
+				return operations.ErrInvalidAuditOutbox
+			}
+			status = row.Status
+			return nil
+		})
+		if err != nil {
+			return "", err
+		}
+		return status, nil
 	}
 	var status string
 	err := store.db.QueryRowContext(ctx, `UPDATE mutation_audit_outbox

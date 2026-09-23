@@ -7,16 +7,19 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	authstore "github.com/moreal/jandibat.org/apps/api/internal/adapters/auth/cockroach"
 	subjectstore "github.com/moreal/jandibat.org/apps/api/internal/adapters/subjects/cockroach"
 	coreauth "github.com/moreal/jandibat.org/apps/api/internal/auth"
+	appdb "github.com/moreal/jandibat.org/apps/api/internal/database"
 	"github.com/moreal/jandibat.org/apps/api/internal/integrations"
 	"github.com/moreal/jandibat.org/apps/api/internal/operations"
 	"github.com/moreal/jandibat.org/apps/api/internal/subjects"
@@ -212,7 +215,15 @@ func TestCockroachMutationAuditOutboxWorkerRoleDeliveryAndFence(t *testing.T) {
 	if err := worker.QueryRowContext(ctx, `SELECT current_user`).Scan(&currentUser); err != nil || currentUser != "jandibat_worker" {
 		t.Fatalf("worker DSN current_user=%q err=%v", currentUser, err)
 	}
-	store, _ := New(worker)
+	pool, err := pgxpool.New(ctx, workerDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	store, err := NewWithPGXPool(worker, pool)
+	if err != nil {
+		t.Fatal(err)
+	}
 	wallNow := time.Now().UTC().Truncate(time.Microsecond)
 	suffix := strings.ReplaceAll(wallNow.Format("150405.000000000"), ".", "")
 	// Keep this fixture strictly ahead of any ordinary pending work in the
@@ -232,12 +243,49 @@ id,audit_event_id,request_id,occurred_at,actor_type,actor_id,action,target_type,
 		_, _ = admin.ExecContext(context.Background(), `DELETE FROM mutation_audit_outbox WHERE id=$1`, outboxID)
 		_, _ = admin.ExecContext(context.Background(), `DELETE FROM audit_events WHERE id=$1`, eventID)
 	})
+	rollbackClaim := errors.New("rollback worker audit claim")
+	err = appdb.InTx(ctx, pool, appdb.RetryOptions{}, func(txctx context.Context, _ pgx.Tx) error {
+		jobs, err := store.ClaimMutationAudits(txctx, now.Add(time.Second), time.Minute, 1, 5)
+		if err != nil || len(jobs) != 1 || jobs[0].ID != outboxID {
+			return fmt.Errorf("transactional audit claim=%+v err=%v", jobs, err)
+		}
+		return rollbackClaim
+	})
+	if !errors.Is(err, rollbackClaim) {
+		t.Fatalf("rollback audit claim = %v", err)
+	}
+	var pendingStatus string
+	var pendingAttempts int
+	if err := admin.QueryRowContext(ctx, `SELECT status,attempts FROM mutation_audit_outbox WHERE id=$1`, outboxID).Scan(&pendingStatus, &pendingAttempts); err != nil || pendingStatus != "pending" || pendingAttempts != 0 {
+		t.Fatalf("audit claim escaped rollback = (%q, %d, %v)", pendingStatus, pendingAttempts, err)
+	}
 	claimed, err := store.ClaimMutationAudits(ctx, now.Add(time.Second), time.Minute, 1, 5)
 	if err != nil || len(claimed) != 1 || claimed[0].ID != outboxID {
 		t.Fatalf("claim=%#v err=%v", claimed, err)
 	}
 	if err := store.DeliverMutationAudit(ctx, claimed[0].ID, "00000000-0000-4000-8000-000000000000", now.Add(2*time.Second)); !errors.Is(err, operations.ErrInvalidAuditOutbox) {
 		t.Fatalf("stale claim error=%v", err)
+	}
+	rollbackDelivery := errors.New("rollback worker audit delivery")
+	err = appdb.InTx(ctx, pool, appdb.RetryOptions{}, func(txctx context.Context, _ pgx.Tx) error {
+		if err := store.DeliverMutationAudit(txctx, claimed[0].ID, claimed[0].ClaimToken, now.Add(2*time.Second)); err != nil {
+			return err
+		}
+		return rollbackDelivery
+	})
+	if !errors.Is(err, rollbackDelivery) {
+		t.Fatalf("rollback audit delivery = %v", err)
+	}
+	var processingStatus string
+	var preDeliveryAuditCount int
+	if err := admin.QueryRowContext(ctx, `SELECT status FROM mutation_audit_outbox WHERE id=$1`, outboxID).Scan(&processingStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err := admin.QueryRowContext(ctx, `SELECT count(*) FROM audit_events WHERE id=$1`, eventID).Scan(&preDeliveryAuditCount); err != nil {
+		t.Fatal(err)
+	}
+	if processingStatus != "processing" || preDeliveryAuditCount != 0 {
+		t.Fatalf("audit delivery escaped rollback: status=%s count=%d", processingStatus, preDeliveryAuditCount)
 	}
 	if err := store.DeliverMutationAudit(ctx, claimed[0].ID, claimed[0].ClaimToken, now.Add(2*time.Second)); err != nil {
 		t.Fatalf("worker-role deliver: %v", err)
@@ -279,7 +327,12 @@ func TestCockroachMutationAuditOutboxLeaseReclaimFencesPreviousWorker(t *testing
 	if err := worker.QueryRowContext(ctx, `SELECT current_user`).Scan(&currentUser); err != nil || currentUser != "jandibat_worker" {
 		t.Fatalf("worker DSN current_user=%q err=%v", currentUser, err)
 	}
-	store, err := New(worker)
+	pool, err := pgxpool.New(ctx, workerDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	store, err := NewWithPGXPool(worker, pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -312,6 +365,21 @@ id,audit_event_id,request_id,occurred_at,actor_type,actor_id,action,target_type,
 	}
 	if _, err := store.RetryMutationAudit(ctx, outboxID, first[0].ClaimToken, base.Add(4*time.Second), base.Add(5*time.Second), 5, "delivery_failed"); !errors.Is(err, operations.ErrInvalidAuditOutbox) {
 		t.Fatalf("stale retry error=%v", err)
+	}
+	rollbackRetry := errors.New("rollback worker audit retry")
+	err = appdb.InTx(ctx, pool, appdb.RetryOptions{}, func(txctx context.Context, _ pgx.Tx) error {
+		status, err := store.RetryMutationAudit(txctx, outboxID, second[0].ClaimToken, base.Add(4*time.Second), base.Add(5*time.Second), 5, "delivery_failed")
+		if err != nil || status != "pending" {
+			return fmt.Errorf("transactional audit retry=%q err=%v", status, err)
+		}
+		return rollbackRetry
+	})
+	if !errors.Is(err, rollbackRetry) {
+		t.Fatalf("rollback audit retry = %v", err)
+	}
+	var retryStatus string
+	if err := admin.QueryRowContext(ctx, `SELECT status FROM mutation_audit_outbox WHERE id=$1`, outboxID).Scan(&retryStatus); err != nil || retryStatus != "processing" {
+		t.Fatalf("audit retry escaped rollback: status=%q err=%v", retryStatus, err)
 	}
 	if err := store.DeliverMutationAudit(ctx, outboxID, second[0].ClaimToken, base.Add(4*time.Second)); err != nil {
 		t.Fatalf("current deliver: %v", err)

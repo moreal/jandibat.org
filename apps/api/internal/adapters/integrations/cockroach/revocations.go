@@ -15,7 +15,7 @@ import (
 
 func (s *Store) CheckRevocationSchema(ctx context.Context) error {
 	var columns int
-	err := s.db.QueryRowContext(ctx, `
+	query := `
 SELECT count(*)
 FROM information_schema.columns
 WHERE table_schema = current_schema()
@@ -29,7 +29,13 @@ WHERE table_schema = current_schema()
 	    'idempotency_key_hash', 'request_hash', 'idempotency_expires_at', 'claim_token'
 	  ))
 	  OR (table_name = 'activity_facts' AND column_name = 'custom_provider_id')
-	)`).Scan(&columns)
+	)`
+	var err error
+	if s.pool != nil {
+		err = appdb.PGXExecutorFor(ctx, s.pool).QueryRow(ctx, query).Scan(&columns)
+	} else {
+		err = s.db.QueryRowContext(ctx, query).Scan(&columns)
+	}
 	if err != nil {
 		return fmt.Errorf("check OAuth token revocation schema: %w", err)
 	}

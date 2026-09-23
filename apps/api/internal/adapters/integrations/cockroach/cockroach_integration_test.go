@@ -469,6 +469,52 @@ FROM provider_connections WHERE id = $1`, connectionID).Scan(&credentialColumnsN
 	}
 }
 
+func TestCockroachRevocationSchemaProbeUsesPGXPool(t *testing.T) {
+	dsn := os.Getenv("JANDIBAT_TEST_API_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("set JANDIBAT_TEST_API_DATABASE_URL to a migrated CockroachDB")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	if err := pool.Ping(ctx); err != nil {
+		t.Fatalf("ping CockroachDB as API role: %v", err)
+	}
+
+	// A migrated Store must not consult the legacy SQL handle for this probe.
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := integrationstore.NewWithPGXPool(db, pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CheckRevocationSchema(ctx); err != nil {
+		t.Fatalf("probe with PGX pool and closed legacy handle: %v", err)
+	}
+	rolledBack := errors.New("rollback schema scope")
+	err = appdb.InTx(ctx, pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
+		if _, err := tx.Exec(txctx, "SET LOCAL search_path = pg_catalog"); err != nil {
+			return fmt.Errorf("set isolated schema search path: %w", err)
+		}
+		if err := store.CheckRevocationSchema(txctx); err == nil || !strings.Contains(err.Error(), "required columns are missing") {
+			return fmt.Errorf("probe did not observe transaction-local search path: %v", err)
+		}
+		return rolledBack
+	})
+	if !errors.Is(err, rolledBack) {
+		t.Fatalf("transactional revocation schema probe = %v", err)
+	}
+}
+
 // TestCockroachCustomIngestProjectsFactsAndReplaysDurably is opt-in because it
 // requires a migrated CockroachDB. It exercises the real SQL dialect and
 // proves a replay survives construction of a second service instance.

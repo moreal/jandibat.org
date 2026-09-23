@@ -97,6 +97,19 @@ SELECT id::STRING AS id, user_id, session_token_hash, created_at, expires_at,
   revoked_at, last_seen_at, COALESCE(ip::STRING, '') AS ip, COALESCE(user_agent, '') AS user_agent
 FROM user_sessions WHERE user_id = $1::STRING ORDER BY created_at DESC, id;
 
+-- @name ListSessionsPage
+-- @returns :many
+SELECT id::STRING AS id, user_id, created_at, expires_at,
+  revoked_at, last_seen_at, COALESCE(ip::STRING, '') AS ip, COALESCE(user_agent, '') AS user_agent
+FROM user_sessions
+WHERE user_id = $1::STRING AND (
+  NULLIF($2::STRING, '')::TIMESTAMPTZ IS NULL
+  OR created_at < NULLIF($2::STRING, '')::TIMESTAMPTZ
+  OR (created_at = NULLIF($2::STRING, '')::TIMESTAMPTZ AND id > $3::UUID)
+)
+ORDER BY created_at DESC, id ASC
+LIMIT $4::INT8;
+
 -- @name GetSessionOwnedByUserExists
 -- @returns :one
 SELECT EXISTS (SELECT 1 FROM user_sessions WHERE user_id = $1::STRING AND session_token_hash = $2::BYTES) AS exists;

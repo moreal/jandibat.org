@@ -35,6 +35,9 @@ type SessionRepository interface {
 	// revoked/expired sessions, without bearer-token digest material.
 	GetSessionByID(ctx context.Context, userID, sessionID string) (Session, error)
 	ListSessionsByUser(ctx context.Context, userID string) ([]Session, error)
+	// ListSessionsPage returns up to first+1 owner-visible metadata rows,
+	// ordered by created_at DESC, id ASC. The extra row is a lookahead.
+	ListSessionsPage(ctx context.Context, userID string, after *SessionCursor, first int) ([]Session, error)
 	RevokeOtherSessions(ctx context.Context, userID string, exceptTokenHash Digest, now time.Time) error
 	RevokeSessionByID(ctx context.Context, userID, sessionID string, now time.Time) error
 }

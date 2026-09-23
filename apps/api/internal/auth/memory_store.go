@@ -340,6 +340,40 @@ func (s *MemoryStore) ListSessionsByUser(ctx context.Context, userID string) ([]
 	return items, nil
 }
 
+func (s *MemoryStore) ListSessionsPage(ctx context.Context, userID string, after *SessionCursor, first int) ([]Session, error) {
+	if err := contextError(ctx); err != nil {
+		return nil, err
+	}
+	if first < 1 || first > 100 {
+		return nil, ErrInvalidInput
+	}
+	s.mu.RLock()
+	items := make([]Session, 0)
+	for _, session := range s.sessions {
+		if session.UserID != userID {
+			continue
+		}
+		if after != nil && !session.CreatedAt.Before(after.CreatedAt) &&
+			(!session.CreatedAt.Equal(after.CreatedAt) || session.ID <= after.ID) {
+			continue
+		}
+		item := cloneSession(session)
+		item.TokenHash = Digest{}
+		items = append(items, item)
+	}
+	s.mu.RUnlock()
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].CreatedAt.Equal(items[j].CreatedAt) {
+			return items[i].ID < items[j].ID
+		}
+		return items[i].CreatedAt.After(items[j].CreatedAt)
+	})
+	if len(items) > first+1 {
+		items = items[:first+1]
+	}
+	return items, nil
+}
+
 func (s *MemoryStore) RevokeOtherSessions(ctx context.Context, userID string, exceptTokenHash Digest, now time.Time) error {
 	if err := contextError(ctx); err != nil {
 		return err

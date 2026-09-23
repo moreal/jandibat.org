@@ -261,6 +261,39 @@ func (s *Service) ListSessions(ctx context.Context, userID string) ([]Session, e
 	return items, nil
 }
 
+// ListSessionsPage returns first+1 rows so a Relay connection can derive
+// hasNextPage without an unbounded count. It never returns token digests.
+func (s *Service) ListSessionsPage(ctx context.Context, userID string, after *SessionCursor, first int) ([]Session, error) {
+	if strings.TrimSpace(userID) == "" || first < 1 || first > 100 {
+		return nil, ErrInvalidInput
+	}
+	var normalized *SessionCursor
+	if after != nil {
+		id, err := uuid.Parse(after.ID)
+		if err != nil || after.CreatedAt.IsZero() {
+			return nil, ErrInvalidInput
+		}
+		normalized = &SessionCursor{CreatedAt: after.CreatedAt.UTC(), ID: id.String()}
+	}
+	if _, err := s.activeUser(ctx, userID); err != nil {
+		return nil, err
+	}
+	items, err := s.repository.ListSessionsPage(ctx, userID, normalized, first)
+	if err != nil {
+		return nil, fmt.Errorf("list sessions page: %w", err)
+	}
+	if len(items) > first+1 {
+		return nil, ErrConflict
+	}
+	for i := range items {
+		if items[i].UserID != userID {
+			return nil, ErrNotFound
+		}
+		items[i].TokenHash = Digest{}
+	}
+	return items, nil
+}
+
 func (s *Service) RevokeOtherSessions(ctx context.Context, userID, currentToken string) error {
 	if strings.TrimSpace(userID) == "" || !validBearerToken(currentToken) {
 		return ErrInvalidSession
@@ -567,17 +600,17 @@ func (s *Service) prepareSession(metadata SessionMetadata) (Session, SessionGran
 	now := s.now().UTC()
 	expiresAt := now.Add(s.sessionTTL)
 	return Session{
-		ID:        id,
-		TokenHash: tokenDigest(token),
-		CreatedAt: now,
-		ExpiresAt: expiresAt,
-		IPAddress: strings.TrimSpace(metadata.IPAddress),
-		UserAgent: strings.TrimSpace(metadata.UserAgent),
-	}, SessionGrant{
-		Token:     token,
-		SessionID: id,
-		ExpiresAt: expiresAt,
-	}, nil
+			ID:        id,
+			TokenHash: tokenDigest(token),
+			CreatedAt: now,
+			ExpiresAt: expiresAt,
+			IPAddress: strings.TrimSpace(metadata.IPAddress),
+			UserAgent: strings.TrimSpace(metadata.UserAgent),
+		}, SessionGrant{
+			Token:     token,
+			SessionID: id,
+			ExpiresAt: expiresAt,
+		}, nil
 }
 
 func (s *Service) randomID(prefix string, byteCount int) (string, error) {

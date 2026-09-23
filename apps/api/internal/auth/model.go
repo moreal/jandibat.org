@@ -60,6 +60,13 @@ type Session struct {
 	UserAgent  string
 }
 
+// SessionCursor identifies a keyset position in the newest-first session
+// ordering. It need not identify an existing row.
+type SessionCursor struct {
+	CreatedAt time.Time
+	ID        string
+}
+
 type SessionMetadata struct {
 	IPAddress string
 	UserAgent string

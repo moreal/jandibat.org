@@ -146,6 +146,48 @@ func (store *Store) ListSessionsByUser(ctx context.Context, userID string) ([]co
 	return items, nil
 }
 
+func (store *Store) ListSessionsPage(ctx context.Context, userID string, after *coreauth.SessionCursor, first int) ([]coreauth.Session, error) {
+	if store.pool == nil {
+		return nil, ErrNilDB
+	}
+	if first < 1 || first > 100 || userID == "" {
+		return nil, coreauth.ErrInvalidInput
+	}
+	afterTime, afterID := "", uuid.Nil
+	if after != nil {
+		if after.CreatedAt.IsZero() {
+			return nil, coreauth.ErrInvalidInput
+		}
+		var err error
+		afterID, err = uuid.Parse(after.ID)
+		if err != nil {
+			return nil, coreauth.ErrInvalidInput
+		}
+		afterTime = after.CreatedAt.UTC().Format(time.RFC3339Nano)
+	}
+	rows, err := generated.ListSessionsPage(ctx, appdb.PGXExecutorFor(ctx, store.pool), userID, afterTime, afterID, int64(first+1))
+	if err != nil {
+		return nil, persistenceError(err)
+	}
+	items := make([]coreauth.Session, 0, len(rows))
+	for _, row := range rows {
+		item := coreauth.Session{
+			ID: row.Id, UserID: row.UserId, CreatedAt: row.CreatedAt,
+			ExpiresAt: row.ExpiresAt, IPAddress: row.Ip, UserAgent: row.UserAgent,
+		}
+		if row.RevokedAt != nil {
+			value := *row.RevokedAt
+			item.RevokedAt = &value
+		}
+		if row.LastSeenAt != nil {
+			value := *row.LastSeenAt
+			item.LastSeenAt = &value
+		}
+		items = append(items, item)
+	}
+	return items, nil
+}
+
 func (store *Store) RevokeOtherSessions(ctx context.Context, userID string, exceptTokenHash coreauth.Digest, now time.Time) error {
 	if store.pool == nil {
 		return ErrNilDB

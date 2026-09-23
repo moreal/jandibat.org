@@ -89,18 +89,6 @@ VALUES ($1, $1, 'Consent integration', 'subject', $2, $3, $3)`, environmentID, s
 		_, _ = db.ExecContext(cleanupCtx, `DELETE FROM users WHERE id = $1`, userID)
 	})
 
-	store, err := integrationstore.New(apiDB)
-	if err != nil {
-		t.Fatal(err)
-	}
-	record := integrations.ConnectionRecord{Connection: integrations.ProviderConnection{
-		ID: connectionID, SubjectID: subjectID, ProviderID: "gitlab", EnvironmentID: environmentID,
-		AuthMethod: integrations.AuthToken, Status: integrations.ConnectionActive,
-		PrivateDataEnabled: true, CreatedAt: now, UpdatedAt: now,
-	}}
-	if err := store.SaveConnection(ctx, record); err != nil {
-		t.Fatalf("save private consent: %v", err)
-	}
 	apiPool, err := pgxpool.New(ctx, apiDSN)
 	if err != nil {
 		t.Fatal(err)
@@ -109,6 +97,14 @@ VALUES ($1, $1, 'Consent integration', 'subject', $2, $3, $3)`, environmentID, s
 	generatedStore, err := integrationstore.NewWithPGXPool(apiDB, apiPool)
 	if err != nil {
 		t.Fatal(err)
+	}
+	record := integrations.ConnectionRecord{Connection: integrations.ProviderConnection{
+		ID: connectionID, SubjectID: subjectID, ProviderID: "gitlab", EnvironmentID: environmentID,
+		AuthMethod: integrations.AuthToken, Status: integrations.ConnectionActive,
+		PrivateDataEnabled: true, CreatedAt: now, UpdatedAt: now,
+	}}
+	if err := generatedStore.SaveConnection(ctx, record); err != nil {
+		t.Fatalf("save private consent: %v", err)
 	}
 	claim, acquired, err := generatedStore.TryAcquireSyncExecution(ctx, connectionID)
 	if err != nil || !acquired || claim == "" {
@@ -154,7 +150,7 @@ VALUES ($1, $1, 'Consent integration', 'subject', $2, $3, $3)`, environmentID, s
 	record.Connection.TokenExpiresAt = func() *time.Time { value := now.Add(time.Hour); return &value }()
 	record.Credentials = integrations.EncryptedCredentials{AccessToken: []byte("must-not-persist"), RefreshToken: []byte("must-not-persist")}
 	record.Connection.UpdatedAt = now.Add(time.Second)
-	if err := store.SaveConnection(ctx, record); err != nil {
+	if err := generatedStore.SaveConnection(ctx, record); err != nil {
 		t.Fatalf("disable private consent: %v", err)
 	}
 	loaded, err = generatedStore.GetConnection(ctx, connectionID)
@@ -179,6 +175,26 @@ SELECT access_token_ciphertext IS NULL AND access_token_key_id IS NULL
    AND token_expires_at IS NULL
 FROM provider_connections WHERE id = $1`, connectionID).Scan(&credentialColumnsNull); err != nil || !credentialColumnsNull {
 		t.Fatalf("public-only credential columns null = %t, error=%v", credentialColumnsNull, err)
+	}
+	record.Connection.ExternalAccountID = "rollback-probe"
+	record.Connection.PrivateDataEnabled = true
+	record.Connection.UpdatedAt = now.Add(2 * time.Second)
+	err = appdb.InTx(ctx, apiPool, appdb.RetryOptions{}, func(txctx context.Context, _ pgx.Tx) error {
+		if err := generatedStore.SaveConnection(txctx, record); err != nil {
+			return err
+		}
+		inside, err := generatedStore.GetConnection(txctx, connectionID)
+		if err != nil || inside.Connection.ExternalAccountID != "rollback-probe" || !inside.Connection.PrivateDataEnabled {
+			return fmt.Errorf("connection write in transaction = (%+v, %v)", inside.Connection, err)
+		}
+		return rollbackProbe
+	})
+	if !errors.Is(err, rollbackProbe) {
+		t.Fatalf("rollback write probe = %v", err)
+	}
+	outside, err := generatedStore.GetConnection(ctx, connectionID)
+	if err != nil || outside.Connection.ExternalAccountID == "rollback-probe" || outside.Connection.PrivateDataEnabled {
+		t.Fatalf("connection after rollback = (%+v, %v)", outside.Connection, err)
 	}
 }
 

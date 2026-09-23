@@ -5,8 +5,11 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	generated "github.com/moreal/jandibat.org/apps/api/internal/adapters/integrations/cockroach/generated"
 	appdb "github.com/moreal/jandibat.org/apps/api/internal/database"
 	"github.com/moreal/jandibat.org/apps/api/internal/integrations"
@@ -106,6 +109,45 @@ func (s *Store) SaveConnection(ctx context.Context, record integrations.Connecti
 	if err != nil {
 		return fmt.Errorf("refresh token key ID: %w", err)
 	}
+	if s.pool != nil {
+		id, err := uuid.Parse(connection.ID)
+		if err != nil {
+			return integrations.ErrInvalidIdentifier
+		}
+		if connection.LastSyncAttempt < math.MinInt32 || connection.LastSyncAttempt > math.MaxInt32 ||
+			connection.ConsecutiveFailures < math.MinInt32 || connection.ConsecutiveFailures > math.MaxInt32 {
+			return integrations.ErrInvalidConnectionStatus
+		}
+		return appdb.InTx(ctx, s.pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
+			var scopes *[]string
+			if connection.Scopes != nil {
+				value := append([]string(nil), connection.Scopes...)
+				scopes = &value
+			}
+			count, err := generated.UpsertConnection(txctx, tx,
+				id, connection.SubjectID, connection.EnvironmentID, string(connection.AuthMethod),
+				&connection.ExternalAccountID, string(databaseConnectionStatus(connection.Status)),
+				scopes, optionalBytes(record.Credentials.AccessToken), optionalString(accessKeyID),
+				optionalBytes(record.Credentials.RefreshToken), optionalString(refreshKeyID),
+				connection.TokenExpiresAt, connection.LastSyncedAt, &connection.LastError,
+				connection.CreatedAt, connection.UpdatedAt, connection.ProviderID,
+				string(connection.Status), optionalTimeText(connection.LastSyncAttemptAt),
+				optionalTimeText(connection.NextSyncAttemptAt), int32(connection.LastSyncAttempt),
+				int32(connection.ConsecutiveFailures), connection.ExternalAccountLogin)
+			if err != nil {
+				return persistenceError(err, integrations.ErrConflict)
+			}
+			if count != 1 {
+				return integrations.ErrInvalidConnectionStatus
+			}
+			if connection.PrivateDataEnabled {
+				err = generated.EnableConnectionPrivateConsent(txctx, tx, id, connection.UpdatedAt)
+			} else {
+				err = generated.DisableConnectionPrivateConsent(txctx, tx, id)
+			}
+			return persistenceError(err, integrations.ErrConflict)
+		})
+	}
 	ctx, scope, err := s.beginMutation(ctx)
 	if err != nil {
 		return fmt.Errorf("save connection: begin transaction: %w", err)
@@ -149,6 +191,28 @@ ON CONFLICT (connection_id) DO UPDATE SET enabled = true, updated_at = excluded.
 		return fmt.Errorf("save connection: commit transaction: %w", err)
 	}
 	return nil
+}
+
+func optionalBytes(value []byte) *[]byte {
+	if len(value) == 0 {
+		return nil
+	}
+	copyValue := append([]byte(nil), value...)
+	return &copyValue
+}
+
+func optionalString(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+func optionalTimeText(value *time.Time) string {
+	if value == nil {
+		return ""
+	}
+	return value.UTC().Format(time.RFC3339Nano)
 }
 
 // UpdateConnectionAfterSync is intentionally UPDATE-only so the worker role

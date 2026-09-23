@@ -169,9 +169,11 @@ export interface JandibatApi {
 
 export class FetchJandibatApi implements JandibatApi {
   readonly baseUrl: string;
+  private readonly useRuntimeBaseUrl: boolean;
 
-  constructor(baseUrl = "") {
-    this.baseUrl = baseUrl.replace(/\/$/, "");
+  constructor(baseUrl?: string) {
+    this.useRuntimeBaseUrl = baseUrl === undefined;
+    this.baseUrl = (baseUrl ?? "").replace(/\/$/, "");
   }
 
   async getActivities(
@@ -387,7 +389,7 @@ export class FetchJandibatApi implements JandibatApi {
 
     let response: Response;
     try {
-      response = await fetch(`${this.baseUrl}${path}`, {
+      response = await fetch(`${this.useRuntimeBaseUrl ? defaultApiBaseUrl() : this.baseUrl}${path}`, {
         ...options,
         credentials: "include",
         headers,
@@ -442,4 +444,4 @@ export function defaultApiBaseUrl(): string {
   return import.meta.env.DEV ? "http://localhost:8080" : "";
 }
 
-export const api = new FetchJandibatApi(defaultApiBaseUrl());
+export const api = new FetchJandibatApi();

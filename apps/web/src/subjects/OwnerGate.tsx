@@ -8,6 +8,7 @@ import {
 } from "solid-js";
 import { api, ApiError } from "../api/client";
 import { useAppState } from "../app/state";
+import { useAuthEpoch } from "../relay/auth-epoch";
 import { ErrorCallout, Icon, PageIntro, errorMessage } from "../components/common";
 import {
   createSubjectInput,
@@ -155,16 +156,21 @@ function OwnerWorkspaceIntro() {
 
 export function OwnerGate(props: { children: (subject: string) => Element }) {
   const app = useAppState();
+  const authEpoch = useAuthEpoch();
   const [status, setStatus] = createSignal<OwnerStatus>({ kind: "loading" });
   let controller: AbortController | undefined;
 
   const load = async () => {
     controller?.abort();
-    controller = new AbortController();
+    const requestController = new AbortController();
+    controller = requestController;
     setStatus({ kind: "loading" });
     try {
-      await api.getCurrentSession(controller.signal);
-      const response = await api.listSubjects(controller.signal);
+      const session = await api.getCurrentSession(requestController.signal);
+      if (requestController.signal.aborted) return;
+      if (authEpoch.authenticated(session.user.id)) return;
+      const response = await api.listSubjects(requestController.signal);
+      if (requestController.signal.aborted) return;
       app.setOwnedSubjects(response.subjects);
       const selected = preferredOwnedSubject(response.subjects, app.currentSubject());
       if (selected) {
@@ -175,8 +181,9 @@ export function OwnerGate(props: { children: (subject: string) => Element }) {
       app.clearOwnerSubject();
       setStatus({ kind: response.subjects.length === 0 ? "create" : "select" });
     } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") return;
+      if (requestController.signal.aborted || error instanceof DOMException && error.name === "AbortError") return;
       if (error instanceof ApiError && error.status === 401) {
+        if (authEpoch.signedOut()) return;
         app.setOwnedSubjects([]);
         app.clearOwnerSubject();
         setStatus({ kind: "signed-out" });

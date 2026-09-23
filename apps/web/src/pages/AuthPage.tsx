@@ -8,6 +8,7 @@ import {
   magicLinkTokenFromUrl,
 } from "../auth/magic-link";
 import { createPasskey, getPasskey, passkeyAvailable } from "../auth/passkey";
+import { useAuthEpoch, type AuthNotice } from "../relay/auth-epoch";
 import { ErrorCallout, Icon, errorMessage, formatTime } from "../components/common";
 import { legacyCallbackUrl, takePendingMagicLinkToken } from "../routing/legacy";
 import { OwnerSubjectCreator, OwnerSubjectSelect } from "../subjects/OwnerGate";
@@ -18,6 +19,19 @@ type AuthState =
   | { kind: "signed-out" }
   | { kind: "signed-in"; auth: AuthResultDto }
   | { kind: "error"; error: unknown };
+
+const authNoticeMessages: Record<AuthNotice, string> = {
+  magic: "이메일을 확인하고 로그인했습니다.",
+  passkey: "Passkey로 로그인했습니다.",
+  "signed-out": "안전하게 로그아웃했습니다.",
+};
+
+function showPendingAuthNotice(
+  notice: AuthNotice | undefined,
+  showToast: (message: string) => void,
+) {
+  if (notice) showToast(authNoticeMessages[notice]);
+}
 
 function AuthStory(props: { authenticated: boolean }) {
   return (
@@ -145,6 +159,7 @@ function SignedOutCard(props: { onPasskeySignIn: () => Promise<void>; busy: bool
 
 function SignedInCard(props: { auth: AuthResultDto; onSignedOut: () => void }) {
   const app = useAppState();
+  const authEpoch = useAuthEpoch();
   const [busy, setBusy] = createSignal<"passkey" | "delete" | "signout">();
   const [deletionRequested, setDeletionRequested] = createSignal(false);
   const unavailable = !passkeyAvailable();
@@ -187,7 +202,8 @@ function SignedInCard(props: { auth: AuthResultDto; onSignedOut: () => void }) {
       await api.signOut();
       app.setOwnedSubjects([]);
       app.clearOwnerSubject();
-      app.showToast("안전하게 로그아웃했습니다.");
+      if (authEpoch.signedOut("signed-out")) return;
+      app.showToast(authNoticeMessages["signed-out"]);
       props.onSignedOut();
     } catch (error) {
       app.showToast(errorMessage(error), "error");
@@ -242,9 +258,11 @@ function SignedInCard(props: { auth: AuthResultDto; onSignedOut: () => void }) {
 
 export function AuthPage() {
   const app = useAppState();
+  const authEpoch = useAuthEpoch();
   const [auth, setAuth] = createSignal<AuthState>({ kind: "loading" });
   const [passkeyBusy, setPasskeyBusy] = createSignal(false);
   let attempt = 0;
+  let active = true;
 
   const load = async () => {
     const currentAttempt = ++attempt;
@@ -257,6 +275,8 @@ export function AuthPage() {
       const result = token
         ? await api.consumeMagicLink(token)
         : await api.getCurrentSession();
+      if (currentAttempt !== attempt && !token) return;
+      if (authEpoch.authenticated(result.user.id, Boolean(token), token ? "magic" : undefined)) return;
       const subjects = await api.listSubjects();
       if (currentAttempt !== attempt) return;
       app.setOwnedSubjects(subjects.subjects);
@@ -264,11 +284,13 @@ export function AuthPage() {
       if (selected) app.selectOwnerSubject(selected);
       else app.clearOwnerSubject();
       setAuth({ kind: "signed-in", auth: result });
-      if (token) app.showToast("이메일을 확인하고 로그인했습니다.");
+      showPendingAuthNotice(authEpoch.takeNotice(), (message) => app.showToast(message));
     } catch (error) {
       if (currentAttempt !== attempt) return;
       if (error instanceof ApiError && error.status === 401 && !token) {
+        if (authEpoch.signedOut()) return;
         setAuth({ kind: "signed-out" });
+        showPendingAuthNotice(authEpoch.takeNotice(), (message) => app.showToast(message));
       } else {
         setAuth({ kind: "error", error });
       }
@@ -281,22 +303,18 @@ export function AuthPage() {
       const options = await api.beginPasskeyAuthentication();
       const credential = await getPasskey(options.publicKey);
       const result = await api.finishPasskeyAuthentication(options.ceremonyId, credential);
-      app.showToast("Passkey로 로그인했습니다.");
-      const subjects = await api.listSubjects();
-      app.setOwnedSubjects(subjects.subjects);
-      const selected = preferredOwnedSubject(subjects.subjects, app.currentSubject());
-      if (selected) app.selectOwnerSubject(selected);
-      setAuth({ kind: "signed-in", auth: result });
+      authEpoch.authenticated(result.user.id, true, "passkey");
     } catch (error) {
-      app.showToast(errorMessage(error), "error");
+      if (active) app.showToast(errorMessage(error), "error");
     } finally {
-      setPasskeyBusy(false);
+      if (active) setPasskeyBusy(false);
     }
   };
 
   onSettled(() => {
     void load();
     return () => {
+      active = false;
       attempt += 1;
     };
   });

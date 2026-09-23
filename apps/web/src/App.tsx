@@ -10,7 +10,7 @@ import {
 } from "solid-js";
 import { AppStateProvider, useAppState } from "./app/state";
 import { defaultApiBaseUrl } from "./api/client";
-import { createRelayEnvironment } from "./relay/environment";
+import { AuthEpochContext, createAuthEpoch } from "./relay/auth-epoch";
 import { RelayProvider } from "./relay";
 import { loadRuntimeConfig } from "./runtime-config";
 import { Router } from "./router";
@@ -109,13 +109,19 @@ function RuntimeError(props: { error: Error; retry: () => void }) {
 }
 
 function ReadyApplication() {
-  const environment = createRelayEnvironment(defaultApiBaseUrl());
+  const epoch = createAuthEpoch(defaultApiBaseUrl());
   return (
-    <RelayProvider environment={environment}>
-      <AppStateProvider>
-        <Router>{(props) => <AppShell>{props.children}</AppShell>}</Router>
-      </AppStateProvider>
-    </RelayProvider>
+    <AuthEpochContext value={epoch}>
+      <Show when={epoch.environment()} keyed>
+        {(environment) => (
+          <RelayProvider environment={environment}>
+            <AppStateProvider>
+              <Router>{(props) => <AppShell>{props.children}</AppShell>}</Router>
+            </AppStateProvider>
+          </RelayProvider>
+        )}
+      </Show>
+    </AuthEpochContext>
   );
 }
 

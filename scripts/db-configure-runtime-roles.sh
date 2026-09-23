@@ -117,7 +117,7 @@ GRANT DELETE ON TABLE
   custom_providers, custom_provider_secrets, provider_connections, provider_connection_private_consents, environments, provider_sync_jobs,
   user_sessions, magic_link_tokens,
   auth_challenges, ingest_idempotency_keys, timeline_cache,
-  activity_refresh_cache, api_rate_limit_buckets, deletion_request_inbox, deletion_request_claims,
+  activity_refresh_cache, api_rate_limit_buckets, deletion_request_inbox, deletion_requests, deletion_request_claims,
   deleted_identity_tombstones, deleted_identity_tombstones_v2, magic_link_mail_outbox, mutation_audit_outbox,
   maintenance_checkpoints
 TO jandibat_maintenance;

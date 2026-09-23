@@ -2195,8 +2195,9 @@ VALUES ($1::UUID,$2,'system','retention.transaction.test','database','succeeded'
 
 func TestCockroachCompletedDeletionRetentionWaitsForBackupExpiryAndLegalHold(t *testing.T) {
 	dsn := os.Getenv("JANDIBAT_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("set JANDIBAT_TEST_DATABASE_URL to a migrated CockroachDB")
+	maintenanceDSN := os.Getenv("JANDIBAT_TEST_MAINTENANCE_DATABASE_URL")
+	if dsn == "" || maintenanceDSN == "" {
+		t.Skip("set JANDIBAT_TEST_DATABASE_URL and JANDIBAT_TEST_MAINTENANCE_DATABASE_URL")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -2204,8 +2205,19 @@ func TestCockroachCompletedDeletionRetentionWaitsForBackupExpiryAndLegalHold(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = db.Close() })
-	store, _ := New(db)
+	maintenance, err := sql.Open("pgx", maintenanceDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, err := pgxpool.New(ctx, maintenanceDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pool.Close(); _ = maintenance.Close(); _ = db.Close() })
+	store, err := NewWithPGXPool(maintenance, pool)
+	if err != nil {
+		t.Fatal(err)
+	}
 	suffix := strings.ReplaceAll(time.Now().UTC().Format("150405.000000000"), ".", "")
 	heldTarget, freeTarget := "held_deleted_"+suffix, "free_deleted_"+suffix
 	heldRequest, freeRequest := "held-request-"+suffix, "free-request-"+suffix

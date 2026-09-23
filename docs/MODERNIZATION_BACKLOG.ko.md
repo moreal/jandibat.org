@@ -9,32 +9,36 @@
 
 ## M0. 재현 가능한 기반
 
-- [ ] M0-01: 루트 Nix flake와 lockfile을 추가하고 Go 1.27.1, Node 24.21.0 LTS,
+- [x] M0-01: 루트 Nix flake와 lockfile을 추가하고 Go 1.27.1, Node 24.21.0 LTS,
   Yarn 4.18.0 및 프로젝트 도구를 고정한다.
-- [ ] M0-02: Yarn Berry offline dependency derivation을 `fetchYarnBerryDeps`와
+- [x] M0-02: Yarn Berry offline dependency derivation을 `fetchYarnBerryDeps`와
   `yarnBerryConfigHook`으로 구성한다.
-- [ ] M0-03: Makefile 명령을 Nix shell 안의 안정적인 인터페이스로 정리한다.
-- [ ] M0-04: CI의 setup-go/setup-node/corepack pin을 Nix 기반 실행으로 교체한다.
-- [ ] M0-05: TypeScript 7.0.2, Vite 8.3.0, Vitest 5.0.1 및 Solid 2 RC package를 동일
+- [x] M0-03: Makefile 명령을 Nix shell 안의 안정적인 인터페이스로 정리한다.
+- [x] M0-04: CI의 setup-go/setup-node/corepack pin을 Nix 기반 실행으로 교체한다.
+- [x] M0-05: TypeScript 7.0.2, Vite 8.3.0, Vitest 5.0.1 및 Solid 2 RC package를 동일
   release 계열로 올리고 전체 build/test를 복구한다.
 
 ## M1. Go 품질과 관측성
 
-- [ ] M1-01: staticcheck, exhaustive, go-check-sumtype을 Nix와 Makefile에 고정한다.
-- [ ] M1-02: 기존 enum switch를 exhaustive하게 만들고 sum-type marker 규칙을 적용한다.
-- [ ] M1-03: 표준 `log` wrapper를 주입형 Zap logger로 교체하고 redaction 회귀 테스트를 둔다.
-- [ ] M1-04: server/worker/maintenance의 JSON log schema와 종료 시 flush를 검증한다.
+- [x] M1-01: staticcheck, exhaustive, go-check-sumtype을 Nix와 Makefile에 고정한다.
+- [x] M1-02: 기존 enum switch를 exhaustive하게 만들고 sum-type marker 규칙을 적용한다.
+- [x] M1-03: 표준 `log` wrapper를 주입형 Zap logger로 교체하고 redaction 회귀 테스트를 둔다.
+- [x] M1-04: server/worker/maintenance의 JSON log schema와 종료 시 flush를 검증한다.
 
 ## M2. CockroachDB baseline과 typed SQL
 
-- [ ] M2-01: 기존 migration을 폐기하고 현재 schema의 단일 baseline migration을 작성한다.
-- [ ] M2-02: 공식 원본 Scythe의 CockroachDB + Go pgx probe를 실제 DB에서 실행한다.
-- [ ] M2-03: `pgxpool`/`pgx.Tx` executor와 SQLSTATE 40001 retry boundary를 확정한다.
-- [ ] M2-04: 정적 adapter query를 Scythe SQL block과 generated Go 코드로 전환한다.
-- [ ] M2-05: 동적 운영 query는 typed parameter/variant를 우선하고 남은 identifier 조합을
+- [x] M2-01: 기존 migration을 폐기하고 현재 schema의 단일 baseline migration을 작성한다.
+- [x] M2-02: 공식 원본 Scythe의 CockroachDB + Go pgx probe를 실제 DB에서 실행한다.
+- [x] M2-03: `pgxpool`/`pgx.Tx` executor와 SQLSTATE 40001 retry boundary를 확정한다.
+- [x] M2-04: 정적 adapter query를 Scythe SQL block과 generated Go 코드로 전환한다.
+- [x] M2-05: 동적 운영 query는 typed parameter/variant를 우선하고 남은 identifier 조합을
   allowlist test로 고정한다.
-- [ ] M2-06: `scythe generate`, offline drift check, live Cockroach verification을 CI에 추가한다.
-- [ ] M2-07: 공식 Scythe 결함이 입증될 때만 Nix patch와 최소 재현 fixture를 추가한다.
+- [x] M2-06: `scythe generate`, offline drift check, live Cockroach verification을 CI에 추가한다.
+- [x] M2-07: 공식 Scythe 결함이 입증될 때만 Nix patch와 최소 재현 fixture를 추가한다.
+
+M2 구현·격리 DB 검증은 완료했다. Task 7의 upstream issue/PR 제출은 외부 저장소 쓰기
+승인 대기 중이며, 위 M2-07 체크는 로컬 patch와 최소 재현 검증만 뜻한다. 초기
+`0001_baseline.sql` 이후 예약 fencing을 위한 additive `0002`가 적용된다.
 
 ## M3. GraphQL·Relay 계약
 

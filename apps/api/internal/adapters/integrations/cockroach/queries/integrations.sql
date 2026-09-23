@@ -136,3 +136,52 @@ UPDATE provider_connections SET
 WHERE id = $1::UUID
   AND COALESCE(sync_cursor->>'connection_status', status) IN ('active', 'error')
   AND sync_cursor->>'sync_execution_claim_token' = $11::STRING;
+
+-- @name GetCustomProviderByID
+-- @returns :opt
+SELECT provider.id::STRING AS id, provider.subject_id, provider.environment_id,
+  provider.slug, provider.name, COALESCE(provider.description, '') AS description,
+  provider.status, provider.configuration, secrets.ingest_token_hash,
+  provider.created_at, provider.updated_at
+FROM custom_providers AS provider
+JOIN custom_provider_secrets AS secrets ON secrets.provider_id = provider.id
+WHERE provider.id = $1::UUID;
+
+-- @name ListCustomProviders
+-- @returns :many
+SELECT provider.id::STRING AS id, provider.subject_id, provider.environment_id,
+  provider.slug, provider.name, COALESCE(provider.description, '') AS description,
+  provider.status, provider.configuration, secrets.ingest_token_hash,
+  provider.created_at, provider.updated_at
+FROM custom_providers AS provider
+JOIN custom_provider_secrets AS secrets ON secrets.provider_id = provider.id
+WHERE ($1::STRING = '' OR provider.subject_id = $1::STRING)
+ORDER BY provider.subject_id, provider.slug, provider.id;
+
+-- @name InsertCustomProvider
+-- @returns :exec_result
+INSERT INTO custom_providers (
+  id, owner_user_id, subject_id, environment_id, slug, name, description,
+  status, configuration, created_at, updated_at
+)
+SELECT $1::UUID, owner_user_id, $2::STRING, $3::STRING, $4::STRING, $5::STRING,
+  NULLIF($6::STRING, ''), $7::STRING,
+  jsonb_build_object('allowed_actions', $8::JSONB, 'allowed_metrics', $9::JSONB),
+  $10::TIMESTAMPTZ, $11::TIMESTAMPTZ
+FROM subjects WHERE id = $2::STRING AND owner_user_id IS NOT NULL;
+
+-- @name UpsertCustomProviderSecret
+-- @returns :exec
+INSERT INTO custom_provider_secrets (provider_id, ingest_token_hash)
+VALUES ($1::UUID, $2::BYTES)
+ON CONFLICT (provider_id) DO UPDATE SET ingest_token_hash = excluded.ingest_token_hash;
+
+-- @name UpdateCustomProvider
+-- @returns :exec_result
+UPDATE custom_providers
+SET environment_id = $3::STRING, slug = $4::STRING, name = $5::STRING,
+  description = NULLIF($6::STRING, ''), status = $7::STRING,
+  configuration = COALESCE(configuration, '{}'::JSONB)
+    || jsonb_build_object('allowed_actions', $8::JSONB, 'allowed_metrics', $9::JSONB),
+  created_at = $10::TIMESTAMPTZ, updated_at = $11::TIMESTAMPTZ
+WHERE id = $1::UUID AND subject_id = $2::STRING;

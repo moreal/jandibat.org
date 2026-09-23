@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	generated "github.com/moreal/jandibat.org/apps/api/internal/adapters/integrations/cockroach/generated"
 	appdb "github.com/moreal/jandibat.org/apps/api/internal/database"
 	"github.com/moreal/jandibat.org/apps/api/internal/integrations"
 )
@@ -66,11 +69,59 @@ func (s *Store) SaveCustomProvider(ctx context.Context, record integrations.Cust
 }
 
 func (s *Store) CreateCustomProvider(ctx context.Context, record integrations.CustomProviderRecord) error {
+	if s.pool != nil {
+		return s.saveCustomProviderPGX(ctx, record, true)
+	}
 	return s.saveCustomProvider(ctx, createCustomProviderQuery, record)
 }
 
 func (s *Store) UpdateCustomProvider(ctx context.Context, record integrations.CustomProviderRecord) error {
+	if s.pool != nil {
+		return s.saveCustomProviderPGX(ctx, record, false)
+	}
 	return s.saveCustomProvider(ctx, updateCustomProviderQuery, record)
+}
+
+func (s *Store) saveCustomProviderPGX(ctx context.Context, record integrations.CustomProviderRecord, create bool) error {
+	provider := record.Provider
+	if provider.ID == "" {
+		return integrations.ErrInvalidProvider
+	}
+	id, err := uuid.Parse(provider.ID)
+	if err != nil {
+		return integrations.ErrInvalidIdentifier
+	}
+	actions, err := json.Marshal(provider.AllowedActions)
+	if err != nil {
+		return fmt.Errorf("encode allowed actions: %w", err)
+	}
+	metrics, err := json.Marshal(provider.AllowedMetrics)
+	if err != nil {
+		return fmt.Errorf("encode allowed metrics: %w", err)
+	}
+	return appdb.InTx(ctx, s.pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
+		var count int64
+		var err error
+		if create {
+			count, err = generated.InsertCustomProvider(txctx, tx, id, provider.SubjectID,
+				provider.EnvironmentID, provider.Slug, provider.Name, provider.Description,
+				string(provider.Status), actions, metrics, provider.CreatedAt, provider.UpdatedAt)
+		} else {
+			count, err = generated.UpdateCustomProvider(txctx, tx, id, provider.SubjectID,
+				provider.EnvironmentID, provider.Slug, provider.Name, provider.Description,
+				string(provider.Status), actions, metrics, provider.CreatedAt, provider.UpdatedAt)
+		}
+		if err != nil {
+			return persistenceError(err, integrations.ErrDuplicateProviderSlug)
+		}
+		if count == 0 {
+			if create {
+				return notFound("owned subject", provider.SubjectID)
+			}
+			return notFound("custom provider", provider.ID)
+		}
+		return persistenceError(generated.UpsertCustomProviderSecret(txctx, tx, id, record.EncryptedIngestSecret), integrations.ErrDuplicateProviderSlug)
+	})
 }
 
 func (s *Store) saveCustomProvider(ctx context.Context, query string, record integrations.CustomProviderRecord) error {
@@ -148,6 +199,20 @@ func (s *Store) DeleteCustomProviderAggregate(ctx context.Context, id string) er
 }
 
 func (s *Store) GetCustomProvider(ctx context.Context, id string) (integrations.CustomProviderRecord, error) {
+	if s.pool != nil {
+		parsed, err := uuid.Parse(id)
+		if err != nil {
+			return integrations.CustomProviderRecord{}, integrations.ErrInvalidIdentifier
+		}
+		row, err := generated.GetCustomProviderById(ctx, appdb.PGXExecutorFor(ctx, s.pool), parsed)
+		if err != nil {
+			return integrations.CustomProviderRecord{}, fmt.Errorf("get custom provider: %w", err)
+		}
+		if row == nil {
+			return integrations.CustomProviderRecord{}, notFound("custom provider", id)
+		}
+		return customProviderFromGenerated(*row)
+	}
 	query := `SELECT ` + customProviderColumns + ` FROM custom_providers AS provider JOIN custom_provider_secrets AS secrets ON secrets.provider_id = provider.id WHERE provider.id = $1::UUID`
 	record, err := scanCustomProvider(appdb.ExecutorFor(ctx, s.db).QueryRowContext(ctx, query, id))
 	if err == sql.ErrNoRows {
@@ -160,6 +225,21 @@ func (s *Store) GetCustomProvider(ctx context.Context, id string) (integrations.
 }
 
 func (s *Store) ListCustomProviders(ctx context.Context, subjectID string) ([]integrations.CustomProviderRecord, error) {
+	if s.pool != nil {
+		rows, err := generated.ListCustomProviders(ctx, appdb.PGXExecutorFor(ctx, s.pool), subjectID)
+		if err != nil {
+			return nil, fmt.Errorf("list custom providers: %w", err)
+		}
+		records := make([]integrations.CustomProviderRecord, 0, len(rows))
+		for _, row := range rows {
+			record, err := customProviderFromGenerated(generated.GetCustomProviderByIdRow(row))
+			if err != nil {
+				return nil, fmt.Errorf("list custom providers: %w", err)
+			}
+			records = append(records, record)
+		}
+		return records, nil
+	}
 	query, args := buildListCustomProvidersQuery(subjectID)
 	rows, err := appdb.ExecutorFor(ctx, s.db).QueryContext(ctx, query, args...)
 	if err != nil {
@@ -178,6 +258,22 @@ func (s *Store) ListCustomProviders(ctx context.Context, subjectID string) ([]in
 		return nil, fmt.Errorf("list custom providers: %w", err)
 	}
 	return records, nil
+}
+
+func customProviderFromGenerated(row generated.GetCustomProviderByIdRow) (integrations.CustomProviderRecord, error) {
+	record := integrations.CustomProviderRecord{Provider: integrations.CustomProvider{
+		ID: row.Id, SubjectID: row.SubjectId, EnvironmentID: row.EnvironmentId,
+		Slug: row.Slug, Name: row.Name, Description: row.Description,
+		Status: integrations.CustomProviderStatus(row.Status), CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
+	}}
+	var configuration customProviderConfiguration
+	if err := json.Unmarshal(row.Configuration, &configuration); err != nil {
+		return integrations.CustomProviderRecord{}, fmt.Errorf("decode custom provider configuration: %w", err)
+	}
+	record.Provider.AllowedActions = nonNilStrings(configuration.AllowedActions)
+	record.Provider.AllowedMetrics = nonNilStrings(configuration.AllowedMetrics)
+	record.EncryptedIngestSecret = append([]byte(nil), row.IngestTokenHash...)
+	return record, nil
 }
 
 func buildListCustomProvidersQuery(subjectID string) (string, []any) {

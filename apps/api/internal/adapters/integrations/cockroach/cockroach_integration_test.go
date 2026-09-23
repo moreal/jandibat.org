@@ -300,15 +300,15 @@ VALUES ($1, $2, $3, 'UTC', true, now(), now())`, subjectID, userID, handle); err
 		_, _ = db.ExecContext(cleanupCtx, `DELETE FROM users WHERE id = $1`, userID)
 	})
 
-	integrationDB, err := integrationstore.New(db)
-	if err != nil {
-		t.Fatal(err)
-	}
 	activityPool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(activityPool.Close)
+	integrationDB, err := integrationstore.NewWithPGXPool(db, activityPool)
+	if err != nil {
+		t.Fatal(err)
+	}
 	activityDB, err := activitystore.New(activityPool)
 	if err != nil {
 		t.Fatal(err)
@@ -332,6 +332,73 @@ VALUES ($1, $2, $3, 'UTC', true, now(), now())`, subjectID, userID, handle); err
 	environmentID := "custom-provider:" + provider.ID
 	if provider.EnvironmentID != environmentID {
 		t.Fatalf("provider environment = %q, want isolated namespace %q", provider.EnvironmentID, environmentID)
+	}
+	readRollback := errors.New("rollback provider read probe")
+	err = appdb.InTx(ctx, activityPool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
+		if _, err := tx.Exec(txctx, `UPDATE custom_providers SET name='uncommitted' WHERE id=$1`, provider.ID); err != nil {
+			return err
+		}
+		readCtx, done := context.WithTimeout(txctx, 2*time.Second)
+		defer done()
+		inside, err := integrationDB.GetCustomProvider(readCtx, provider.ID)
+		if err != nil || inside.Provider.Name != "uncommitted" {
+			return fmt.Errorf("transactional provider get = (%+v, %v)", inside.Provider, err)
+		}
+		listed, err := integrationDB.ListCustomProviders(readCtx, subjectID)
+		if err != nil || len(listed) != 1 || listed[0].Provider.Name != "uncommitted" {
+			return fmt.Errorf("transactional provider list = (%+v, %v)", listed, err)
+		}
+		return readRollback
+	})
+	if !errors.Is(err, readRollback) {
+		t.Fatalf("rollback provider read probe = %v", err)
+	}
+	createCtx, doneCreate := context.WithTimeout(ctx, 3*time.Second)
+	defer doneCreate()
+	var rolledBackProviderID string
+	err = appdb.InTx(createCtx, activityPool, appdb.RetryOptions{}, func(txctx context.Context, _ pgx.Tx) error {
+		created, err := service.Create(txctx, integrations.CreateCustomProviderInput{
+			SubjectID: subjectID, Slug: "rollback_" + suffix, Name: "Rollback provider",
+			AllowedActions: []string{"read"}, AllowedMetrics: []string{"count"}, IngestSecret: secret + "-rollback",
+		})
+		if err != nil {
+			return err
+		}
+		rolledBackProviderID = created.ID
+		inside, err := integrationDB.GetCustomProvider(txctx, created.ID)
+		if err != nil || inside.Provider.ID != created.ID {
+			return fmt.Errorf("transactional provider create = (%+v, %v)", inside.Provider, err)
+		}
+		return readRollback
+	})
+	if !errors.Is(err, readRollback) {
+		t.Fatalf("rollback provider create = %v", err)
+	}
+	if _, err := integrationDB.GetCustomProvider(ctx, rolledBackProviderID); !errors.Is(err, integrations.ErrNotFound) {
+		t.Fatalf("provider survived rollback: %v", err)
+	}
+	updateCtx, doneUpdate := context.WithTimeout(ctx, 3*time.Second)
+	defer doneUpdate()
+	err = appdb.InTx(updateCtx, activityPool, appdb.RetryOptions{}, func(txctx context.Context, _ pgx.Tx) error {
+		updated, err := service.Update(txctx, integrations.UpdateCustomProviderInput{
+			ID: provider.ID, Name: "transactional update", Status: integrations.CustomProviderActive,
+			AllowedActions: []string{"read"}, AllowedMetrics: []string{"count"},
+		})
+		if err != nil {
+			return err
+		}
+		inside, err := integrationDB.GetCustomProvider(txctx, provider.ID)
+		if err != nil || inside.Provider.Name != updated.Name {
+			return fmt.Errorf("transactional provider update = (%+v, %v)", inside.Provider, err)
+		}
+		return readRollback
+	})
+	if !errors.Is(err, readRollback) {
+		t.Fatalf("rollback provider update = %v", err)
+	}
+	outsideUpdate, err := integrationDB.GetCustomProvider(ctx, provider.ID)
+	if err != nil || outsideUpdate.Provider.Name != provider.Name {
+		t.Fatalf("provider after update rollback = (%+v, %v)", outsideUpdate.Provider, err)
 	}
 	observedAt := time.Now().UTC().Add(-time.Minute).Truncate(time.Microsecond)
 	input := integrations.IngestCustomActivitiesInput{

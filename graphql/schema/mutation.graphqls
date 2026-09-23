@@ -30,4 +30,8 @@ type Mutation {
   updateProviderConnection(input: UpdateProviderConnectionInput!): UpdateProviderConnectionPayload!
   revokeProviderConnection(input: RevokeProviderConnectionInput!): RevokeProviderConnectionPayload!
   enqueueManualSync(input: EnqueueManualSyncInput!): EnqueueManualSyncPayload!
+  createCustomProvider(input: CreateCustomProviderInput!): CreateCustomProviderPayload!
+  updateCustomProvider(input: UpdateCustomProviderInput!): UpdateCustomProviderPayload!
+  rotateCustomProviderKey(input: RotateCustomProviderKeyInput!): RotateCustomProviderKeyPayload!
+  deleteCustomProvider(input: DeleteCustomProviderInput!): DeleteCustomProviderPayload!
 }

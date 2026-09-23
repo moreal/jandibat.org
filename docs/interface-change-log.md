@@ -114,6 +114,15 @@ normalized store 축출에 필요한 Relay ID만 돌려줍니다. 동기화는 �
 idempotency 의미를 유지합니다. Task 5의 operation별 rate limit, CSRF 및 감사 경계가
 완료되기 전에는 공개 라우트에 연결하지 않습니다.
 
+## 2026-09-24 — Custom provider 변경 GraphQL 계약
+
+호환성: custom provider 생성·변경·수집 키 회전·삭제를 typed mutation으로 옮깁니다.
+생성·회전 응답의 `ingestionKey`는 한 번만 보여 주는 payload 필드이며 Node·조회·로그·
+Relay normalized record에 저장하지 않습니다. `CustomProvider` Node는 안전한 설정
+메타데이터만 노출합니다. 삭제 결과는 normalized store 축출에 필요한 Relay ID를
+반환합니다. 수집 이벤트 전송은 HTTP edge에 남고, Task 5의 CSRF·operation별
+rate limit·민감 응답 no-store가 완료되기 전에는 mutation을 공개하지 않습니다.
+
 ## 2026-08-12 — 운영·보안 계약 강화 (`1.1.0`)
 
 호환성: `1.0.0` 개발 기준선 대비 breaking change. 아직 배포되지 않은 계약의 Phase 3 완료 조건을 명시적으로 고정합니다.

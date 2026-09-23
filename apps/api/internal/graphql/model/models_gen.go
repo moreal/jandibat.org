@@ -130,6 +130,33 @@ func (this ConnectProviderPayload) GetErrors() []*MutationError {
 	return interfaceSlice
 }
 
+type CreateCustomProviderInput struct {
+	SubjectID      string   `json:"subjectID"`
+	Slug           string   `json:"slug"`
+	Name           string   `json:"name"`
+	Description    *string  `json:"description,omitempty"`
+	AllowedActions []string `json:"allowedActions,omitempty"`
+}
+
+type CreateCustomProviderPayload struct {
+	Errors   []*MutationError `json:"errors"`
+	Provider *CustomProvider  `json:"provider,omitempty"`
+	// Returned exactly once after creation; never a Node field. Do not persist client-side.
+	IngestionKey *string `json:"ingestionKey,omitempty"`
+}
+
+func (CreateCustomProviderPayload) IsMutationPayload() {}
+func (this CreateCustomProviderPayload) GetErrors() []*MutationError {
+	if this.Errors == nil {
+		return nil
+	}
+	interfaceSlice := make([]*MutationError, 0, len(this.Errors))
+	for _, concrete := range this.Errors {
+		interfaceSlice = append(interfaceSlice, concrete)
+	}
+	return interfaceSlice
+}
+
 type CreateSubjectInput struct {
 	Handle      string          `json:"handle"`
 	DisplayName *string         `json:"displayName,omitempty"`
@@ -188,6 +215,28 @@ type DateRange struct {
 type DateRangeInput struct {
 	From scalar.Date `json:"from"`
 	To   scalar.Date `json:"to"`
+}
+
+type DeleteCustomProviderInput struct {
+	ID string `json:"id"`
+}
+
+type DeleteCustomProviderPayload struct {
+	Errors []*MutationError `json:"errors"`
+	// Relay ID to evict from normalized stores after deletion.
+	DeletedProviderID *string `json:"deletedProviderID,omitempty"`
+}
+
+func (DeleteCustomProviderPayload) IsMutationPayload() {}
+func (this DeleteCustomProviderPayload) GetErrors() []*MutationError {
+	if this.Errors == nil {
+		return nil
+	}
+	interfaceSlice := make([]*MutationError, 0, len(this.Errors))
+	for _, concrete := range this.Errors {
+		interfaceSlice = append(interfaceSlice, concrete)
+	}
+	return interfaceSlice
 }
 
 type DeletionRequestResult struct {
@@ -453,6 +502,29 @@ func (this RevokeSessionPayload) GetErrors() []*MutationError {
 	return interfaceSlice
 }
 
+type RotateCustomProviderKeyInput struct {
+	ID string `json:"id"`
+}
+
+type RotateCustomProviderKeyPayload struct {
+	Errors []*MutationError `json:"errors"`
+	// Returned exactly once after rotation; never a Node field. Do not persist client-side.
+	IngestionKey *string          `json:"ingestionKey,omitempty"`
+	CreatedAt    *scalar.DateTime `json:"createdAt,omitempty"`
+}
+
+func (RotateCustomProviderKeyPayload) IsMutationPayload() {}
+func (this RotateCustomProviderKeyPayload) GetErrors() []*MutationError {
+	if this.Errors == nil {
+		return nil
+	}
+	interfaceSlice := make([]*MutationError, 0, len(this.Errors))
+	for _, concrete := range this.Errors {
+		interfaceSlice = append(interfaceSlice, concrete)
+	}
+	return interfaceSlice
+}
+
 type Session struct {
 	ID         string           `json:"id"`
 	CreatedAt  scalar.DateTime  `json:"createdAt"`
@@ -554,6 +626,33 @@ type SyncJobConnection struct {
 type SyncJobEdge struct {
 	Cursor scalar.Cursor `json:"cursor"`
 	Node   *SyncJob      `json:"node"`
+}
+
+type UpdateCustomProviderInput struct {
+	ID          string  `json:"id"`
+	Name        *string `json:"name,omitempty"`
+	Description *string `json:"description,omitempty"`
+	// Explicit clear; mutually exclusive with a supplied description.
+	ClearDescription *bool                 `json:"clearDescription,omitempty"`
+	Status           *CustomProviderStatus `json:"status,omitempty"`
+	AllowedActions   []string              `json:"allowedActions,omitempty"`
+}
+
+type UpdateCustomProviderPayload struct {
+	Errors   []*MutationError `json:"errors"`
+	Provider *CustomProvider  `json:"provider,omitempty"`
+}
+
+func (UpdateCustomProviderPayload) IsMutationPayload() {}
+func (this UpdateCustomProviderPayload) GetErrors() []*MutationError {
+	if this.Errors == nil {
+		return nil
+	}
+	interfaceSlice := make([]*MutationError, 0, len(this.Errors))
+	for _, concrete := range this.Errors {
+		interfaceSlice = append(interfaceSlice, concrete)
+	}
+	return interfaceSlice
 }
 
 type UpdateProviderConnectionInput struct {
@@ -681,6 +780,61 @@ type Viewer struct {
 	Subjects *SubjectConnection `json:"subjects"`
 	// Forward page; first: 1..100, default 25.
 	Sessions *SessionConnection `json:"sessions"`
+}
+
+type CustomProviderStatus string
+
+const (
+	CustomProviderStatusActive   CustomProviderStatus = "ACTIVE"
+	CustomProviderStatusDisabled CustomProviderStatus = "DISABLED"
+)
+
+var AllCustomProviderStatus = []CustomProviderStatus{
+	CustomProviderStatusActive,
+	CustomProviderStatusDisabled,
+}
+
+func (e CustomProviderStatus) IsValid() bool {
+	switch e {
+	case CustomProviderStatusActive, CustomProviderStatusDisabled:
+		return true
+	}
+	return false
+}
+
+func (e CustomProviderStatus) String() string {
+	return string(e)
+}
+
+func (e *CustomProviderStatus) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = CustomProviderStatus(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid CustomProviderStatus", str)
+	}
+	return nil
+}
+
+func (e CustomProviderStatus) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *CustomProviderStatus) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e CustomProviderStatus) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
 }
 
 type FetchFailurePolicy string

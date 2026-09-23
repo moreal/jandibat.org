@@ -100,3 +100,59 @@ type EnqueueManualSyncPayload implements MutationPayload {
   errors: [MutationError!]!
   job: SyncJob
 }
+
+enum CustomProviderStatus {
+  ACTIVE
+  DISABLED
+}
+
+input CreateCustomProviderInput {
+  subjectID: ID!
+  slug: String!
+  name: String!
+  description: String
+  allowedActions: [String!]
+}
+
+type CreateCustomProviderPayload implements MutationPayload {
+  errors: [MutationError!]!
+  provider: CustomProvider
+  "Returned exactly once after creation; never a Node field. Do not persist client-side."
+  ingestionKey: String
+}
+
+input UpdateCustomProviderInput {
+  id: ID!
+  name: String
+  description: String
+  "Explicit clear; mutually exclusive with a supplied description."
+  clearDescription: Boolean = false
+  status: CustomProviderStatus
+  allowedActions: [String!]
+}
+
+type UpdateCustomProviderPayload implements MutationPayload {
+  errors: [MutationError!]!
+  provider: CustomProvider
+}
+
+input RotateCustomProviderKeyInput {
+  id: ID!
+}
+
+type RotateCustomProviderKeyPayload implements MutationPayload {
+  errors: [MutationError!]!
+  "Returned exactly once after rotation; never a Node field. Do not persist client-side."
+  ingestionKey: String
+  createdAt: DateTime
+}
+
+input DeleteCustomProviderInput {
+  id: ID!
+}
+
+type DeleteCustomProviderPayload implements MutationPayload {
+  errors: [MutationError!]!
+  "Relay ID to evict from normalized stores after deletion."
+  deletedProviderID: ID
+}

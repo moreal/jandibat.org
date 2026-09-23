@@ -102,6 +102,26 @@ func (r *mutationResolver) EnqueueManualSync(ctx context.Context, input model.En
 	return resolveEnqueueManualSync(ctx, input)
 }
 
+// CreateCustomProvider is the resolver for the createCustomProvider field.
+func (r *mutationResolver) CreateCustomProvider(ctx context.Context, input model.CreateCustomProviderInput) (*model.CreateCustomProviderPayload, error) {
+	return resolveCreateCustomProvider(ctx, input)
+}
+
+// UpdateCustomProvider is the resolver for the updateCustomProvider field.
+func (r *mutationResolver) UpdateCustomProvider(ctx context.Context, input model.UpdateCustomProviderInput) (*model.UpdateCustomProviderPayload, error) {
+	return resolveUpdateCustomProvider(ctx, input)
+}
+
+// RotateCustomProviderKey is the resolver for the rotateCustomProviderKey field.
+func (r *mutationResolver) RotateCustomProviderKey(ctx context.Context, input model.RotateCustomProviderKeyInput) (*model.RotateCustomProviderKeyPayload, error) {
+	return resolveRotateCustomProviderKey(ctx, input)
+}
+
+// DeleteCustomProvider is the resolver for the deleteCustomProvider field.
+func (r *mutationResolver) DeleteCustomProvider(ctx context.Context, input model.DeleteCustomProviderInput) (*model.DeleteCustomProviderPayload, error) {
+	return resolveDeleteCustomProvider(ctx, input)
+}
+
 // SyncJobs is the resolver for the syncJobs field.
 func (r *providerConnectionResolver) SyncJobs(ctx context.Context, obj *model.ProviderConnection, first *int, after *scalar.Cursor) (*model.SyncJobConnection, error) {
 	return resolveSyncJobs(ctx, obj, first, after)

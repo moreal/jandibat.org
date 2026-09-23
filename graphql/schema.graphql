@@ -269,6 +269,62 @@ type EnqueueManualSyncPayload implements MutationPayload {
   job: SyncJob
 }
 
+enum CustomProviderStatus {
+  ACTIVE
+  DISABLED
+}
+
+input CreateCustomProviderInput {
+  subjectID: ID!
+  slug: String!
+  name: String!
+  description: String
+  allowedActions: [String!]
+}
+
+type CreateCustomProviderPayload implements MutationPayload {
+  errors: [MutationError!]!
+  provider: CustomProvider
+  "Returned exactly once after creation; never a Node field. Do not persist client-side."
+  ingestionKey: String
+}
+
+input UpdateCustomProviderInput {
+  id: ID!
+  name: String
+  description: String
+  "Explicit clear; mutually exclusive with a supplied description."
+  clearDescription: Boolean = false
+  status: CustomProviderStatus
+  allowedActions: [String!]
+}
+
+type UpdateCustomProviderPayload implements MutationPayload {
+  errors: [MutationError!]!
+  provider: CustomProvider
+}
+
+input RotateCustomProviderKeyInput {
+  id: ID!
+}
+
+type RotateCustomProviderKeyPayload implements MutationPayload {
+  errors: [MutationError!]!
+  "Returned exactly once after rotation; never a Node field. Do not persist client-side."
+  ingestionKey: String
+  createdAt: DateTime
+}
+
+input DeleteCustomProviderInput {
+  id: ID!
+}
+
+type DeleteCustomProviderPayload implements MutationPayload {
+  errors: [MutationError!]!
+  "Relay ID to evict from normalized stores after deletion."
+  deletedProviderID: ID
+}
+
 "A stable domain validation failure returned inside mutation payloads."
 type MutationError {
   code: String!
@@ -301,6 +357,10 @@ type Mutation {
   updateProviderConnection(input: UpdateProviderConnectionInput!): UpdateProviderConnectionPayload!
   revokeProviderConnection(input: RevokeProviderConnectionInput!): RevokeProviderConnectionPayload!
   enqueueManualSync(input: EnqueueManualSyncInput!): EnqueueManualSyncPayload!
+  createCustomProvider(input: CreateCustomProviderInput!): CreateCustomProviderPayload!
+  updateCustomProvider(input: UpdateCustomProviderInput!): UpdateCustomProviderPayload!
+  rotateCustomProviderKey(input: RotateCustomProviderKeyInput!): RotateCustomProviderKeyPayload!
+  deleteCustomProvider(input: DeleteCustomProviderInput!): DeleteCustomProviderPayload!
 }
 
 "A durable entity with an opaque, globally unique identity."

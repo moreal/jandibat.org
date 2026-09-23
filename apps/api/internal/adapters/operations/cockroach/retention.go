@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
+	appdb "github.com/moreal/jandibat.org/apps/api/internal/database"
 	"github.com/moreal/jandibat.org/apps/api/internal/operations"
 )
 
@@ -131,6 +133,18 @@ func (store *Store) PurgeExpired(ctx context.Context, request operations.Retenti
 	if err != nil {
 		return 0, err
 	}
+	if store.pool != nil {
+		var deleted int64
+		err := appdb.InTx(ctx, store.pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
+			result, err := tx.Exec(txctx, query, request.Before.UTC(), request.Limit, asOf)
+			if err != nil {
+				return fmt.Errorf("purge %s: %w", request.Dataset, err)
+			}
+			deleted = result.RowsAffected()
+			return nil
+		})
+		return deleted, err
+	}
 	result, err := store.db.ExecContext(ctx, query, request.Before.UTC(), request.Limit, asOf)
 	if err != nil {
 		return 0, fmt.Errorf("purge %s: %w", request.Dataset, err)
@@ -151,6 +165,12 @@ func (store *Store) CountExpired(ctx context.Context, request operations.Retenti
 		return 0, err
 	}
 	var count int64
+	if store.pool != nil {
+		if err := appdb.PGXExecutorFor(ctx, store.pool).QueryRow(ctx, query, request.Before.UTC(), request.AsOf.UTC()).Scan(&count); err != nil {
+			return 0, fmt.Errorf("count expired %s: %w", request.Dataset, err)
+		}
+		return count, nil
+	}
 	if err := store.db.QueryRowContext(ctx, query, request.Before.UTC(), request.AsOf.UTC()).Scan(&count); err != nil {
 		return 0, fmt.Errorf("count expired %s: %w", request.Dataset, err)
 	}

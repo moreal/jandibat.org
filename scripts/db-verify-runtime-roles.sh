@@ -54,6 +54,7 @@ sql "$MAINTENANCE_DATABASE_URL" "DELETE FROM provider_connection_private_consent
 sql "$MAINTENANCE_DATABASE_URL" "DELETE FROM subject_settings WHERE false" >/dev/null
 sql "$MAINTENANCE_DATABASE_URL" "DELETE FROM user_settings WHERE false" >/dev/null
 sql "$MAINTENANCE_DATABASE_URL" "DELETE FROM custom_provider_secrets WHERE false" >/dev/null
+sql "$MAINTENANCE_DATABASE_URL" "DELETE FROM audit_events WHERE false" >/dev/null
 sql "$MAINTENANCE_DATABASE_URL" "BEGIN; INSERT INTO maintenance_checkpoints (operation, scope, payload) VALUES ('retention', 'role-verify', '{}'::JSONB); UPDATE maintenance_checkpoints SET payload = '{}'::JSONB WHERE operation = 'retention' AND scope = 'role-verify'; ROLLBACK" >/dev/null
 sql "$MAINTENANCE_DATABASE_URL" "DELETE FROM maintenance_checkpoints WHERE false" >/dev/null
 sql "$MAINTENANCE_DATABASE_URL" "SELECT count(*) FROM legal_holds" >/dev/null

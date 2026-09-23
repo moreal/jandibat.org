@@ -122,6 +122,7 @@ GRANT DELETE ON TABLE
   maintenance_checkpoints
 TO jandibat_maintenance;
 GRANT INSERT ON TABLE audit_events TO jandibat_maintenance;
+GRANT DELETE ON TABLE audit_events TO jandibat_maintenance;
 "
 
 echo "configured least-privilege runtime grants for $database"

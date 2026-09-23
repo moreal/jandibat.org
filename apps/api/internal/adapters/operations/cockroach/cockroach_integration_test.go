@@ -2139,6 +2139,60 @@ target_type, target_id, approval_ref, reason, expires_at, created_at
 	}
 }
 
+func TestCockroachRetentionPurgeJoinsPGXTransaction(t *testing.T) {
+	dsn := os.Getenv("JANDIBAT_TEST_DATABASE_URL")
+	maintenanceDSN := os.Getenv("JANDIBAT_TEST_MAINTENANCE_DATABASE_URL")
+	if dsn == "" || maintenanceDSN == "" {
+		t.Skip("set JANDIBAT_TEST_DATABASE_URL and JANDIBAT_TEST_MAINTENANCE_DATABASE_URL")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	admin, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	maintenance, err := sql.Open("pgx", maintenanceDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, err := pgxpool.New(ctx, maintenanceDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pool.Close(); _ = maintenance.Close(); _ = admin.Close() })
+	store, err := NewWithPGXPool(maintenance, pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	suffix := strings.ReplaceAll(time.Now().UTC().Format("150405.000000000"), ".", "")[:12]
+	eventID := "c57d0f6a-04ae-4e72-b2f3-" + suffix
+	if _, err := admin.ExecContext(ctx, `INSERT INTO audit_events (id,occurred_at,actor_type,action,target_type,outcome,request_id,metadata)
+VALUES ($1::UUID,$2,'system','retention.transaction.test','database','succeeded',$3,'{}'::JSONB)`,
+		eventID, time.Date(1200, 1, 1, 0, 0, 0, 0, time.UTC), "retention-tx-"+suffix); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = admin.ExecContext(context.Background(), `DELETE FROM audit_events WHERE id=$1::UUID`, eventID) })
+	request := operations.RetentionPurgeRequest{
+		Dataset: operations.RetentionAuditEvents, Before: time.Date(1300, 1, 1, 0, 0, 0, 0, time.UTC),
+		AsOf: time.Date(1300, 1, 2, 0, 0, 0, 0, time.UTC), Limit: 1,
+	}
+	rollback := errors.New("rollback retention purge")
+	err = appdb.InTx(ctx, pool, appdb.RetryOptions{}, func(txctx context.Context, _ pgx.Tx) error {
+		deleted, err := store.PurgeExpired(txctx, request)
+		if err != nil || deleted != 1 {
+			return fmt.Errorf("transactional retention purge deleted=%d err=%v", deleted, err)
+		}
+		return rollback
+	})
+	if !errors.Is(err, rollback) {
+		t.Fatalf("retention purge rollback=%v", err)
+	}
+	var count int
+	if err := admin.QueryRowContext(ctx, `SELECT count(*) FROM audit_events WHERE id=$1::UUID`, eventID).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("retention purge escaped rollback: count=%d err=%v", count, err)
+	}
+}
+
 func TestCockroachCompletedDeletionRetentionWaitsForBackupExpiryAndLegalHold(t *testing.T) {
 	dsn := os.Getenv("JANDIBAT_TEST_DATABASE_URL")
 	if dsn == "" {

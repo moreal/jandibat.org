@@ -191,6 +191,35 @@ func TestRetentionQueriesAreBoundedAndAllowlisted(t *testing.T) {
 	}
 }
 
+func FuzzRetentionRejectsUnlistedDatasetBeforeExecution(f *testing.F) {
+	for _, value := range []string{
+		"", "unknown", "audit_events; DELETE FROM users", "audit_events --", "audit_events/*x*/",
+		"public.audit_events", " audit_events", "audit_events ", "audit_events\n", "ＡＵＤＩＴ", "' OR true --",
+	} {
+		f.Add(value)
+	}
+	f.Fuzz(func(t *testing.T, value string) {
+		dataset := operations.RetentionDataset(value)
+		if _, allowed := retentionSQLSpecs[dataset]; allowed {
+			return
+		}
+		if _, err := buildRetentionPurgeQuery(dataset); !errors.Is(err, ErrInvalidPurgeRequest) {
+			t.Fatalf("purge query accepted %q: %v", value, err)
+		}
+		if _, err := buildRetentionCountQuery(dataset); !errors.Is(err, ErrInvalidPurgeRequest) {
+			t.Fatalf("count query accepted %q: %v", value, err)
+		}
+		store := &Store{} // any query execution would fail; rejection must happen first
+		request := operations.RetentionPurgeRequest{Dataset: dataset, Before: time.Unix(1, 0), AsOf: time.Unix(2, 0), Limit: 1}
+		if _, err := store.PurgeExpired(context.Background(), request); !errors.Is(err, ErrInvalidPurgeRequest) {
+			t.Fatalf("purge executed unlisted dataset %q: %v", value, err)
+		}
+		if _, err := store.CountExpired(context.Background(), request); !errors.Is(err, ErrInvalidPurgeRequest) {
+			t.Fatalf("count executed unlisted dataset %q: %v", value, err)
+		}
+	})
+}
+
 func TestAuditQueryMatchesExistingSchema(t *testing.T) {
 	for _, fragment := range []string{"INSERT INTO audit_events", "actor_type", "target_type", "request_id", "$10::JSONB"} {
 		if !strings.Contains(insertAuditEventQuery, fragment) {

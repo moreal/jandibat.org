@@ -58,6 +58,11 @@ WHERE id = $2 AND status = 'active'`,
 func (store *Store) UseSession(ctx context.Context, tokenHash coreauth.Digest, now time.Time) (coreauth.Session, error) {
 	if store.pool != nil {
 		executor := appdb.PGXExecutorFor(ctx, store.pool)
+		if appdb.HasPendingLazyPGXTransaction(ctx, store.pool) {
+			// Authentication precedes OAuth provider I/O. Persist last-seen without
+			// beginning the request's audit transaction across that network call.
+			executor = store.pool
+		}
 		row, err := generated.UseActiveSession(ctx, executor, tokenHash[:], now)
 		if err != nil {
 			return coreauth.Session{}, persistenceError(err)

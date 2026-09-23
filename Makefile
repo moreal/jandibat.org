@@ -84,18 +84,13 @@ test-api-race:
 
 # Requires a migrated CockroachDB. The explicit URL prevents the opt-in tests
 # from silently skipping in CI while leaving ordinary unit-test runs portable.
+export JANDIBAT_TEST_DATABASE_URL JANDIBAT_TEST_API_DATABASE_URL JANDIBAT_TEST_WORKER_DATABASE_URL JANDIBAT_TEST_MAINTENANCE_DATABASE_URL
 test-api-integration:
 	@test -n "$(JANDIBAT_TEST_DATABASE_URL)" || (echo "JANDIBAT_TEST_DATABASE_URL is required" >&2; exit 2)
 	@test -n "$(JANDIBAT_TEST_API_DATABASE_URL)" || (echo "JANDIBAT_TEST_API_DATABASE_URL is required" >&2; exit 2)
 	@test -n "$(JANDIBAT_TEST_WORKER_DATABASE_URL)" || (echo "JANDIBAT_TEST_WORKER_DATABASE_URL is required" >&2; exit 2)
 	@test -n "$(JANDIBAT_TEST_MAINTENANCE_DATABASE_URL)" || (echo "JANDIBAT_TEST_MAINTENANCE_DATABASE_URL is required" >&2; exit 2)
-	cd apps/api && JANDIBAT_TEST_DATABASE_URL='$(JANDIBAT_TEST_DATABASE_URL)' JANDIBAT_TEST_API_DATABASE_URL='$(JANDIBAT_TEST_API_DATABASE_URL)' JANDIBAT_TEST_WORKER_DATABASE_URL='$(JANDIBAT_TEST_WORKER_DATABASE_URL)' JANDIBAT_TEST_MAINTENANCE_DATABASE_URL='$(JANDIBAT_TEST_MAINTENANCE_DATABASE_URL)' go test -p=1 -count=1 \
-		./internal/adapters/auth/cockroach \
-		./internal/adapters/integrations/cockroach \
-		./internal/adapters/operations/cockroach \
-		./internal/adapters/ratelimit/cockroach \
-		./internal/adapters/subjects/cockroach \
-		./internal/http
+	@cd apps/api && go test -tags=integration -p=1 -count=1 ./...
 
 vet-api:
 	cd apps/api && go vet ./...
@@ -127,6 +122,7 @@ secret-scan:
 
 shell-check:
 	@for script in scripts/*.sh; do sh -n "$$script"; done
+	sh scripts/test-api-integration-target.sh
 
 security-review-check:
 	@test -n "$(SECURITY_REVIEW)" || (echo "SECURITY_REVIEW is required" >&2; exit 2)

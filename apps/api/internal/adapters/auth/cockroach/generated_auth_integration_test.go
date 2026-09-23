@@ -14,9 +14,90 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	coreauth "github.com/moreal/jandibat.org/apps/api/internal/auth"
+	appdb "github.com/moreal/jandibat.org/apps/api/internal/database"
 )
+
+func TestCockroachSessionAuthenticationDoesNotStartPendingAuditTransaction(t *testing.T) {
+	adminDSN := os.Getenv("JANDIBAT_TEST_DATABASE_URL")
+	apiDSN := os.Getenv("JANDIBAT_TEST_API_DATABASE_URL")
+	if adminDSN == "" || apiDSN == "" {
+		t.Skip("set JANDIBAT_TEST_DATABASE_URL and JANDIBAT_TEST_API_DATABASE_URL")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	admin, err := pgxpool.New(ctx, adminDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, err := pgxpool.New(ctx, apiDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pool.Close(); admin.Close() })
+	store, err := New(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	userID := "lazy-session-user-" + uuid.NewString()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	if _, err := admin.Exec(ctx, `INSERT INTO users (id,primary_email,status) VALUES ($1,$2,'active')`, userID, userID+"@example.invalid"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = admin.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, userID) })
+	session := coreauth.Session{
+		ID: uuid.NewString(), UserID: userID,
+		TokenHash: coreauth.Digest(sha256.Sum256([]byte("lazy-session-" + userID))),
+		CreatedAt: now, ExpiresAt: now.Add(time.Hour),
+	}
+	if err := store.SaveSession(ctx, session); err != nil {
+		t.Fatal(err)
+	}
+
+	authAt := now.Add(time.Second)
+	lazyCtx, lazy := appdb.WithLazyPGXTransaction(ctx, pool)
+	t.Cleanup(func() { _ = lazy.Rollback() })
+	if _, err := store.UseSession(lazyCtx, session.TokenHash, authAt); err != nil {
+		t.Fatalf("authenticate pending request: %v", err)
+	}
+	if lazy.Active() {
+		t.Fatal("session authentication began the pending audit transaction before provider work")
+	}
+	if err := lazy.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	var persisted time.Time
+	if err := admin.QueryRow(ctx, `SELECT last_seen_at FROM user_sessions WHERE id=$1::UUID`, session.ID).Scan(&persisted); err != nil || !persisted.Equal(authAt) {
+		t.Fatalf("authentication preflight last_seen persisted=%t err=%v", persisted.Equal(authAt), err)
+	}
+
+	activeCtx, active := appdb.WithLazyPGXTransaction(ctx, pool)
+	insideAt := authAt.Add(time.Second)
+	err = appdb.InTx(activeCtx, pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
+		if _, err := store.UseSession(txctx, session.TokenHash, insideAt); err != nil {
+			return err
+		}
+		var inside time.Time
+		if err := tx.QueryRow(txctx, `SELECT last_seen_at FROM user_sessions WHERE id=$1::UUID`, session.ID).Scan(&inside); err != nil {
+			return err
+		}
+		if !inside.Equal(insideAt) {
+			return fmt.Errorf("active transaction missed session update")
+		}
+		return nil
+	})
+	if err != nil || !active.Active() {
+		t.Fatalf("active audit transaction was not reused: active=%t err=%v", active.Active(), err)
+	}
+	if err := active.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if err := admin.QueryRow(ctx, `SELECT last_seen_at FROM user_sessions WHERE id=$1::UUID`, session.ID).Scan(&persisted); err != nil || !persisted.Equal(authAt) {
+		t.Fatalf("rolled-back active session update persisted=%t err=%v", persisted.Equal(authAt), err)
+	}
+}
 
 func TestGeneratedAuthRepositoryVerticalSlice(t *testing.T) {
 	dsn := os.Getenv("JANDIBAT_TEST_DATABASE_URL")

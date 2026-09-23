@@ -55,7 +55,6 @@ func buildWorker(ctx context.Context, settings config.Config, logger *zap.Logger
 	if err != nil {
 		return nil, err
 	}
-	db := database.DB
 	success := false
 	defer func() {
 		if !success {
@@ -66,7 +65,7 @@ func buildWorker(ctx context.Context, settings config.Config, logger *zap.Logger
 	if err != nil {
 		return nil, fmt.Errorf("worker: construct activity store: %w", err)
 	}
-	integration, err := integrationstore.NewWithPGXPool(db, database.Pool)
+	integration, err := integrationstore.NewWithPGXPool(nil, database.Pool)
 	if err != nil {
 		return nil, fmt.Errorf("worker: construct integration store: %w", err)
 	}
@@ -78,7 +77,7 @@ func buildWorker(ctx context.Context, settings config.Config, logger *zap.Logger
 	if err != nil {
 		return nil, fmt.Errorf("worker: construct auth store: %w", err)
 	}
-	operationStore, err := operationsstore.NewWithPGXPool(db, database.Pool)
+	operationStore, err := operationsstore.NewWithPGXPool(nil, database.Pool)
 	if err != nil {
 		return nil, fmt.Errorf("worker: construct operations store: %w", err)
 	}
@@ -88,10 +87,10 @@ func buildWorker(ctx context.Context, settings config.Config, logger *zap.Logger
 	}
 	metrics := observability.Default()
 	metrics.SetResource(observability.ResourceFromEnvironment(settings.Environment))
-	metrics.RegisterDBPool(db)
-	metrics.RegisterQueueAgeProbe(observability.SQLQueueAgeProbe(db))
-	metrics.RegisterActivityFreshnessProbe(observability.SQLActivityFreshnessProbe(db))
-	metrics.RegisterRevocationDLQProbe(observability.SQLRevocationDLQProbe(db))
+	metrics.RegisterPGXPool(database.Pool)
+	metrics.RegisterQueueAgeProbe(observability.PGXQueueAgeProbe(database.Pool))
+	metrics.RegisterActivityFreshnessProbe(observability.PGXActivityFreshnessProbe(database.Pool))
+	metrics.RegisterRevocationDLQProbe(observability.PGXRevocationDLQProbe(database.Pool))
 	keyring = observability.InstrumentCredentialCipher(keyring, metrics)
 	client := processruntime.NewProviderHTTPClient()
 	client.Transport = observability.InstrumentRoundTripper(client.Transport, metrics)

@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
@@ -11,7 +10,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	_ "github.com/jackc/pgx/v5/stdlib"
 	authstore "github.com/moreal/jandibat.org/apps/api/internal/adapters/auth/cockroach"
 	webauthnadapter "github.com/moreal/jandibat.org/apps/api/internal/adapters/auth/webauthn"
 	integrationstore "github.com/moreal/jandibat.org/apps/api/internal/adapters/integrations/cockroach"
@@ -108,7 +106,6 @@ func (registry *oauthRegistry) RevokeOAuthToken(ctx context.Context, providerID 
 }
 
 type databaseStores struct {
-	db           *sql.DB
 	pool         *pgxpool.Pool
 	activity     activityapp.Store
 	integrations *integrationstore.Store
@@ -140,7 +137,7 @@ func buildApplication(ctx context.Context, settings config.Config, logger *zap.L
 		return nil, err
 	}
 	subjectRepository := subjects.Repository(subjects.NewMemoryRepository())
-	if stores.db != nil {
+	if stores.pool != nil {
 		subjectRepository, err = subjectstore.New(stores.pool)
 		if err != nil {
 			return nil, fmt.Errorf("runtime: construct subject store: %w", err)
@@ -191,7 +188,7 @@ func buildApplication(ctx context.Context, settings config.Config, logger *zap.L
 		}
 	}
 	rateLimiter := handlers.RateLimiter(handlers.DefaultRateLimiter())
-	if stores.db != nil {
+	if stores.pool != nil {
 		rateLimiter, err = ratelimitstore.New(stores.pool, handlers.DefaultRateLimitPolicies(), nil)
 		if err != nil {
 			return nil, fmt.Errorf("runtime: construct distributed rate limiter: %w", err)
@@ -246,7 +243,7 @@ func buildApplication(ctx context.Context, settings config.Config, logger *zap.L
 	}
 
 	authRepository := auth.Repository(auth.NewMemoryStore())
-	if stores.db != nil {
+	if stores.pool != nil {
 		authRepository, err = authstore.NewWithDeletedIdentityHMACKeys(stores.pool, settings.DeletedIdentityHMACKeys)
 		if err != nil {
 			return nil, fmt.Errorf("runtime: construct auth store: %w", err)
@@ -257,7 +254,7 @@ func buildApplication(ctx context.Context, settings config.Config, logger *zap.L
 		return nil, err
 	}
 	oauthState := oauth.StateStore(oauth.NewMemoryStateStore(nil))
-	if stores.db != nil {
+	if stores.pool != nil {
 		oauthState, err = oauthstore.New(stores.pool)
 		if err != nil {
 			return nil, fmt.Errorf("runtime: construct OAuth state store: %w", err)
@@ -324,14 +321,12 @@ func buildReadinessChecker(stores databaseStores) (*operations.ReadinessChecker,
 	name := "local-storage"
 	var probe operations.DependencyProbe = operations.DependencyProbeFunc(func(context.Context) error { return nil })
 	dependencies := make([]operations.ReadinessDependency, 0, 2)
-	if stores.db != nil {
+	if stores.pool != nil {
 		name = "database"
 		probe = stores.operations
-		if stores.pool != nil {
-			dependencies = append(dependencies, operations.ReadinessDependency{
-				Name: "database-pool", Probe: operations.DependencyProbeFunc(stores.pool.Ping),
-			})
-		}
+		dependencies = append(dependencies, operations.ReadinessDependency{
+			Name: "database-pool", Probe: operations.DependencyProbeFunc(stores.pool.Ping),
+		})
 	}
 	dependencies = append(dependencies, operations.ReadinessDependency{Name: name, Probe: probe})
 	if stores.integrations != nil {
@@ -412,18 +407,17 @@ func buildStores(ctx context.Context, settings config.Config) (databaseStores, e
 	if err != nil {
 		return databaseStores{}, err
 	}
-	db := database.DB
 	activityPersistence, err := activitystore.New(database.Pool)
 	if err != nil {
 		_ = database.Close()
 		return databaseStores{}, fmt.Errorf("runtime: construct activity store: %w", err)
 	}
-	integrationPersistence, err := integrationstore.NewWithPGXPool(db, database.Pool)
+	integrationPersistence, err := integrationstore.NewWithPGXPool(nil, database.Pool)
 	if err != nil {
 		_ = database.Close()
 		return databaseStores{}, fmt.Errorf("runtime: construct integration store: %w", err)
 	}
-	operationalPersistence, err := operationsstore.NewWithPGXPool(db, database.Pool)
+	operationalPersistence, err := operationsstore.NewWithPGXPool(nil, database.Pool)
 	if err != nil {
 		_ = database.Close()
 		return databaseStores{}, fmt.Errorf("runtime: construct operations store: %w", err)
@@ -433,7 +427,6 @@ func buildStores(ctx context.Context, settings config.Config) (databaseStores, e
 		return databaseStores{}, fmt.Errorf("runtime: validate operations schema: %w", err)
 	}
 	return databaseStores{
-		db:           db,
 		pool:         database.Pool,
 		activity:     activityPersistence,
 		integrations: integrationPersistence,

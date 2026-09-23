@@ -2,7 +2,6 @@ package processruntime
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"net/url"
@@ -11,7 +10,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/moreal/jandibat.org/apps/api/internal/config"
 	"github.com/moreal/jandibat.org/apps/api/internal/observability"
 )
@@ -25,30 +23,23 @@ const (
 	databaseMaxOpen = 20
 )
 
-// RuntimeDatabase exposes pgxpool as the primary runtime boundary and keeps a
-// database/sql view during the adapter migration. Call Close to release both.
+// RuntimeDatabase owns the sole runtime connection pool. Call Close to release it.
 type RuntimeDatabase struct {
-	DB *sql.DB
-
 	Pool     *pgxpool.Pool
 	close    sync.Once
-	closeErr error
 }
 
-// Close releases both layers of the database runtime exactly once.
+// Close releases the database runtime exactly once.
 func (database *RuntimeDatabase) Close() error {
 	if database == nil {
 		return nil
 	}
 	database.close.Do(func() {
-		if database.DB != nil {
-			database.closeErr = database.DB.Close()
-		}
 		if database.Pool != nil {
 			database.Pool.Close()
 		}
 	})
-	return database.closeErr
+	return nil
 }
 
 // DatabaseURL selects the least-privilege database role for a process. Each
@@ -105,11 +96,8 @@ func OpenDatabase(ctx context.Context, databaseURL string) (*RuntimeDatabase, er
 	if err != nil {
 		return nil, fmt.Errorf("runtime: open database pool: %w", err)
 	}
-	database := &RuntimeDatabase{DB: stdlib.OpenDBFromPool(pool), Pool: pool}
-	// OpenDBFromPool sets MaxIdleConns(0). Leaving MaxOpenConns unlimited is
-	// intentional: pgxpool is the sole bounded checkout queue, so its acquire
-	// tracer measures the complete wait rather than missing a database/sql queue.
-	if err := database.DB.PingContext(ctx); err != nil {
+	database := &RuntimeDatabase{Pool: pool}
+	if err := database.Pool.Ping(ctx); err != nil {
 		_ = database.Close()
 		return nil, fmt.Errorf("runtime: ping database: %w", err)
 	}

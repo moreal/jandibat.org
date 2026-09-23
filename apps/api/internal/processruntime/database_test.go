@@ -2,6 +2,7 @@ package processruntime
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -9,6 +10,23 @@ import (
 	"github.com/moreal/jandibat.org/apps/api/internal/config"
 	"github.com/moreal/jandibat.org/apps/api/internal/observability"
 )
+
+func TestRuntimeDatabaseExposesOnlyPGXPool(t *testing.T) {
+	fields := reflect.TypeOf(RuntimeDatabase{})
+	for index := 0; index < fields.NumField(); index++ {
+		field := fields.Field(index)
+		if field.Type == reflect.TypeOf((*pgxpool.Pool)(nil)) {
+			continue
+		}
+		fieldType := field.Type
+		if fieldType.Kind() == reflect.Pointer {
+			fieldType = fieldType.Elem()
+		}
+		if fieldType.PkgPath() == "database/sql" {
+			t.Fatalf("runtime database retains a second database/sql checkout boundary: %s", field.Name)
+		}
+	}
+}
 
 func TestDatabaseURLUsesRoleSpecificProductionValue(t *testing.T) {
 	settings := config.Config{

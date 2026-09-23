@@ -107,9 +107,9 @@ func buildCredentialKeyring(settings config.Config) (operations.RotatingSecretCi
 func buildOperationalRuntime(settings config.Config, stores databaseStores, keyring operations.RotatingSecretCipher, logger *zap.Logger) (operationalRuntime, error) {
 	metrics := observability.Default()
 	metrics.SetResource(observability.ResourceFromEnvironment(settings.Environment))
-	metrics.RegisterDBPool(stores.db)
-	metrics.RegisterQueueAgeProbe(observability.SQLQueueAgeProbe(stores.db))
-	metrics.RegisterActivityFreshnessProbe(observability.SQLActivityFreshnessProbe(stores.db))
+	metrics.RegisterPGXPool(stores.pool)
+	metrics.RegisterQueueAgeProbe(observability.PGXQueueAgeProbe(stores.pool))
+	metrics.RegisterActivityFreshnessProbe(observability.PGXActivityFreshnessProbe(stores.pool))
 
 	var sink operations.AuditEventSink = operations.NewMemoryAuditSink()
 	if stores.operations != nil {

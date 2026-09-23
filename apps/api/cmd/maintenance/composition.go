@@ -66,7 +66,6 @@ func buildMaintenance(ctx context.Context, settings config.Config, logger *zap.L
 	if err != nil {
 		return nil, err
 	}
-	db := database.DB
 	success := false
 	defer func() {
 		if !success {
@@ -74,7 +73,7 @@ func buildMaintenance(ctx context.Context, settings config.Config, logger *zap.L
 		}
 	}()
 
-	store, err := operationsstore.NewWithPGXPool(db, database.Pool)
+	store, err := operationsstore.NewWithPGXPool(nil, database.Pool)
 	if err != nil {
 		return nil, fmt.Errorf("maintenance: construct operations store: %w", err)
 	}
@@ -96,8 +95,8 @@ func buildMaintenance(ctx context.Context, settings config.Config, logger *zap.L
 	}
 	metrics := observability.Default()
 	metrics.SetResource(observability.ResourceFromEnvironment(settings.Environment))
-	metrics.RegisterDBPool(db)
-	metrics.RegisterDeletionAgeProbe(observability.SQLDeletionAgeProbe(db))
+	metrics.RegisterPGXPool(database.Pool)
+	metrics.RegisterDeletionAgeProbe(observability.PGXDeletionAgeProbe(database.Pool))
 	keyring = observability.InstrumentCredentialCipher(keyring, metrics)
 	batchSize := positiveOr(settings.MaintenanceBatchSize, 500)
 	retention, err := operations.NewRetentionWorker(store, maintenanceClock{}, operations.RetentionConfig{

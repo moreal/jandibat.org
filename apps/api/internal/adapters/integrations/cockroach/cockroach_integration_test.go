@@ -107,6 +107,49 @@ VALUES ($1, $1, 'Consent integration', 'subject', $2, $3, $3)`, environmentID, s
 	if err := generatedStore.SaveConnection(ctx, record); err != nil {
 		t.Fatalf("save private consent: %v", err)
 	}
+	rollbackProbe := errors.New("rollback read probe")
+	transactionJobID := "af12d033-5086-4923-9d6a-" + suffix
+	transactionJob := integrations.SyncJob{
+		ID: transactionJobID, ConnectionID: connectionID, Trigger: integrations.SyncTriggerManual,
+		Status: integrations.SyncJobPending, CreatedAt: now, UpdatedAt: now,
+	}
+	transactionKey := sha256.Sum256([]byte("sync-key-" + suffix))
+	transactionRequest := sha256.Sum256([]byte("sync-request-" + suffix))
+	transactionExpiry := now.Add(time.Hour)
+	transactionJob.IdempotencyKeyHash = transactionKey[:]
+	transactionJob.RequestHash = transactionRequest[:]
+	transactionJob.IdempotencyExpires = &transactionExpiry
+	err = appdb.InTx(ctx, apiPool, appdb.RetryOptions{}, func(txctx context.Context, _ pgx.Tx) error {
+		if err := generatedStore.SaveSyncJob(txctx, transactionJob); err != nil {
+			return err
+		}
+		inside, err := generatedStore.GetSyncJob(txctx, transactionJobID)
+		if err != nil || inside.ID != transactionJobID {
+			return fmt.Errorf("transactional sync job = (%+v, %v)", inside, err)
+		}
+		listed, err := generatedStore.ListSyncJobs(txctx, connectionID)
+		if err != nil || len(listed) != 1 || listed[0].ID != transactionJobID {
+			return fmt.Errorf("transactional sync job list = (%+v, %v)", listed, err)
+		}
+		readCtx, done := context.WithTimeout(txctx, 2*time.Second)
+		defer done()
+		idempotent, found, err := generatedStore.GetSyncJobByIdempotencyKey(readCtx, connectionID, transactionKey[:], now)
+		if err != nil || !found || idempotent.ID != transactionJobID {
+			return fmt.Errorf("transactional idempotent sync job = (%+v, %t, %v)", idempotent, found, err)
+		}
+		claimable, err := generatedStore.ListClaimableSyncJobs(readCtx, now, 5)
+		if err != nil || len(claimable) != 1 || claimable[0] != transactionJobID {
+			return fmt.Errorf("transactional claimable jobs = (%+v, %v)", claimable, err)
+		}
+		return rollbackProbe
+	})
+	if !errors.Is(err, rollbackProbe) {
+		t.Fatalf("rollback sync job = %v", err)
+	}
+	var jobsAfterSaveRollback int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM provider_sync_jobs WHERE id=$1`, transactionJobID).Scan(&jobsAfterSaveRollback); err != nil || jobsAfterSaveRollback != 0 {
+		t.Fatalf("sync job survived rollback = (%d, %v)", jobsAfterSaveRollback, err)
+	}
 	claim, acquired, err := generatedStore.TryAcquireSyncExecution(ctx, connectionID)
 	if err != nil || !acquired || claim == "" {
 		t.Fatalf("first claim = %q, %t, %v", claim, acquired, err)
@@ -129,7 +172,6 @@ VALUES ($1, $1, 'Consent integration', 'subject', $2, $3, $3)`, environmentID, s
 	if err != nil || !loaded.Connection.PrivateDataEnabled {
 		t.Fatalf("loaded private consent = %#v, error=%v", loaded.Connection, err)
 	}
-	rollbackProbe := errors.New("rollback read probe")
 	err = appdb.InTx(ctx, apiPool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
 		if _, err := tx.Exec(txctx, `UPDATE provider_connections SET external_account_id='uncommitted' WHERE id=$1`, connectionID); err != nil {
 			return err
@@ -242,6 +284,42 @@ FROM provider_connections WHERE id = $1`, connectionID).Scan(&credentialColumnsN
 	workerStore, err := integrationstore.NewWithPGXPool(workerDB, workerPool)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if err := generatedStore.SaveSyncJob(ctx, transactionJob); err != nil {
+		t.Fatalf("prepare worker sync claim: %v", err)
+	}
+	err = appdb.InTx(ctx, workerPool, appdb.RetryOptions{}, func(txctx context.Context, _ pgx.Tx) error {
+		token, claimed, err := workerStore.ClaimSyncJob(txctx, transactionJobID, now.Add(time.Second), now.Add(time.Minute))
+		if err != nil || !claimed || token == "" {
+			return fmt.Errorf("transactional sync claim = (%q, %t, %v)", token, claimed, err)
+		}
+		return rollbackProbe
+	})
+	if !errors.Is(err, rollbackProbe) {
+		t.Fatalf("rollback worker sync claim = %v", err)
+	}
+	var syncClaimStatus string
+	if err := db.QueryRowContext(ctx, `SELECT status FROM provider_sync_jobs WHERE id=$1`, transactionJobID).Scan(&syncClaimStatus); err != nil || syncClaimStatus != "queued" {
+		t.Fatalf("sync claim after rollback = (%q, %v)", syncClaimStatus, err)
+	}
+	claimToken, syncClaimed, err := workerStore.ClaimSyncJob(ctx, transactionJobID, now.Add(time.Second), now.Add(time.Minute))
+	if err != nil || !syncClaimed || claimToken == "" {
+		t.Fatalf("worker sync claim = (%q, %t, %v)", claimToken, syncClaimed, err)
+	}
+	completedJob := transactionJob
+	completedJob.Status = integrations.SyncJobSucceeded
+	completedAt := now.Add(2 * time.Second)
+	completedJob.FinishedAt = &completedAt
+	completedJob.UpdatedAt = completedAt
+	if err := workerStore.CompleteClaimedSyncJob(ctx, completedJob, "00000000-0000-4000-8000-000000000000"); !errors.Is(err, integrations.ErrSyncAlreadyRunning) {
+		t.Fatalf("wrong sync completion claim = %v", err)
+	}
+	if err := workerStore.CompleteClaimedSyncJob(ctx, completedJob, claimToken); err != nil {
+		t.Fatalf("complete worker sync job: %v", err)
+	}
+	completed, err := generatedStore.GetSyncJob(ctx, transactionJobID)
+	if err != nil || completed.Status != integrations.SyncJobSucceeded {
+		t.Fatalf("completed sync job = (%+v, %v)", completed, err)
 	}
 	workerRecord := record
 	workerRecord.Connection.ExternalAccountID = ""

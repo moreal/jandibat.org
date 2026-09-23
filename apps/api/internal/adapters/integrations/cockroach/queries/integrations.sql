@@ -354,6 +354,100 @@ RETURNING id::STRING AS id, COALESCE(connection_id::STRING, '') AS connection_id
 DELETE FROM provider_token_revocation_jobs
 WHERE id = $1::UUID AND status = 'processing' AND claim_token = $2::UUID;
 
+-- @name DeleteExpiredSyncReservation
+-- @returns :exec
+DELETE FROM provider_sync_jobs
+WHERE provider_connection_id = $1::UUID AND idempotency_key_hash = $2::BYTES
+  AND idempotency_expires_at <= $3::TIMESTAMPTZ;
+
+-- @name UpsertSyncJob
+-- @returns :exec_result
+INSERT INTO provider_sync_jobs (
+  id, provider_connection_id, subject_id, environment_id, status,
+  date_from, date_to, attempt, max_attempts, available_at,
+  started_at, finished_at, idempotency_key_hash, request_hash,
+  idempotency_expires_at, last_error, created_at, updated_at
+)
+SELECT $1::UUID, id, subject_id, environment_id, $3::STRING,
+  NULLIF($4::STRING, '')::DATE, NULLIF($5::STRING, '')::DATE,
+  $6::INT4, $7::INT4, $8::TIMESTAMPTZ,
+  NULLIF($9::STRING, '')::TIMESTAMPTZ,
+  NULLIF($10::STRING, '')::TIMESTAMPTZ,
+  $11::BYTES, $12::BYTES,
+  NULLIF($13::STRING, '')::TIMESTAMPTZ,
+  $14::STRING, $15::TIMESTAMPTZ, $16::TIMESTAMPTZ
+FROM provider_connections WHERE id = $2::UUID
+ON CONFLICT (id) DO UPDATE SET
+  status = excluded.status,
+  date_from = excluded.date_from,
+  date_to = excluded.date_to,
+  attempt = excluded.attempt,
+  max_attempts = excluded.max_attempts,
+  available_at = excluded.available_at,
+  started_at = excluded.started_at,
+  finished_at = excluded.finished_at,
+  idempotency_key_hash = excluded.idempotency_key_hash,
+  request_hash = excluded.request_hash,
+  idempotency_expires_at = excluded.idempotency_expires_at,
+  last_error = excluded.last_error,
+  created_at = excluded.created_at,
+  updated_at = excluded.updated_at;
+
+-- @name GetSyncJobByID
+-- @returns :opt
+SELECT id::STRING AS id, provider_connection_id::STRING AS connection_id,
+  date_from::STRING AS date_from, date_to::STRING AS date_to,
+  status, attempt, available_at, started_at, finished_at,
+  COALESCE(last_error, '{}') AS payload, created_at, updated_at
+FROM provider_sync_jobs WHERE id = $1::UUID;
+
+-- @name ListSyncJobs
+-- @returns :many
+SELECT id::STRING AS id, provider_connection_id::STRING AS connection_id,
+  date_from::STRING AS date_from, date_to::STRING AS date_to,
+  status, attempt, available_at, started_at, finished_at,
+  COALESCE(last_error, '{}') AS payload, created_at, updated_at
+FROM provider_sync_jobs
+WHERE ($1::STRING = '' OR provider_connection_id::STRING = $1::STRING)
+ORDER BY created_at, id;
+
+-- @name GetSyncJobByIdempotency
+-- @returns :opt
+SELECT id::STRING AS id, provider_connection_id::STRING AS connection_id,
+  date_from::STRING AS date_from, date_to::STRING AS date_to,
+  status, attempt, available_at, started_at, finished_at,
+  COALESCE(last_error, '{}') AS payload, created_at, updated_at
+FROM provider_sync_jobs
+WHERE provider_connection_id = $1::UUID
+  AND idempotency_key_hash = $2::BYTES
+  AND idempotency_expires_at > $3::TIMESTAMPTZ
+ORDER BY created_at DESC, id DESC LIMIT 1;
+
+-- @name ListClaimableSyncJobs
+-- @returns :many
+SELECT id::STRING AS id FROM provider_sync_jobs
+WHERE (status = 'queued' AND available_at <= $1::TIMESTAMPTZ)
+   OR (status = 'running' AND lease_expires_at <= $1::TIMESTAMPTZ)
+ORDER BY available_at, id LIMIT $2::INT8;
+
+-- @name ClaimSyncJob
+-- @returns :opt
+UPDATE provider_sync_jobs
+SET status = 'running', started_at = $2::TIMESTAMPTZ, updated_at = $2::TIMESTAMPTZ,
+  claim_token = gen_random_uuid(), lease_expires_at = $3::TIMESTAMPTZ
+WHERE id = $1::UUID
+  AND ((status = 'queued' AND available_at <= $2::TIMESTAMPTZ)
+    OR (status = 'running' AND lease_expires_at <= $2::TIMESTAMPTZ))
+RETURNING claim_token::STRING AS claim_token;
+
+-- @name CompleteClaimedSyncJob
+-- @returns :exec_result
+UPDATE provider_sync_jobs
+SET status = $3::STRING, finished_at = NULLIF($4::STRING, '')::TIMESTAMPTZ,
+  available_at = $5::TIMESTAMPTZ, last_error = $6::STRING,
+  updated_at = $7::TIMESTAMPTZ, claim_token = NULL, lease_expires_at = NULL
+WHERE id = $1::UUID AND claim_token = $2::UUID AND status = 'running';
+
 -- @name RetryOAuthTokenRevocation
 -- @returns :exec_result
 UPDATE provider_token_revocation_jobs

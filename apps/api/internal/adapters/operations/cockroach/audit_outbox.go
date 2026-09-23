@@ -23,14 +23,20 @@ var (
 
 func (store *Store) CheckMutationAuditOutboxSchema(ctx context.Context) error {
 	var columns int
-	err := store.db.QueryRowContext(ctx, `SELECT count(*) FROM information_schema.columns
+	query := `SELECT count(*) FROM information_schema.columns
 WHERE table_schema = current_schema() AND table_name = 'mutation_audit_outbox'
 AND column_name IN (
   'id','audit_event_id','request_id','occurred_at','actor_type','actor_id',
   'action','target_type','target_id','outcome','metadata','status','attempts',
   'available_at','lease_until','claim_token','created_at','updated_at',
   'delivered_at','terminal_at','terminal_reason'
-)`).Scan(&columns)
+)`
+	var err error
+	if store.pool != nil {
+		err = appdb.PGXExecutorFor(ctx, store.pool).QueryRow(ctx, query).Scan(&columns)
+	} else {
+		err = store.db.QueryRowContext(ctx, query).Scan(&columns)
+	}
 	if err != nil {
 		return err
 	}

@@ -160,7 +160,13 @@ func NewWithPGXPool(db *sql.DB, pool *pgxpool.Pool, extraSensitiveAuditKeys ...s
 // Check implements operations.DependencyProbe.
 func (store *Store) Check(ctx context.Context) error {
 	var columns int
-	if err := store.db.QueryRowContext(ctx, validateOperationsSchemaQuery).Scan(&columns); err != nil {
+	var err error
+	if store.pool != nil {
+		err = appdb.PGXExecutorFor(ctx, store.pool).QueryRow(ctx, validateOperationsSchemaQuery).Scan(&columns)
+	} else {
+		err = store.db.QueryRowContext(ctx, validateOperationsSchemaQuery).Scan(&columns)
+	}
+	if err != nil {
 		return fmt.Errorf("check operations schema: %w", err)
 	}
 	if columns != requiredOperationsSchemaColumns {

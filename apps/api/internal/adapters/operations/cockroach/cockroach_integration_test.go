@@ -2139,6 +2139,37 @@ target_type, target_id, approval_ref, reason, expires_at, created_at
 	}
 }
 
+func TestCockroachOperationsSchemaChecksUsePGXPool(t *testing.T) {
+	dsn := os.Getenv("JANDIBAT_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("set JANDIBAT_TEST_DATABASE_URL to a migrated CockroachDB")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	store := &Store{pool: pool}
+	if err := store.Check(ctx); err != nil {
+		t.Fatalf("operations schema check through pgx pool: %v", err)
+	}
+	if err := store.CheckMutationAuditOutboxSchema(ctx); err != nil {
+		t.Fatalf("mutation audit schema check through pgx pool: %v", err)
+	}
+	if workerDSN := os.Getenv("JANDIBAT_TEST_WORKER_DATABASE_URL"); workerDSN != "" {
+		workerPool, err := pgxpool.New(ctx, workerDSN)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(workerPool.Close)
+		if err := (&Store{pool: workerPool}).CheckMutationAuditOutboxSchema(ctx); err != nil {
+			t.Fatalf("worker-role mutation audit schema check: %v", err)
+		}
+	}
+}
+
 func TestCockroachRetentionPurgeJoinsPGXTransaction(t *testing.T) {
 	dsn := os.Getenv("JANDIBAT_TEST_DATABASE_URL")
 	maintenanceDSN := os.Getenv("JANDIBAT_TEST_MAINTENANCE_DATABASE_URL")

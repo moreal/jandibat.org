@@ -50,6 +50,14 @@ type durationKey struct {
 	route, method string
 }
 
+type graphQLKey struct {
+	operationType, operationName, outcome string
+}
+
+type graphQLDurationKey struct {
+	operationType, operationName string
+}
+
 type providerKey struct {
 	provider, outcome string
 }
@@ -115,6 +123,8 @@ type Registry struct {
 	resource          Resource
 	http              map[httpKey]uint64
 	duration          map[durationKey]*histogram
+	graphQL           map[graphQLKey]uint64
+	graphQLDuration   map[graphQLDurationKey]*histogram
 	provider          map[providerKey]uint64
 	providerDuration  map[string]*histogram
 	syncJobs          map[syncJobKey]uint64
@@ -143,6 +153,8 @@ func NewRegistry(resource Resource) *Registry {
 		resource:          normalizeResource(resource),
 		http:              make(map[httpKey]uint64),
 		duration:          make(map[durationKey]*histogram),
+		graphQL:           make(map[graphQLKey]uint64),
+		graphQLDuration:   make(map[graphQLDurationKey]*histogram),
 		provider:          make(map[providerKey]uint64),
 		providerDuration:  make(map[string]*histogram),
 		syncJobs:          make(map[syncJobKey]uint64),
@@ -185,6 +197,24 @@ func (registry *Registry) ObserveHTTP(route, method string, status int, elapsed 
 	registry.mu.Lock()
 	registry.http[key]++
 	observeHistogram(registry.duration, duration, elapsed.Seconds())
+	registry.mu.Unlock()
+}
+
+// ObserveGraphQL records one GraphQL operation. Only shipped static operation
+// names receive a distinct label; client-selected names, query text, and
+// variables never enter the metric dimensions.
+func (registry *Registry) ObserveGraphQL(operationType, operationName, outcome string, elapsed time.Duration) {
+	if registry == nil {
+		return
+	}
+	operationType = boundedValue(operationType, []string{"query", "mutation"}, "other")
+	operationName = boundedValue(operationName, []string{"GraphQLContractQuery"}, "other")
+	outcome = boundedValue(outcome, []string{"succeeded", "failed", "rejected"}, "unknown")
+	key := graphQLKey{operationType: operationType, operationName: operationName, outcome: outcome}
+	duration := graphQLDurationKey{operationType: operationType, operationName: operationName}
+	registry.mu.Lock()
+	registry.graphQL[key]++
+	observeHistogram(registry.graphQLDuration, duration, max(0, elapsed.Seconds()))
 	registry.mu.Unlock()
 }
 
@@ -511,6 +541,8 @@ func (registry *Registry) writePrometheus(ctx context.Context, output io.Writer)
 	resource := registry.resource
 	httpCounts := cloneMap(registry.http)
 	durations := cloneHistograms(registry.duration)
+	graphQLCounts := cloneMap(registry.graphQL)
+	graphQLDurations := cloneHistograms(registry.graphQLDuration)
 	providerCounts := cloneMap(registry.provider)
 	providerDurations := cloneStringHistograms(registry.providerDuration)
 	syncJobs := cloneMap(registry.syncJobs)
@@ -596,6 +628,14 @@ func (registry *Registry) writePrometheus(ctx context.Context, output io.Writer)
 	writer.family("http_server_request_duration_seconds", "HTTP handler duration in seconds.", "histogram")
 	for _, key := range sortedDurationKeys(durations) {
 		writer.histogram("http_server_request_duration_seconds", labels{{"route", key.route}, {"method", key.method}}, durations[key])
+	}
+	writer.family("graphql_operations_total", "Total GraphQL operations by bounded type, static name, and outcome.", "counter")
+	for _, key := range sortedGraphQLKeys(graphQLCounts) {
+		writer.sample("graphql_operations_total", labels{{"operation_type", key.operationType}, {"operation_name", key.operationName}, {"outcome", key.outcome}}, float64(graphQLCounts[key]))
+	}
+	writer.family("graphql_operation_duration_seconds", "GraphQL operation duration in seconds.", "histogram")
+	for _, key := range sortedGraphQLDurationKeys(graphQLDurations) {
+		writer.histogram("graphql_operation_duration_seconds", labels{{"operation_type", key.operationType}, {"operation_name", key.operationName}}, graphQLDurations[key])
 	}
 	writer.family("provider_requests_total", "Total outbound provider requests.", "counter")
 	for _, key := range sortedProviderKeys(providerCounts) {
@@ -955,6 +995,24 @@ func sortedHTTPKeys(values map[httpKey]uint64) []httpKey {
 func sortedDurationKeys(values map[durationKey]histogram) []durationKey {
 	keys := mapKeys(values)
 	sort.Slice(keys, func(i, j int) bool { return keys[i].route+keys[i].method < keys[j].route+keys[j].method })
+	return keys
+}
+
+func sortedGraphQLKeys(values map[graphQLKey]uint64) []graphQLKey {
+	keys := mapKeys(values)
+	sort.Slice(keys, func(i, j int) bool {
+		return fmt.Sprint(keys[i].operationType, keys[i].operationName, keys[i].outcome) <
+			fmt.Sprint(keys[j].operationType, keys[j].operationName, keys[j].outcome)
+	})
+	return keys
+}
+
+func sortedGraphQLDurationKeys(values map[graphQLDurationKey]histogram) []graphQLDurationKey {
+	keys := mapKeys(values)
+	sort.Slice(keys, func(i, j int) bool {
+		return fmt.Sprint(keys[i].operationType, keys[i].operationName) <
+			fmt.Sprint(keys[j].operationType, keys[j].operationName)
+	})
 	return keys
 }
 

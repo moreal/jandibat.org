@@ -626,6 +626,50 @@ func TestCockroachMaintenanceDeletionRequestJoinsPGXTransaction(t *testing.T) {
 	}
 }
 
+func TestCockroachDeletionResidualsSeeUncommittedPGXState(t *testing.T) {
+	dsn := os.Getenv("JANDIBAT_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("set JANDIBAT_TEST_DATABASE_URL")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pool.Close(); _ = db.Close() })
+	store, err := NewWithPGXPool(db, pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unique := strings.ReplaceAll(time.Now().UTC().Format("150405.000000000"), ".", "")
+	userID, subjectID := "scythe-residual-user-"+unique, "scythe-residual-subject-"+unique
+	request := operations.DeletionRequest{
+		TargetType: operations.DeletionTargetAccount, TargetID: userID, SubjectIDs: []string{subjectID},
+	}
+	rollback := errors.New("rollback residual fixture")
+	err = appdb.InTx(ctx, pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
+		if _, err := tx.Exec(txctx, `INSERT INTO users (id,primary_email,status) VALUES ($1,$2,'active')`, userID, unique+"@example.invalid"); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(txctx, `INSERT INTO subjects (id,owner_user_id,handle,timezone) VALUES ($1,$2,$3,'UTC')`, subjectID, userID, "residual-"+unique); err != nil {
+			return err
+		}
+		residuals, err := store.VerifyDeletion(txctx, request)
+		if err != nil || residuals.Subjects != 1 || residuals.Total() != 1 {
+			return fmt.Errorf("transactional residuals=%+v err=%v", residuals, err)
+		}
+		return rollback
+	})
+	if !errors.Is(err, rollback) {
+		t.Fatalf("residual fixture rollback = %v", err)
+	}
+}
+
 func TestCockroachOperationsSchemaReadiness(t *testing.T) {
 	dsn := os.Getenv("JANDIBAT_TEST_DATABASE_URL")
 	if dsn == "" {

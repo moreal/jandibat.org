@@ -633,6 +633,21 @@ func (store *Store) DeletePrimaryData(ctx context.Context, request operations.De
 }
 
 func (store *Store) VerifyDeletion(ctx context.Context, request operations.DeletionRequest) (operations.DeletionResiduals, error) {
+	if store.pool != nil {
+		row, err := generated.CountDeletionResiduals(ctx, appdb.PGXExecutorFor(ctx, store.pool),
+			accountTargetID(request), request.SubjectIDs)
+		if err != nil {
+			return operations.DeletionResiduals{}, fmt.Errorf("verify deletion: %w", err)
+		}
+		return operations.DeletionResiduals{
+			Subjects: row.Subjects, Passkeys: row.Passkeys, Sessions: row.Sessions,
+			MagicLinks: row.MagicLinks, AuthChallenges: row.AuthChallenges,
+			ProviderConnections: row.ProviderConnections, PrivateConsents: row.PrivateConsents,
+			CustomProviders: row.CustomProviders, ActivityFacts: row.ActivityFacts,
+			TimelineCache: row.TimelineCache, ActivityRefresh: row.ActivityRefresh,
+			ProviderSyncJobs: row.ProviderSyncJobs,
+		}, nil
+	}
 	var residuals operations.DeletionResiduals
 	err := store.db.QueryRowContext(ctx, deletionVerificationQuery,
 		accountTargetID(request), request.SubjectIDs).Scan(

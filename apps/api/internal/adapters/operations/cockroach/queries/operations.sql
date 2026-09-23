@@ -38,6 +38,24 @@ SELECT deletion_requests.id::STRING AS id, request_id, target_type, target_id, s
 FROM deletion_requests
 WHERE request_id = $1::STRING;
 
+-- @name CountDeletionResiduals
+-- @returns :one
+SELECT
+  (SELECT count(*) FROM subjects WHERE owner_user_id = $1::STRING) AS subjects,
+  (SELECT count(*) FROM user_passkeys WHERE user_id = $1::STRING) AS passkeys,
+  (SELECT count(*) FROM user_sessions WHERE user_id = $1::STRING) AS sessions,
+  (SELECT count(*) FROM magic_link_tokens WHERE user_id = $1::STRING) AS magic_links,
+  (SELECT count(*) FROM auth_challenges WHERE user_id = $1::STRING OR payload->>'SubjectID' = ANY($2::STRING[])) AS auth_challenges,
+  (SELECT count(*) FROM provider_connections WHERE subject_id = ANY($2::STRING[])) AS provider_connections,
+  (SELECT count(*) FROM provider_connection_private_consents WHERE connection_id IN (
+    SELECT id FROM provider_connections WHERE subject_id = ANY($2::STRING[])
+  )) AS private_consents,
+  (SELECT count(*) FROM custom_providers WHERE subject_id = ANY($2::STRING[])) AS custom_providers,
+  (SELECT count(*) FROM activity_facts WHERE subject_id = ANY($2::STRING[])) AS activity_facts,
+  (SELECT count(*) FROM timeline_cache WHERE subject_id = ANY($2::STRING[])) AS timeline_cache,
+  (SELECT count(*) FROM activity_refresh_cache WHERE subject_id = ANY($2::STRING[])) AS activity_refresh,
+  (SELECT count(*) FROM provider_sync_jobs WHERE subject_id = ANY($2::STRING[])) AS provider_sync_jobs;
+
 -- @name InsertDeletionInboxIfAbsent
 -- @returns :exec
 INSERT INTO deletion_request_inbox (request_id, target_type, target_id, requested_at)

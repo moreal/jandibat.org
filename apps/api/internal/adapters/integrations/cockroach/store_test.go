@@ -290,10 +290,13 @@ func TestScanCustomProvider(t *testing.T) {
 	if !reflect.DeepEqual(args, []any{"subject-1"}) {
 		t.Fatalf("custom provider list args = %#v", args)
 	}
-	for _, fragment := range []string{"ORDER BY subject_id, slug, id", "configuration = COALESCE", "ingest_token_hash"} {
+	for _, fragment := range []string{"ORDER BY provider.subject_id, provider.slug, provider.id", "configuration = COALESCE", "secrets.ingest_token_hash"} {
 		if !strings.Contains(upsertCustomProviderQuery+listQuery, fragment) {
 			t.Errorf("custom provider SQL missing %q", fragment)
 		}
+	}
+	if !strings.Contains(upsertCustomProviderSecretQuery, "INSERT INTO custom_provider_secrets") {
+		t.Fatal("provider digest must be written to the restricted table")
 	}
 }
 

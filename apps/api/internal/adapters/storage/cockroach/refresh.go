@@ -2,12 +2,12 @@ package cockroach
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	generated "github.com/moreal/jandibat.org/apps/api/internal/adapters/storage/cockroach/generated"
 	application "github.com/moreal/jandibat.org/apps/api/internal/application/activity"
 	domain "github.com/moreal/jandibat.org/apps/api/internal/domain/activity"
 )
@@ -17,31 +17,10 @@ var (
 	ErrEnvironmentOutside = errors.New("cockroach: fact environment is outside replacement set")
 )
 
-const (
-	loadCachedAtQuery = `
-SELECT fetched_at
-FROM activity_refresh_cache
-WHERE subject_id = $1 AND environment_id = $2 AND activity_date = $3`
-
-	upsertCachedAtQuery = `
-INSERT INTO activity_refresh_cache (
-  subject_id, environment_id, activity_date, fetched_at, updated_at
-) VALUES ($1, $2, $3, $4, now())
-ON CONFLICT (subject_id, environment_id, activity_date) DO UPDATE SET
-  fetched_at = excluded.fetched_at,
-  updated_at = excluded.updated_at`
-)
-
 var _ application.Store = (*Store)(nil)
 
-// ReplaceFacts atomically replaces only the selected date range and
-// environments. An empty environment list selects all environments.
-func (s *Store) ReplaceFacts(
-	ctx context.Context,
-	filter domain.LoadFactsInput,
-	environmentIDs []domain.EnvironmentID,
-	facts []domain.Fact,
-) error {
+// ReplaceFacts replaces a range and an optional environment set atomically.
+func (s *Store) ReplaceFacts(ctx context.Context, filter domain.LoadFactsInput, environmentIDs []domain.EnvironmentID, facts []domain.Fact) error {
 	if filter.Subject == "" {
 		return domain.ErrEmptySubject
 	}
@@ -62,123 +41,100 @@ func (s *Store) ReplaceFacts(
 			}
 		}
 	}
-
-	ctx, scope, err := s.beginMutation(ctx)
+	from, to, err := factDateBounds(filter)
 	if err != nil {
-		return fmt.Errorf("cockroach: begin replacement transaction: %w", err)
+		return err
 	}
-	tx := scope.Tx
-	defer func() { _ = scope.Rollback() }()
-	if len(facts) != 0 {
-		if err := ensurePublicSubject(ctx, tx, filter.Subject); err != nil {
-			return err
+	ids := make([]string, len(environmentIDs))
+	for index, id := range environmentIDs {
+		ids[index] = string(id)
+	}
+	return s.inTx(ctx, func(txctx context.Context, tx pgx.Tx) error {
+		if len(facts) != 0 {
+			if err := generated.EnsurePublicSubject(txctx, tx, string(filter.Subject)); err != nil {
+				return fmt.Errorf("cockroach: ensure public subject: %w", err)
+			}
 		}
-	}
-
-	deleteQuery, deleteArgs := buildDeleteFactsQuery(filter, environmentIDs)
-	if _, err := tx.ExecContext(ctx, deleteQuery, deleteArgs...); err != nil {
-		return fmt.Errorf("cockroach: delete replaced facts: %w", err)
-	}
-	for _, fact := range facts {
-		if err := upsertFact(ctx, tx, fact, nil); err != nil {
-			return err
+		if err := generated.DeleteFactsInRange(txctx, tx, string(filter.Subject), from, to, len(ids) == 0, ids); err != nil {
+			return fmt.Errorf("cockroach: delete replaced facts: %w", err)
 		}
-	}
-
-	if err := scope.Commit(); err != nil {
-		return fmt.Errorf("cockroach: commit replacement transaction: %w", err)
-	}
-	return nil
+		for _, fact := range facts {
+			if err := upsertFactGenerated(txctx, tx, fact, ""); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
-func (s *Store) LoadCachedAt(
-	ctx context.Context,
-	subject domain.SubjectID,
-	environmentID domain.EnvironmentID,
-	date domain.Date,
-) (*time.Time, error) {
-	var fetchedAt time.Time
-	err := s.db.QueryRowContext(ctx, loadCachedAtQuery, subject, environmentID, date).Scan(&fetchedAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
+func factDateBounds(filter domain.LoadFactsInput) (time.Time, time.Time, error) {
+	from := time.Date(1, time.January, 1, 0, 0, 0, 0, time.UTC)
+	to := time.Date(9999, time.December, 31, 0, 0, 0, 0, time.UTC)
+	var err error
+	if filter.From != nil {
+		from, err = time.Parse(time.DateOnly, string(*filter.From))
+		if err != nil {
+			return time.Time{}, time.Time{}, fmt.Errorf("cockroach: parse from date: %w", err)
+		}
 	}
+	if filter.To != nil {
+		to, err = time.Parse(time.DateOnly, string(*filter.To))
+		if err != nil {
+			return time.Time{}, time.Time{}, fmt.Errorf("cockroach: parse to date: %w", err)
+		}
+	}
+	return from, to, nil
+}
+
+func (s *Store) LoadCachedAt(ctx context.Context, subject domain.SubjectID, environmentID domain.EnvironmentID, date domain.Date) (*time.Time, error) {
+	parsed, err := time.Parse(time.DateOnly, string(date))
+	if err != nil {
+		return nil, fmt.Errorf("cockroach: parse cache date: %w", err)
+	}
+	row, err := generated.GetCachedAt(ctx, s.executor(ctx), string(subject), string(environmentID), parsed)
 	if err != nil {
 		return nil, fmt.Errorf("cockroach: load refresh timestamp: %w", err)
 	}
-	return &fetchedAt, nil
+	if row == nil {
+		return nil, nil
+	}
+	return &row.FetchedAt, nil
 }
 
-func (s *Store) SaveCachedAt(
-	ctx context.Context,
-	subject domain.SubjectID,
-	environmentID domain.EnvironmentID,
-	dates []domain.Date,
-	at time.Time,
-) error {
+func (s *Store) SaveCachedAt(ctx context.Context, subject domain.SubjectID, environmentID domain.EnvironmentID, dates []domain.Date, at time.Time) error {
 	if len(dates) == 0 {
 		return nil
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("cockroach: begin refresh-cache transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-	for _, date := range dates {
-		if _, err := tx.ExecContext(ctx, upsertCachedAtQuery, subject, environmentID, date, at); err != nil {
-			return fmt.Errorf("cockroach: save refresh timestamp: %w", err)
+	return s.inTx(ctx, func(txctx context.Context, tx pgx.Tx) error {
+		for _, date := range dates {
+			parsed, err := time.Parse(time.DateOnly, string(date))
+			if err != nil {
+				return fmt.Errorf("cockroach: parse cache date: %w", err)
+			}
+			if err := generated.UpsertCachedAt(txctx, tx, string(subject), string(environmentID), parsed, at); err != nil {
+				return fmt.Errorf("cockroach: save refresh timestamp: %w", err)
+			}
 		}
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("cockroach: commit refresh-cache transaction: %w", err)
-	}
-	return nil
+		return nil
+	})
 }
 
-func (s *Store) DeleteCachedAt(
-	ctx context.Context,
-	subject domain.SubjectID,
-	environmentID domain.EnvironmentID,
-	dates []domain.Date,
-) error {
+func (s *Store) DeleteCachedAt(ctx context.Context, subject domain.SubjectID, environmentID domain.EnvironmentID, dates []domain.Date) error {
 	if len(dates) == 0 {
 		return nil
 	}
-	placeholders := make([]string, len(dates))
-	args := make([]any, 0, len(dates)+2)
-	args = append(args, subject, environmentID)
-	for i, date := range dates {
-		args = append(args, date)
-		placeholders[i] = fmt.Sprintf("$%d", i+3)
+	parsed := make([]time.Time, len(dates))
+	for index, date := range dates {
+		value, err := time.Parse(time.DateOnly, string(date))
+		if err != nil {
+			return fmt.Errorf("cockroach: parse cache date: %w", err)
+		}
+		parsed[index] = value
 	}
-	query := `DELETE FROM activity_refresh_cache
-WHERE subject_id = $1 AND environment_id = $2 AND activity_date IN (` + strings.Join(placeholders, ", ") + ")"
-	if _, err := s.db.ExecContext(ctx, query, args...); err != nil {
+	if err := generated.DeleteCachedAt(ctx, s.executor(ctx), string(subject), string(environmentID), parsed); err != nil {
 		return fmt.Errorf("cockroach: delete refresh timestamps: %w", err)
 	}
 	return nil
-}
-
-func buildDeleteFactsQuery(filter domain.LoadFactsInput, environmentIDs []domain.EnvironmentID) (string, []any) {
-	var query strings.Builder
-	query.WriteString(deleteFactsBySubjectQuery)
-	args := []any{filter.Subject}
-	if filter.From != nil {
-		args = append(args, *filter.From)
-		fmt.Fprintf(&query, "\n  AND activity_date >= $%d", len(args))
-	}
-	if filter.To != nil {
-		args = append(args, *filter.To)
-		fmt.Fprintf(&query, "\n  AND activity_date <= $%d", len(args))
-	}
-	if len(environmentIDs) > 0 {
-		placeholders := make([]string, len(environmentIDs))
-		for i, id := range environmentIDs {
-			args = append(args, id)
-			placeholders[i] = fmt.Sprintf("$%d", len(args))
-		}
-		query.WriteString("\n  AND environment_id IN (" + strings.Join(placeholders, ", ") + ")")
-	}
-	return query.String(), args
 }
 
 func dateInRange(date domain.Date, from, to *domain.Date) bool {

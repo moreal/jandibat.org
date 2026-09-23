@@ -413,7 +413,7 @@ func buildStores(ctx context.Context, settings config.Config) (databaseStores, e
 		return databaseStores{}, err
 	}
 	db := database.DB
-	activityPersistence, err := activitystore.New(db)
+	activityPersistence, err := activitystore.New(database.Pool)
 	if err != nil {
 		_ = database.Close()
 		return databaseStores{}, fmt.Errorf("runtime: construct activity store: %w", err)

@@ -1204,9 +1204,12 @@ id, subject_id, environment_id, auth_method, status
 	} {
 		ingestTokenHash := sha256.Sum256([]byte("orphan-ref-" + fixture.id))
 		if _, err := db.ExecContext(ctx, `INSERT INTO custom_providers (
-id, owner_user_id, subject_id, environment_id, slug, name, ingest_token_hash
-) VALUES ($1::UUID, $2, $3, $4, $5, $5, $6)`, fixture.id, freeUser, freeSubject, fixture.environmentID,
-			"orphan-ref-"+suffix+string(rune('a'+index)), ingestTokenHash[:]); err != nil {
+id, owner_user_id, subject_id, environment_id, slug, name
+) VALUES ($1::UUID, $2, $3, $4, $5, $5)`, fixture.id, freeUser, freeSubject, fixture.environmentID,
+			"orphan-ref-"+suffix+string(rune('a'+index))); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(ctx, `INSERT INTO custom_provider_secrets (provider_id, ingest_token_hash) VALUES ($1::UUID, $2::BYTES)`, fixture.id, ingestTokenHash[:]); err != nil {
 			t.Fatal(err)
 		}
 	}

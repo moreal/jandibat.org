@@ -11,19 +11,20 @@ import (
 )
 
 const customProviderColumns = `
-id::STRING, subject_id, environment_id, slug, name, COALESCE(description, ''),
-status, configuration, ingest_token_hash, created_at, updated_at`
+provider.id::STRING, provider.subject_id, provider.environment_id, provider.slug,
+provider.name, COALESCE(provider.description, ''), provider.status,
+provider.configuration, secrets.ingest_token_hash, provider.created_at, provider.updated_at`
 
 const upsertCustomProviderQuery = `
 INSERT INTO custom_providers (
   id, owner_user_id, subject_id, environment_id, slug, name, description,
-  status, ingest_token_hash, configuration, created_at, updated_at
+  status, configuration, created_at, updated_at
 )
-SELECT $1::UUID, owner_user_id, $2, $3, $4, $5, NULLIF($6, ''), $7, $8,
+SELECT $1::UUID, owner_user_id, $2, $3, $4, $5, NULLIF($6, ''), $7,
   jsonb_build_object(
-    'allowed_actions', $9::JSONB,
-    'allowed_metrics', $10::JSONB
-  ), $11, $12
+    'allowed_actions', $8::JSONB,
+    'allowed_metrics', $9::JSONB
+  ), $10, $11
 FROM subjects WHERE id = $2 AND owner_user_id IS NOT NULL
 ON CONFLICT (id) DO UPDATE SET
   environment_id = excluded.environment_id,
@@ -31,7 +32,6 @@ ON CONFLICT (id) DO UPDATE SET
   name = excluded.name,
   description = excluded.description,
   status = excluded.status,
-  ingest_token_hash = excluded.ingest_token_hash,
   configuration = COALESCE(custom_providers.configuration, '{}'::JSONB)
     || excluded.configuration,
   created_at = excluded.created_at,
@@ -40,21 +40,26 @@ ON CONFLICT (id) DO UPDATE SET
 const createCustomProviderQuery = `
 INSERT INTO custom_providers (
   id, owner_user_id, subject_id, environment_id, slug, name, description,
-  status, ingest_token_hash, configuration, created_at, updated_at
+  status, configuration, created_at, updated_at
 )
-SELECT $1::UUID, owner_user_id, $2, $3, $4, $5, NULLIF($6, ''), $7, $8,
-  jsonb_build_object('allowed_actions', $9::JSONB, 'allowed_metrics', $10::JSONB), $11, $12
+SELECT $1::UUID, owner_user_id, $2, $3, $4, $5, NULLIF($6, ''), $7,
+  jsonb_build_object('allowed_actions', $8::JSONB, 'allowed_metrics', $9::JSONB), $10, $11
 FROM subjects WHERE id = $2 AND owner_user_id IS NOT NULL`
 
 const updateCustomProviderQuery = `
 UPDATE custom_providers
 SET environment_id = $3, slug = $4, name = $5, description = NULLIF($6, ''),
-    status = $7, ingest_token_hash = $8,
+    status = $7,
     configuration = COALESCE(configuration, '{}'::JSONB)
-      || jsonb_build_object('allowed_actions', $9::JSONB, 'allowed_metrics', $10::JSONB),
-	created_at = $11,
-    updated_at = $12
+      || jsonb_build_object('allowed_actions', $8::JSONB, 'allowed_metrics', $9::JSONB),
+	created_at = $10,
+    updated_at = $11
 WHERE id = $1::UUID AND subject_id = $2`
+
+const upsertCustomProviderSecretQuery = `
+INSERT INTO custom_provider_secrets (provider_id, ingest_token_hash)
+VALUES ($1::UUID, $2::BYTES)
+ON CONFLICT (provider_id) DO UPDATE SET ingest_token_hash = excluded.ingest_token_hash`
 
 func (s *Store) SaveCustomProvider(ctx context.Context, record integrations.CustomProviderRecord) error {
 	return s.saveCustomProvider(ctx, upsertCustomProviderQuery, record)
@@ -81,14 +86,15 @@ func (s *Store) saveCustomProvider(ctx context.Context, query string, record int
 	if err != nil {
 		return fmt.Errorf("encode allowed metrics: %w", err)
 	}
-	executor, err := s.mutationExecutor(ctx)
+	ctx, scope, err := s.beginMutation(ctx)
 	if err != nil {
 		return err
 	}
-	result, err := executor.ExecContext(ctx, query,
+	defer scope.Rollback()
+	result, err := scope.Tx.ExecContext(ctx, query,
 		provider.ID, provider.SubjectID, provider.EnvironmentID, provider.Slug,
 		provider.Name, provider.Description, provider.Status,
-		record.EncryptedIngestSecret, actions, metrics,
+		actions, metrics,
 		provider.CreatedAt, provider.UpdatedAt,
 	)
 	if err != nil {
@@ -101,7 +107,10 @@ func (s *Store) saveCustomProvider(ctx context.Context, query string, record int
 	if count == 0 {
 		return notFound("owned subject", provider.SubjectID)
 	}
-	return nil
+	if _, err := scope.Tx.ExecContext(ctx, upsertCustomProviderSecretQuery, provider.ID, record.EncryptedIngestSecret); err != nil {
+		return persistenceError(err, integrations.ErrDuplicateProviderSlug)
+	}
+	return persistenceError(scope.Commit(), integrations.ErrDuplicateProviderSlug)
 }
 
 func (s *Store) DeleteCustomProviderAggregate(ctx context.Context, id string) error {
@@ -139,7 +148,7 @@ func (s *Store) DeleteCustomProviderAggregate(ctx context.Context, id string) er
 }
 
 func (s *Store) GetCustomProvider(ctx context.Context, id string) (integrations.CustomProviderRecord, error) {
-	query := `SELECT ` + customProviderColumns + ` FROM custom_providers WHERE id = $1::UUID`
+	query := `SELECT ` + customProviderColumns + ` FROM custom_providers AS provider JOIN custom_provider_secrets AS secrets ON secrets.provider_id = provider.id WHERE provider.id = $1::UUID`
 	record, err := scanCustomProvider(appdb.ExecutorFor(ctx, s.db).QueryRowContext(ctx, query, id))
 	if err == sql.ErrNoRows {
 		return integrations.CustomProviderRecord{}, notFound("custom provider", id)
@@ -172,13 +181,13 @@ func (s *Store) ListCustomProviders(ctx context.Context, subjectID string) ([]in
 }
 
 func buildListCustomProvidersQuery(subjectID string) (string, []any) {
-	query := `SELECT ` + customProviderColumns + ` FROM custom_providers`
+	query := `SELECT ` + customProviderColumns + ` FROM custom_providers AS provider JOIN custom_provider_secrets AS secrets ON secrets.provider_id = provider.id`
 	args := []any{}
 	if subjectID != "" {
-		query += ` WHERE subject_id = $1`
+		query += ` WHERE provider.subject_id = $1`
 		args = append(args, subjectID)
 	}
-	query += ` ORDER BY subject_id, slug, id`
+	query += ` ORDER BY provider.subject_id, provider.slug, provider.id`
 	return query, args
 }
 

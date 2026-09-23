@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	integrationstore "github.com/moreal/jandibat.org/apps/api/internal/adapters/integrations/cockroach"
 	activitystore "github.com/moreal/jandibat.org/apps/api/internal/adapters/storage/cockroach"
@@ -173,7 +174,12 @@ VALUES ($1, $2, $3, 'UTC', true, now(), now())`, subjectID, userID, handle); err
 	if err != nil {
 		t.Fatal(err)
 	}
-	activityDB, err := activitystore.New(db)
+	activityPool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(activityPool.Close)
+	activityDB, err := activitystore.New(activityPool)
 	if err != nil {
 		t.Fatal(err)
 	}

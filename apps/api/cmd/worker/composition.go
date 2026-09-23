@@ -62,7 +62,7 @@ func buildWorker(ctx context.Context, settings config.Config, logger *zap.Logger
 			_ = database.Close()
 		}
 	}()
-	activity, err := activitystore.New(db)
+	activity, err := activitystore.New(database.Pool)
 	if err != nil {
 		return nil, fmt.Errorf("worker: construct activity store: %w", err)
 	}

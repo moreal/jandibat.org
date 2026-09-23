@@ -110,8 +110,6 @@ CREATE TABLE IF NOT EXISTS custom_providers (
   name STRING NOT NULL,
   description STRING NULL,
   status STRING NOT NULL DEFAULT 'active',
-  ingest_token_hash BYTES NOT NULL UNIQUE,
-  ingest_token_key_id STRING NULL,
   configuration JSONB NOT NULL DEFAULT '{}'::JSONB,
   last_ingested_at TIMESTAMPTZ NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -125,8 +123,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS custom_providers_owner_slug_uq
 CREATE UNIQUE INDEX IF NOT EXISTS custom_providers_subject_environment_uq
   ON custom_providers (subject_id, environment_id);
 
-CREATE INDEX IF NOT EXISTS custom_providers_key_rotation_idx
-  ON custom_providers (ingest_token_key_id, id)
+CREATE TABLE IF NOT EXISTS custom_provider_secrets (
+  provider_id UUID PRIMARY KEY REFERENCES custom_providers(id) ON DELETE CASCADE,
+  ingest_token_hash BYTES NOT NULL UNIQUE,
+  ingest_token_key_id STRING NULL
+);
+
+CREATE INDEX IF NOT EXISTS custom_provider_secrets_key_rotation_idx
+  ON custom_provider_secrets (ingest_token_key_id, provider_id)
   WHERE ingest_token_key_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS provider_connections (

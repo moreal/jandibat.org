@@ -29,6 +29,8 @@ expect_denied() {
 }
 
 sql "$API_DATABASE_URL" "SELECT count(*) FROM subjects" >/dev/null
+sql "$API_DATABASE_URL" "SELECT ingest_token_hash FROM custom_provider_secrets WHERE false" >/dev/null
+sql "$API_DATABASE_URL" "BEGIN; INSERT INTO custom_provider_secrets (provider_id, ingest_token_hash) SELECT id, b'role-verify' FROM custom_providers WHERE false; ROLLBACK" >/dev/null
 sql "$WORKER_DATABASE_URL" "SELECT count(*) FROM subject_settings" >/dev/null
 sql "$MAINTENANCE_DATABASE_URL" "SELECT count(*) FROM provider_connections" >/dev/null
 
@@ -37,6 +39,8 @@ sql "$MAINTENANCE_DATABASE_URL" "BEGIN; INSERT INTO audit_events (id, occurred_a
 sql "$API_DATABASE_URL" "BEGIN; INSERT INTO provider_token_revocation_jobs (connection_id, provider_id, token_ciphertext) SELECT id, 'github', b'role-verify' FROM provider_connections WHERE false; ROLLBACK" >/dev/null
 sql "$WORKER_DATABASE_URL" "SELECT id FROM environments WHERE false" >/dev/null
 sql "$WORKER_DATABASE_URL" "SELECT id FROM activity_facts WHERE false" >/dev/null
+sql "$WORKER_DATABASE_URL" "SELECT id FROM custom_providers WHERE false" >/dev/null
+expect_denied "worker custom provider digest read" "$WORKER_DATABASE_URL" "SELECT ingest_token_hash FROM custom_provider_secrets WHERE false"
 sql "$WORKER_DATABASE_URL" "BEGIN; UPDATE provider_connections SET sync_cursor = sync_cursor, status = status, last_synced_at = last_synced_at, last_error = last_error, updated_at = updated_at WHERE false; ROLLBACK" >/dev/null
 sql "$WORKER_DATABASE_URL" "SELECT count(*) FROM provider_token_revocation_jobs" >/dev/null
 sql "$WORKER_DATABASE_URL" "SELECT count(*) FROM magic_link_mail_outbox" >/dev/null

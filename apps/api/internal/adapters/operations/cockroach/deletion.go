@@ -844,6 +844,33 @@ func (store *Store) persistDeletionIdentityTombstonePGX(ctx context.Context, tx 
 }
 
 func (store *Store) DeletePrimaryData(ctx context.Context, request operations.DeletionRequest, now time.Time) (operations.DeletionRequest, error) {
+	if store.pool != nil && request.TargetType == operations.DeletionTargetSubject {
+		var updated operations.DeletionRequest
+		err := appdb.InTx(ctx, store.pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
+			if err := lockDeletionLeasePGX(txctx, tx, request); err != nil {
+				return err
+			}
+			if err := rejectActiveDeletionHoldPGX(txctx, tx, request, now); err != nil {
+				return err
+			}
+			if err := deleteSubjectPrimaryDataPGX(txctx, tx, request.SubjectIDs); err != nil {
+				return err
+			}
+			count, err := generated.MarkDeletionPrimaryDeleted(txctx, tx, request.RequestID, request.SubjectIDs, now.UTC())
+			if err != nil {
+				return fmt.Errorf("update deletion request: %w", err)
+			}
+			if count != 1 {
+				return operations.ErrDeletionNotFound
+			}
+			updated, err = store.LoadDeletion(txctx, request.RequestID)
+			return err
+		})
+		if err != nil {
+			return request, err
+		}
+		return updated, nil
+	}
 	tx, err := store.db.BeginTx(ctx, nil)
 	if err != nil {
 		return request, fmt.Errorf("delete primary data: begin: %w", err)
@@ -910,6 +937,31 @@ func (store *Store) DeletePrimaryData(ctx context.Context, request operations.De
 		return request, fmt.Errorf("delete primary data: commit: %w", err)
 	}
 	return updated, nil
+}
+
+func deleteSubjectPrimaryDataPGX(ctx context.Context, tx pgx.Tx, subjectIDs []string) error {
+	if len(subjectIDs) == 0 {
+		return nil
+	}
+	steps := []struct {
+		name string
+		run  func() error
+	}{
+		{"sync jobs", func() error { return generated.DeleteSubjectSyncJobs(ctx, tx, subjectIDs) }},
+		{"activity facts", func() error { return generated.DeleteSubjectActivityFacts(ctx, tx, subjectIDs) }},
+		{"timeline cache", func() error { return generated.DeleteSubjectTimelineCache(ctx, tx, subjectIDs) }},
+		{"activity refresh cache", func() error { return generated.DeleteSubjectActivityRefresh(ctx, tx, subjectIDs) }},
+		{"custom providers", func() error { return generated.DeleteSubjectCustomProviders(ctx, tx, subjectIDs) }},
+		{"provider connections", func() error { return generated.DeleteSubjectProviderConnections(ctx, tx, subjectIDs) }},
+		{"subject environments", func() error { return generated.DeleteSubjectEnvironments(ctx, tx, subjectIDs) }},
+		{"subjects", func() error { return generated.DeleteSubjectRows(ctx, tx, subjectIDs) }},
+	}
+	for _, step := range steps {
+		if err := step.run(); err != nil {
+			return fmt.Errorf("delete %s: %w", step.name, err)
+		}
+	}
+	return nil
 }
 
 func (store *Store) VerifyDeletion(ctx context.Context, request operations.DeletionRequest) (operations.DeletionResiduals, error) {

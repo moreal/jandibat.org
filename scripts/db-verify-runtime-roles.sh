@@ -48,6 +48,11 @@ sql "$WORKER_DATABASE_URL" "UPDATE magic_link_mail_outbox SET updated_at = updat
 sql "$WORKER_DATABASE_URL" "DELETE FROM provider_token_revocation_jobs WHERE false" >/dev/null
 sql "$MAINTENANCE_DATABASE_URL" "SELECT count(*) FROM provider_token_revocation_jobs" >/dev/null
 sql "$MAINTENANCE_DATABASE_URL" "UPDATE provider_token_revocation_jobs SET token_key_id = token_key_id WHERE false" >/dev/null
+sql "$MAINTENANCE_DATABASE_URL" "UPDATE activity_facts SET provider_connection_id = provider_connection_id WHERE false" >/dev/null
+sql "$MAINTENANCE_DATABASE_URL" "DELETE FROM provider_connection_private_consents WHERE false" >/dev/null
+sql "$MAINTENANCE_DATABASE_URL" "DELETE FROM subject_settings WHERE false" >/dev/null
+sql "$MAINTENANCE_DATABASE_URL" "DELETE FROM user_settings WHERE false" >/dev/null
+sql "$MAINTENANCE_DATABASE_URL" "DELETE FROM custom_provider_secrets WHERE false" >/dev/null
 sql "$MAINTENANCE_DATABASE_URL" "BEGIN; INSERT INTO maintenance_checkpoints (operation, scope, payload) VALUES ('retention', 'role-verify', '{}'::JSONB); UPDATE maintenance_checkpoints SET payload = '{}'::JSONB WHERE operation = 'retention' AND scope = 'role-verify'; ROLLBACK" >/dev/null
 sql "$MAINTENANCE_DATABASE_URL" "DELETE FROM maintenance_checkpoints WHERE false" >/dev/null
 sql "$MAINTENANCE_DATABASE_URL" "SELECT count(*) FROM legal_holds" >/dev/null

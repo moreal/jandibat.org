@@ -710,6 +710,19 @@ func TestCockroachMaintenanceDeletionRequestJoinsPGXTransaction(t *testing.T) {
 	if err := admin.QueryRowContext(ctx, `SELECT count(*) FROM provider_token_revocation_jobs WHERE connection_id=$1::UUID`, connectionID).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("committed token revocation queue count=%d err=%v", count, err)
 	}
+	err = appdb.InTx(ctx, pool, appdb.RetryOptions{}, func(txctx context.Context, _ pgx.Tx) error {
+		updated, err := store.DeletePrimaryData(txctx, committed, now.Add(6*time.Second))
+		if err != nil || updated.Status != operations.DeletionVerifying {
+			return fmt.Errorf("transactional subject primary deletion status=%s err=%v", updated.Status, err)
+		}
+		return rollback
+	})
+	if !errors.Is(err, rollback) {
+		t.Fatalf("subject primary deletion rollback=%v", err)
+	}
+	if err := admin.QueryRowContext(ctx, `SELECT count(*) FROM subjects WHERE id=$1`, request.TargetID).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("subject primary deletion escaped rollback: count=%d err=%v", count, err)
+	}
 }
 
 func TestCockroachDeletionResidualsSeeUncommittedPGXState(t *testing.T) {
@@ -927,6 +940,55 @@ func TestCockroachMaintenanceAccountCredentialRevocationIsAtomic(t *testing.T) {
 	}
 	if err := admin.QueryRowContext(ctx, `SELECT count(*) FROM magic_link_tokens WHERE email=$1`, email).Scan(&magicLinks); err != nil || magicLinks != 0 {
 		t.Fatalf("committed magic link count=%d err=%v", magicLinks, err)
+	}
+}
+
+func TestCockroachMaintenanceCustomProviderDeleteCascadesSecrets(t *testing.T) {
+	adminDSN := os.Getenv("JANDIBAT_TEST_DATABASE_URL")
+	maintenanceDSN := os.Getenv("JANDIBAT_TEST_MAINTENANCE_DATABASE_URL")
+	if adminDSN == "" || maintenanceDSN == "" {
+		t.Skip("set JANDIBAT_TEST_DATABASE_URL and JANDIBAT_TEST_MAINTENANCE_DATABASE_URL")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	admin, err := sql.Open("pgx", adminDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	maintenance, err := sql.Open("pgx", maintenanceDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = maintenance.Close(); _ = admin.Close() })
+	unique := strings.ReplaceAll(time.Now().UTC().Format("150405.000000000"), ".", "")
+	userID, subjectID, environmentID := "scythe-cascade-user-"+unique, "scythe-cascade-subject-"+unique, "scythe:cascade:env:"+unique
+	providerID := "f57d0f6a-04ae-4e72-b2f3-" + unique[:12]
+	for _, statement := range []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO users (id,primary_email,status) VALUES ($1,$2,'active')`, []any{userID, unique + "-cascade@example.invalid"}},
+		{`INSERT INTO subjects (id,owner_user_id,handle,timezone) VALUES ($1,$2,$3,'UTC')`, []any{subjectID, userID, "cascade-" + unique}},
+		{`INSERT INTO environments (id,key,name,scope,owner_subject_id) VALUES ($1,$1,$1,'subject',$2)`, []any{environmentID, subjectID}},
+		{`INSERT INTO custom_providers (id,owner_user_id,subject_id,environment_id,slug,name) VALUES ($1::UUID,$2,$3,$4,$5,$5)`, []any{providerID, userID, subjectID, environmentID, "cascade-" + unique}},
+		{`INSERT INTO custom_provider_secrets (provider_id,ingest_token_hash) VALUES ($1::UUID,$2)`, []any{providerID, []byte("synthetic-hash-" + unique)}},
+	} {
+		if _, err := admin.ExecContext(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = admin.ExecContext(context.Background(), `DELETE FROM custom_provider_secrets WHERE provider_id=$1::UUID`, providerID)
+		_, _ = admin.ExecContext(context.Background(), `DELETE FROM custom_providers WHERE id=$1::UUID`, providerID)
+		_, _ = admin.ExecContext(context.Background(), `DELETE FROM environments WHERE id=$1`, environmentID)
+		_, _ = admin.ExecContext(context.Background(), `DELETE FROM users WHERE id=$1`, userID)
+	})
+	if _, err := maintenance.ExecContext(ctx, `DELETE FROM custom_providers WHERE id=$1::UUID`, providerID); err != nil {
+		t.Fatalf("maintenance custom provider cascade: %v", err)
+	}
+	var count int
+	if err := admin.QueryRowContext(ctx, `SELECT count(*) FROM custom_provider_secrets WHERE provider_id=$1::UUID`, providerID).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("custom provider secret cascade count=%d err=%v", count, err)
 	}
 }
 

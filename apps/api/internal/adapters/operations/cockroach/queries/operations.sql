@@ -38,6 +38,46 @@ SELECT deletion_requests.id::STRING AS id, request_id, target_type, target_id, s
 FROM deletion_requests
 WHERE request_id = $1::STRING;
 
+-- @name DeleteSubjectSyncJobs
+-- @returns :exec
+DELETE FROM provider_sync_jobs WHERE subject_id = ANY($1::STRING[]);
+
+-- @name DeleteSubjectActivityFacts
+-- @returns :exec
+DELETE FROM activity_facts WHERE subject_id = ANY($1::STRING[]);
+
+-- @name DeleteSubjectTimelineCache
+-- @returns :exec
+DELETE FROM timeline_cache WHERE subject_id = ANY($1::STRING[]);
+
+-- @name DeleteSubjectActivityRefresh
+-- @returns :exec
+DELETE FROM activity_refresh_cache WHERE subject_id = ANY($1::STRING[]);
+
+-- @name DeleteSubjectCustomProviders
+-- @returns :exec
+DELETE FROM custom_providers WHERE subject_id = ANY($1::STRING[]);
+
+-- @name DeleteSubjectProviderConnections
+-- @returns :exec
+DELETE FROM provider_connections WHERE subject_id = ANY($1::STRING[]);
+
+-- @name DeleteSubjectEnvironments
+-- @returns :exec
+DELETE FROM environments WHERE owner_subject_id = ANY($1::STRING[]);
+
+-- @name DeleteSubjectRows
+-- @returns :exec
+DELETE FROM subjects WHERE id = ANY($1::STRING[]);
+
+-- @name MarkDeletionPrimaryDeleted
+-- @returns :exec_result
+UPDATE deletion_requests SET
+  status = 'verifying', last_completed_stage = 'primary_deleted',
+  error_code = NULL, subject_ids = $2::STRING[], updated_at = $3::TIMESTAMPTZ,
+  completed_at = NULL, backup_expiry_at = NULL, audit_event_id = NULL
+WHERE request_id = $1::STRING;
+
 -- @name GetAccountEmailForDeletion
 -- @returns :opt
 SELECT primary_email FROM users WHERE id = $1::STRING FOR UPDATE;

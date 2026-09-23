@@ -108,13 +108,13 @@ GRANT INSERT ON TABLE
   deleted_identity_tombstones, deleted_identity_tombstones_v2
 TO jandibat_maintenance;
 GRANT UPDATE ON TABLE
-  provider_connections, provider_token_revocation_jobs, maintenance_checkpoints,
+  provider_connections, provider_token_revocation_jobs, maintenance_checkpoints, activity_facts,
   deletion_request_inbox, deletion_requests, deletion_request_claims, users,
   deleted_identity_tombstones_v2
 TO jandibat_maintenance;
 GRANT DELETE ON TABLE
-  users, subjects, user_passkeys, activity_facts, custom_activity_events,
-  custom_providers, provider_connections, environments, provider_sync_jobs,
+  users, user_settings, subjects, subject_settings, user_passkeys, activity_facts, custom_activity_events,
+  custom_providers, custom_provider_secrets, provider_connections, provider_connection_private_consents, environments, provider_sync_jobs,
   user_sessions, magic_link_tokens,
   auth_challenges, ingest_idempotency_keys, timeline_cache,
   activity_refresh_cache, api_rate_limit_buckets, deletion_request_inbox, deletion_request_claims,

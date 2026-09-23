@@ -995,7 +995,9 @@ func TestCockroachMaintenanceAccountCredentialRevocationIsAtomic(t *testing.T) {
 		Target: operations.AuditTarget{Type: "account", ID: userID}, Outcome: operations.AuditSucceeded,
 		RequestID: requestID,
 	}
-	t.Cleanup(func() { _, _ = admin.ExecContext(context.Background(), `DELETE FROM audit_events WHERE id=$1::UUID`, event.ID) })
+	t.Cleanup(func() {
+		_, _ = admin.ExecContext(context.Background(), `DELETE FROM audit_events WHERE id=$1::UUID`, event.ID)
+	})
 	backupExpiry := now.Add(35 * 24 * time.Hour)
 	rollbackCompletion := errors.New("rollback account deletion completion")
 	err = appdb.InTx(ctx, pool, appdb.RetryOptions{}, func(txctx context.Context, _ pgx.Tx) error {
@@ -1332,7 +1334,15 @@ func TestCockroachAccountDeletionFailsClosedWithoutIdentityHMAC(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	store, _ := New(db)
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	store, err := NewWithPGXPool(db, pool)
+	if err != nil {
+		t.Fatal(err)
+	}
 	suffix := strings.ReplaceAll(time.Now().UTC().Format("150405.000000000"), ".", "")
 	userID, requestID := "unkeyed_user_"+suffix, "unkeyed-delete-"+suffix
 	now := time.Now().UTC().Truncate(time.Microsecond)
@@ -1383,7 +1393,15 @@ func TestCockroachDeletionClaimLeasePreventsDuplicateAndReclaimsAfterCrash(t *te
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	store, _ := New(db)
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	store, err := NewWithPGXPool(db, pool)
+	if err != nil {
+		t.Fatal(err)
+	}
 	now := time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC)
 	suffix := strings.ReplaceAll(time.Now().UTC().Format("150405.000000000"), ".", "")
 	requestID := "ops-claim-" + suffix
@@ -1408,11 +1426,12 @@ VALUES ($1::UUID, $2, $2) ON CONFLICT (deletion_request_id) DO UPDATE SET availa
 		t.Fatalf("first claim = %#v, %v", firstClaim, err)
 	}
 	first := []operations.DeletionRequest{firstClaim}
-	stageTx, err := db.BeginTx(ctx, nil)
+	stageTx, err := pool.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := lockDeletionLease(ctx, stageTx, first[0]); err != nil {
+	defer func() { _ = stageTx.Rollback(context.Background()) }()
+	if err := lockDeletionLeasePGX(ctx, stageTx, first[0]); err != nil {
 		t.Fatal(err)
 	}
 	type claimResult struct {
@@ -1434,11 +1453,11 @@ VALUES ($1::UUID, $2, $2) ON CONFLICT (deletion_request_id) DO UPDATE SET availa
 		if result.err != nil || len(result.requests) != 0 {
 			t.Fatalf("claim crossed active stage fence: %#v, %v", result.requests, result.err)
 		}
-		if err := stageTx.Commit(); err != nil {
+		if err := stageTx.Commit(ctx); err != nil {
 			t.Fatal(err)
 		}
 	case <-time.After(100 * time.Millisecond):
-		if err := stageTx.Commit(); err != nil {
+		if err := stageTx.Commit(ctx); err != nil {
 			t.Fatal(err)
 		}
 		result := <-reclaimResult
@@ -1574,6 +1593,65 @@ FROM deletion_request_claims WHERE deletion_request_id = $1::UUID`, claims[0].ID
 	completed, err := workflow.RunClaimed(ctx, afterExpiry)
 	if err != nil || completed.Status != operations.DeletionCompleted {
 		t.Fatalf("resumed completion = %#v, %v", completed, err)
+	}
+}
+
+func TestCockroachDeletionInboxReadPreflightAndWriteUseLazyPGXAuditBoundary(t *testing.T) {
+	adminDSN := os.Getenv("JANDIBAT_TEST_DATABASE_URL")
+	apiDSN := os.Getenv("JANDIBAT_TEST_API_DATABASE_URL")
+	if adminDSN == "" || apiDSN == "" {
+		t.Skip("set JANDIBAT_TEST_DATABASE_URL and JANDIBAT_TEST_API_DATABASE_URL")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	admin, err := sql.Open("pgx", adminDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = admin.Close() })
+	pool, err := pgxpool.New(ctx, apiDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	store, err := NewWithPGXPool(admin, pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	suffix := strings.ReplaceAll(time.Now().UTC().Format("150405.000000000"), ".", "")
+	firstID, duplicateID, targetID := "existing-inbox-"+suffix, "duplicate-inbox-"+suffix, "inbox-target-"+suffix
+	t.Cleanup(func() {
+		_, _ = admin.ExecContext(context.Background(), `DELETE FROM deletion_request_inbox WHERE target_id IN ($1, $2)`, targetID, targetID+"-new")
+	})
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	first := operations.DeletionRequest{
+		RequestID: firstID, TargetType: operations.DeletionTargetSubject,
+		TargetID: targetID, Status: operations.DeletionRequested,
+		LastCompletedStage: operations.DeletionStageRequested, RequestedAt: now, UpdatedAt: now,
+	}
+	if _, err := store.EnqueueDeletion(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	lazyCtx, lazy := appdb.WithLazyPGXTransaction(ctx, pool)
+	t.Cleanup(func() { _ = lazy.Rollback() })
+	duplicate := first
+	duplicate.RequestID = duplicateID
+	got, err := store.EnqueueDeletion(lazyCtx, duplicate)
+	if err != nil || got.RequestID != firstID || lazy.Active() {
+		t.Fatalf("existing inbox preflight request=%q active=%t err=%v", got.RequestID, lazy.Active(), err)
+	}
+	newRequest := first
+	newRequest.RequestID = duplicateID
+	newRequest.TargetID += "-new"
+	if _, err := store.EnqueueDeletion(lazyCtx, newRequest); err != nil || !lazy.Active() {
+		t.Fatalf("new inbox mutation active=%t err=%v", lazy.Active(), err)
+	}
+	if err := lazy.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := admin.QueryRowContext(ctx, `SELECT count(*) FROM deletion_request_inbox WHERE target_id IN ($1, $2)`, targetID, newRequest.TargetID).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("inbox count after mutation rollback=%d err=%v", count, err)
 	}
 }
 
@@ -2250,7 +2328,9 @@ VALUES ($1::UUID,$2,'system','retention.transaction.test','database','succeeded'
 		eventID, time.Date(1200, 1, 1, 0, 0, 0, 0, time.UTC), "retention-tx-"+suffix); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _, _ = admin.ExecContext(context.Background(), `DELETE FROM audit_events WHERE id=$1::UUID`, eventID) })
+	t.Cleanup(func() {
+		_, _ = admin.ExecContext(context.Background(), `DELETE FROM audit_events WHERE id=$1::UUID`, eventID)
+	})
 	request := operations.RetentionPurgeRequest{
 		Dataset: operations.RetentionAuditEvents, Before: time.Date(1300, 1, 1, 0, 0, 0, 0, time.UTC),
 		AsOf: time.Date(1300, 1, 2, 0, 0, 0, 0, time.UTC), Limit: 1,

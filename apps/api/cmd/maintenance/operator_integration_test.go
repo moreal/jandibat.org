@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	operationsstore "github.com/moreal/jandibat.org/apps/api/internal/adapters/operations/cockroach"
 	"github.com/moreal/jandibat.org/apps/api/internal/operations"
@@ -26,7 +27,12 @@ func TestMaintenanceDeleteCommandClaimsAndCompletesCanonicalRequest(t *testing.T
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	store, err := operationsstore.New(db)
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	store, err := operationsstore.NewWithPGXPool(db, pool)
 	if err != nil {
 		t.Fatal(err)
 	}

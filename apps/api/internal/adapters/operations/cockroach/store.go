@@ -94,10 +94,6 @@ type Store struct {
 	identityHMACKey       []byte
 }
 
-func (store *Store) mutationExecutor(ctx context.Context) (appdb.Executor, error) {
-	return appdb.MutationExecutor(ctx, store.db)
-}
-
 func (store *Store) ConfigureDeletedIdentityHMAC(activeKeyID string, key []byte) error {
 	activeKeyID = strings.TrimSpace(activeKeyID)
 	if activeKeyID == "" || len(activeKeyID) > 128 || len(key) != sha256.Size {

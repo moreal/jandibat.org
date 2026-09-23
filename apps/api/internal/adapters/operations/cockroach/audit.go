@@ -2,7 +2,6 @@ package cockroach
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 
@@ -12,14 +11,6 @@ import (
 	appdb "github.com/moreal/jandibat.org/apps/api/internal/database"
 	"github.com/moreal/jandibat.org/apps/api/internal/operations"
 )
-
-const insertAuditEventQuery = `
-INSERT INTO audit_events (
-  id, occurred_at, actor_type, actor_id, action, target_type, target_id,
-  outcome, request_id, metadata
-) VALUES (
-  $1::UUID, $2, $3, NULLIF($4, ''), $5, $6, NULLIF($7, ''), $8, $9, $10::JSONB
-)`
 
 func (store *Store) WriteAuditEvent(ctx context.Context, event operations.AuditEvent) error {
 	if store.pool == nil {
@@ -42,29 +33,6 @@ func (store *Store) WriteAuditEvent(ctx context.Context, event operations.AuditE
 			redacted.Target.Type, &redacted.Target.ID, string(redacted.Outcome),
 			redacted.RequestID, encoded)
 	})
-	if err != nil {
-		return fmt.Errorf("write audit event: %w", err)
-	}
-	return nil
-}
-
-type auditExecutor interface {
-	ExecContext(context.Context, string, ...any) (sql.Result, error)
-}
-
-func (store *Store) writeAuditEvent(ctx context.Context, executor auditExecutor, event operations.AuditEvent) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	redacted, encoded, err := store.prepareAuditEvent(event)
-	if err != nil {
-		return err
-	}
-	_, err = executor.ExecContext(ctx, insertAuditEventQuery,
-		redacted.ID, redacted.OccurredAt, redacted.Actor.Type, redacted.Actor.ID,
-		redacted.Action, redacted.Target.Type, redacted.Target.ID, redacted.Outcome,
-		redacted.RequestID, encoded,
-	)
 	if err != nil {
 		return fmt.Errorf("write audit event: %w", err)
 	}

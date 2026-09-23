@@ -12,42 +12,65 @@ import (
 	"time"
 
 	"github.com/moreal/jandibat.org/apps/api/internal/adapters/internal/fakedb"
-	appdb "github.com/moreal/jandibat.org/apps/api/internal/database"
 	"github.com/moreal/jandibat.org/apps/api/internal/operations"
 )
-
-func TestEnqueueDeletionExistingTargetParticipatesInLazyAuditTransaction(t *testing.T) {
-	now := time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC)
-	script := fakedb.New(
-		fakedb.Step{Operation: fakedb.Begin},
-		fakedb.Step{Operation: fakedb.Query, Columns: make([]string, 17), Rows: [][]driver.Value{{
-			"018f0000-0000-7000-8000-000000000001", "existing-request", "subject", "subject-1",
-			"requested", "requested", "", []byte("[]"), now, now, nil, nil, "", int64(0), now, nil, "",
-		}}},
-		fakedb.Step{Operation: fakedb.Rollback},
-	)
-	db := script.Open()
-	t.Cleanup(func() { _ = db.Close() })
-	store, _ := New(db)
-	ctx, lazy := appdb.WithLazyTransaction(context.Background(), db)
-	got, err := store.EnqueueDeletion(ctx, operations.DeletionRequest{
-		RequestID: "new-request", TargetType: operations.DeletionTargetSubject,
-		TargetID: "subject-1", Status: operations.DeletionRequested, RequestedAt: now, UpdatedAt: now,
-	})
-	if err != nil || got.RequestID != "existing-request" {
-		t.Fatalf("existing enqueue=%#v err=%v", got, err)
-	}
-	if _, active := lazy.Transaction(); !active {
-		t.Fatal("idempotent deletion success did not join the lazy audit transaction")
-	}
-	if err := lazy.Rollback(); err != nil {
-		t.Fatal(err)
-	}
-}
 
 func TestNewRejectsNilDB(t *testing.T) {
 	if store, err := New(nil); store != nil || !errors.Is(err, ErrNilDB) {
 		t.Fatalf("New(nil) = %#v, %v", store, err)
+	}
+}
+
+func TestDeletionMethodsRequirePGXPool(t *testing.T) {
+	db := fakedb.New().Open()
+	t.Cleanup(func() { _ = db.Close() })
+	store, err := New(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC)
+	request := operations.DeletionRequest{
+		RequestID: "request-1", TargetType: operations.DeletionTargetSubject,
+		TargetID: "subject-1", Status: operations.DeletionRequested,
+		RequestedAt: now, UpdatedAt: now,
+	}
+	event := operations.AuditEvent{
+		ID: "018f0000-0000-7000-8000-000000000001", OccurredAt: now,
+		Actor: operations.AuditActor{Type: operations.AuditActorSystem},
+		Action: "deletion.completed", Target: operations.AuditTarget{Type: "subject", ID: request.TargetID},
+		Outcome: operations.AuditSucceeded, RequestID: request.RequestID,
+	}
+	checks := []struct {
+		name string
+		run  func() error
+	}{
+		{"create", func() error { _, err := store.CreateOrLoadDeletion(context.Background(), request); return err }},
+		{"enqueue", func() error { _, err := store.EnqueueDeletion(context.Background(), request); return err }},
+		{"load", func() error { _, err := store.LoadDeletion(context.Background(), request.RequestID); return err }},
+		{"claim", func() error {
+			_, err := store.ClaimDeletion(context.Background(), request.RequestID, now, now.Add(time.Minute))
+			return err
+		}},
+		{"claim batch", func() error {
+			_, err := store.ClaimDeletions(context.Background(), now, now.Add(time.Minute), 1)
+			return err
+		}},
+		{"verify", func() error { _, err := store.VerifyDeletion(context.Background(), request); return err }},
+		{"revoke", func() error {
+			_, err := store.RevokeDeletionCredentials(context.Background(), request, now)
+			return err
+		}},
+		{"delete", func() error { _, err := store.DeletePrimaryData(context.Background(), request, now); return err }},
+		{"complete", func() error { _, err := store.CompleteDeletionWithAudit(context.Background(), request, event, now, now.Add(time.Hour)); return err }},
+		{"fail", func() error { return store.FailDeletion(context.Background(), request, "failed", now) }},
+		{"defer", func() error { return store.DeferDeletionForLegalHold(context.Background(), request, now) }},
+	}
+	for _, check := range checks {
+		t.Run(check.name, func(t *testing.T) {
+			if err := check.run(); !errors.Is(err, ErrNilDB) {
+				t.Fatalf("error = %v; want PGX pool required", err)
+			}
+		})
 	}
 }
 
@@ -186,12 +209,7 @@ func FuzzRetentionRejectsUnlistedDatasetBeforeExecution(f *testing.F) {
 	})
 }
 
-func TestAuditQueryMatchesExistingSchema(t *testing.T) {
-	for _, fragment := range []string{"INSERT INTO audit_events", "actor_type", "target_type", "request_id", "$10::JSONB"} {
-		if !strings.Contains(insertAuditEventQuery, fragment) {
-			t.Errorf("audit query missing %q", fragment)
-		}
-	}
+func TestAuditMetadataCloneDoesNotMutateInput(t *testing.T) {
 	metadata := map[string]any{"safe": "value"}
 	cloned := cloneAuditMetadata(metadata)
 	cloned["source_ip"] = "127.0.0.1"
@@ -375,26 +393,6 @@ func TestCheckpointRequiresPGXPool(t *testing.T) {
 	}
 }
 
-func TestDeletionSQLHasLegalHoldStagesRevocationAndTenResidualChecks(t *testing.T) {
-	contents := []string{
-		"hold.expires_at > $3", "hold.target_type = 'subject'", "hold.target_type = 'account'",
-		"status = 'deletion_pending'", "INSERT INTO provider_token_revocation_jobs", "ON CONFLICT (connection_id) DO NOTHING",
-		"INSERT INTO deleted_identity_tombstones_v2", "GREATEST(deleted_identity_tombstones_v2.expires_at",
-		"connection.sync_cursor->>'provider_id'", "<> ''",
-		"DELETE FROM provider_sync_jobs", "DELETE FROM activity_facts", "DELETE FROM provider_connections",
-		"DELETE FROM custom_providers", "DELETE FROM environments", "DELETE FROM subjects", "DELETE FROM users",
-	}
-	combined := deletionAdapterSQLForTest()
-	for _, fragment := range contents {
-		if !strings.Contains(combined, fragment) {
-			t.Errorf("deletion adapter missing %q", fragment)
-		}
-	}
-	if got := strings.Count(deletionVerificationQueryForTest(), "SELECT count(*)"); got != 12 {
-		t.Fatalf("verification residual count queries = %d, want 12", got)
-	}
-}
-
 func TestDeletedIdentityHMACConfigurationIsVersionedAndCanonical(t *testing.T) {
 	script := fakedb.New()
 	db := script.Open()
@@ -422,29 +420,5 @@ func TestDeletedIdentityHMACConfigurationIsVersionedAndCanonical(t *testing.T) {
 	store.ClearDeletedIdentityHMAC()
 	if _, _, err := store.deletedIdentityHMAC("user@example.invalid"); !errors.Is(err, ErrInvalidDeletedIdentityHMAC) {
 		t.Fatalf("cleared key error = %v", err)
-	}
-}
-
-func TestCreateOrLoadDeletionRejectsRequestIDTargetMismatch(t *testing.T) {
-	now := time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC)
-	script := fakedb.New(
-		fakedb.Step{Operation: fakedb.Exec, Affected: 0},
-		fakedb.Step{Operation: fakedb.Query, Columns: []string{
-			"id", "request_id", "target_type", "target_id", "status", "stage", "error", "subjects",
-			"requested", "updated", "completed", "backup", "audit", "attempts", "available", "lease", "claim",
-		}, Rows: [][]driver.Value{{
-			"018f0000-0000-7000-8000-000000000001", "request-1", "subject", "subject-original",
-			"requested", "requested", "", []byte(`[]`), now, now, nil, nil, "", int64(0), now, nil, "",
-		}}},
-	)
-	db := script.Open()
-	defer db.Close()
-	store, _ := New(db)
-	_, err := store.CreateOrLoadDeletion(context.Background(), operations.DeletionRequest{
-		RequestID: "request-1", TargetType: operations.DeletionTargetSubject, TargetID: "subject-other",
-		Status: operations.DeletionRequested, RequestedAt: now, UpdatedAt: now,
-	})
-	if !errors.Is(err, operations.ErrInvalidDeletionRequest) {
-		t.Fatalf("CreateOrLoadDeletion mismatch error = %v", err)
 	}
 }

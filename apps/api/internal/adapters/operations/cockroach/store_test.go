@@ -409,7 +409,7 @@ func TestAuditRetentionMapsEventSubjectAndAccountLegalHolds(t *testing.T) {
 	}
 }
 
-func TestCheckpointPersistenceUsesOperationAndScope(t *testing.T) {
+func TestCheckpointRequiresPGXPool(t *testing.T) {
 	now := time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC)
 	script := fakedb.New(
 		fakedb.Step{Operation: fakedb.Exec, Affected: 1},
@@ -424,19 +424,15 @@ func TestCheckpointPersistenceUsesOperationAndScope(t *testing.T) {
 	checkpoint := operations.MaintenanceCheckpoint{
 		Operation: operations.MaintenanceRetention, Scope: "release-1", Payload: []byte(`{"rule_index":1}`), UpdatedAt: now,
 	}
-	if err := store.SaveCheckpoint(context.Background(), checkpoint); err != nil {
-		t.Fatal(err)
+	if err := store.SaveCheckpoint(context.Background(), checkpoint); !errors.Is(err, errCheckpointPGXPoolRequired) {
+		t.Errorf("SaveCheckpoint() error = %v; want pgx pool required", err)
 	}
 	loaded, found, err := store.LoadCheckpoint(context.Background(), checkpoint.Operation, checkpoint.Scope)
-	if err != nil || !found || string(loaded.Payload) != string(checkpoint.Payload) {
-		t.Fatalf("LoadCheckpoint() = %#v, %t, %v", loaded, found, err)
+	if !errors.Is(err, errCheckpointPGXPoolRequired) {
+		t.Errorf("LoadCheckpoint() = %#v, %t, %v; want pgx pool required", loaded, found, err)
 	}
-	if err := store.DeleteCheckpoint(context.Background(), checkpoint.Operation, checkpoint.Scope); err != nil {
-		t.Fatal(err)
-	}
-	calls := script.Calls()
-	if !strings.Contains(calls[0].Query, "ON CONFLICT (operation, scope)") || !strings.Contains(calls[1].Query, "operation = $1 AND scope = $2") {
-		t.Fatalf("checkpoint calls = %#v", calls)
+	if err := store.DeleteCheckpoint(context.Background(), checkpoint.Operation, checkpoint.Scope); !errors.Is(err, errCheckpointPGXPoolRequired) {
+		t.Errorf("DeleteCheckpoint() error = %v; want pgx pool required", err)
 	}
 }
 

@@ -2,8 +2,8 @@ package cockroach
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -13,42 +13,26 @@ import (
 	"github.com/moreal/jandibat.org/apps/api/internal/operations"
 )
 
+var errCheckpointPGXPoolRequired = errors.New("maintenance checkpoint: pgx pool is required")
+
 func (store *Store) LoadCheckpoint(ctx context.Context, operation operations.MaintenanceOperation, scope string) (operations.MaintenanceCheckpoint, bool, error) {
 	if strings.TrimSpace(scope) == "" {
 		return operations.MaintenanceCheckpoint{}, false, operations.ErrInvalidMaintenanceCheckpoint
 	}
-	if store.pool != nil {
-		row, err := generated.GetMaintenanceCheckpoint(ctx, appdb.PGXExecutorFor(ctx, store.pool), string(operation), scope)
-		if err != nil {
-			return operations.MaintenanceCheckpoint{}, false, fmt.Errorf("load maintenance checkpoint: %w", err)
-		}
-		if row == nil {
-			return operations.MaintenanceCheckpoint{}, false, nil
-		}
-		checkpoint := operations.MaintenanceCheckpoint{
-			Operation: operations.MaintenanceOperation(row.Operation), Scope: row.Scope,
-			Payload: append(json.RawMessage(nil), row.Payload...), UpdatedAt: row.UpdatedAt,
-		}
-		if err := operations.ValidateMaintenanceCheckpoint(checkpoint); err != nil {
-			return operations.MaintenanceCheckpoint{}, false, err
-		}
-		return checkpoint, true, nil
+	if store.pool == nil {
+		return operations.MaintenanceCheckpoint{}, false, errCheckpointPGXPoolRequired
 	}
-	var checkpoint operations.MaintenanceCheckpoint
-	var payload []byte
-	err := store.db.QueryRowContext(ctx, `
-SELECT operation, scope, payload, updated_at
-FROM maintenance_checkpoints
-WHERE operation = $1 AND scope = $2`, operation, scope).Scan(
-		&checkpoint.Operation, &checkpoint.Scope, &payload, &checkpoint.UpdatedAt,
-	)
-	if err == sql.ErrNoRows {
-		return operations.MaintenanceCheckpoint{}, false, nil
-	}
+	row, err := generated.GetMaintenanceCheckpoint(ctx, appdb.PGXExecutorFor(ctx, store.pool), string(operation), scope)
 	if err != nil {
 		return operations.MaintenanceCheckpoint{}, false, fmt.Errorf("load maintenance checkpoint: %w", err)
 	}
-	checkpoint.Payload = append(json.RawMessage(nil), payload...)
+	if row == nil {
+		return operations.MaintenanceCheckpoint{}, false, nil
+	}
+	checkpoint := operations.MaintenanceCheckpoint{
+		Operation: operations.MaintenanceOperation(row.Operation), Scope: row.Scope,
+		Payload: append(json.RawMessage(nil), row.Payload...), UpdatedAt: row.UpdatedAt,
+	}
 	if err := operations.ValidateMaintenanceCheckpoint(checkpoint); err != nil {
 		return operations.MaintenanceCheckpoint{}, false, err
 	}
@@ -59,22 +43,13 @@ func (store *Store) SaveCheckpoint(ctx context.Context, checkpoint operations.Ma
 	if err := operations.ValidateMaintenanceCheckpoint(checkpoint); err != nil {
 		return err
 	}
-	if store.pool != nil {
-		err := appdb.InTx(ctx, store.pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
-			return generated.SaveMaintenanceCheckpoint(txctx, tx, string(checkpoint.Operation),
-				checkpoint.Scope, checkpoint.Payload, checkpoint.UpdatedAt.UTC())
-		})
-		if err != nil {
-			return fmt.Errorf("save maintenance checkpoint: %w", err)
-		}
-		return nil
+	if store.pool == nil {
+		return errCheckpointPGXPoolRequired
 	}
-	_, err := store.db.ExecContext(ctx, `
-INSERT INTO maintenance_checkpoints (operation, scope, payload, updated_at)
-VALUES ($1, $2, $3::JSONB, $4)
-ON CONFLICT (operation, scope) DO UPDATE SET
-  payload = excluded.payload,
-  updated_at = excluded.updated_at`, checkpoint.Operation, checkpoint.Scope, []byte(checkpoint.Payload), checkpoint.UpdatedAt.UTC())
+	err := appdb.InTx(ctx, store.pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
+		return generated.SaveMaintenanceCheckpoint(txctx, tx, string(checkpoint.Operation),
+			checkpoint.Scope, checkpoint.Payload, checkpoint.UpdatedAt.UTC())
+	})
 	if err != nil {
 		return fmt.Errorf("save maintenance checkpoint: %w", err)
 	}
@@ -85,16 +60,13 @@ func (store *Store) DeleteCheckpoint(ctx context.Context, operation operations.M
 	if strings.TrimSpace(scope) == "" {
 		return operations.ErrInvalidMaintenanceCheckpoint
 	}
-	if store.pool != nil {
-		err := appdb.InTx(ctx, store.pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
-			return generated.DeleteMaintenanceCheckpoint(txctx, tx, string(operation), scope)
-		})
-		if err != nil {
-			return fmt.Errorf("delete maintenance checkpoint: %w", err)
-		}
-		return nil
+	if store.pool == nil {
+		return errCheckpointPGXPoolRequired
 	}
-	if _, err := store.db.ExecContext(ctx, `DELETE FROM maintenance_checkpoints WHERE operation = $1 AND scope = $2`, operation, scope); err != nil {
+	err := appdb.InTx(ctx, store.pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
+		return generated.DeleteMaintenanceCheckpoint(txctx, tx, string(operation), scope)
+	})
+	if err != nil {
 		return fmt.Errorf("delete maintenance checkpoint: %w", err)
 	}
 	return nil

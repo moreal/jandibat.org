@@ -6,6 +6,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -394,6 +395,93 @@ id,audit_event_id,request_id,occurred_at,actor_type,actor_id,action,target_type,
 	}
 	if status != "delivered" || attempts != 2 || auditCount != 1 {
 		t.Fatalf("status=%s attempts=%d audit_count=%d", status, attempts, auditCount)
+	}
+}
+
+func TestCockroachMaintenanceCheckpointJoinsPGXTransaction(t *testing.T) {
+	adminDSN := os.Getenv("JANDIBAT_TEST_DATABASE_URL")
+	maintenanceDSN := os.Getenv("JANDIBAT_TEST_MAINTENANCE_DATABASE_URL")
+	if adminDSN == "" || maintenanceDSN == "" {
+		t.Skip("set JANDIBAT_TEST_DATABASE_URL and JANDIBAT_TEST_MAINTENANCE_DATABASE_URL")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	admin, err := sql.Open("pgx", adminDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	maintenance, err := sql.Open("pgx", maintenanceDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, err := pgxpool.New(ctx, maintenanceDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pool.Close(); _ = maintenance.Close(); _ = admin.Close() })
+	store, err := NewWithPGXPool(maintenance, pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := operations.MaintenanceCheckpoint{
+		Operation: operations.MaintenanceRetention,
+		Scope:     "scythe-checkpoint-" + strings.ReplaceAll(time.Now().UTC().Format("150405.000000000"), ".", ""),
+		Payload:   []byte(`{"cursor":"one"}`),
+		UpdatedAt: time.Now().UTC().Truncate(time.Microsecond),
+	}
+	t.Cleanup(func() {
+		_, _ = admin.ExecContext(context.Background(), `DELETE FROM maintenance_checkpoints WHERE operation=$1 AND scope=$2`, checkpoint.Operation, checkpoint.Scope)
+	})
+	rollback := errors.New("rollback maintenance checkpoint")
+	err = appdb.InTx(ctx, pool, appdb.RetryOptions{}, func(txctx context.Context, _ pgx.Tx) error {
+		if err := store.SaveCheckpoint(txctx, checkpoint); err != nil {
+			return err
+		}
+		loaded, found, err := store.LoadCheckpoint(txctx, checkpoint.Operation, checkpoint.Scope)
+		var payload map[string]string
+		if err == nil {
+			err = json.Unmarshal(loaded.Payload, &payload)
+		}
+		if err != nil || !found || loaded.Operation != checkpoint.Operation || loaded.Scope != checkpoint.Scope || payload["cursor"] != "one" {
+			return fmt.Errorf("transactional checkpoint=%+v found=%t err=%v", loaded, found, err)
+		}
+		return rollback
+	})
+	if !errors.Is(err, rollback) {
+		t.Fatalf("checkpoint rollback = %v", err)
+	}
+	var count int
+	if err := admin.QueryRowContext(ctx, `SELECT count(*) FROM maintenance_checkpoints WHERE operation=$1 AND scope=$2`, checkpoint.Operation, checkpoint.Scope).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("checkpoint escaped rollback: count=%d err=%v", count, err)
+	}
+	if err := store.SaveCheckpoint(ctx, checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	loaded, found, err := store.LoadCheckpoint(ctx, checkpoint.Operation, checkpoint.Scope)
+	var payload map[string]string
+	if err == nil {
+		err = json.Unmarshal(loaded.Payload, &payload)
+	}
+	if err != nil || !found || loaded.Operation != checkpoint.Operation || loaded.Scope != checkpoint.Scope || payload["cursor"] != "one" {
+		t.Fatalf("committed checkpoint=%+v found=%t err=%v", loaded, found, err)
+	}
+	err = appdb.InTx(ctx, pool, appdb.RetryOptions{}, func(txctx context.Context, _ pgx.Tx) error {
+		if err := store.DeleteCheckpoint(txctx, checkpoint.Operation, checkpoint.Scope); err != nil {
+			return err
+		}
+		return rollback
+	})
+	if !errors.Is(err, rollback) {
+		t.Fatalf("checkpoint delete rollback = %v", err)
+	}
+	if err := admin.QueryRowContext(ctx, `SELECT count(*) FROM maintenance_checkpoints WHERE operation=$1 AND scope=$2`, checkpoint.Operation, checkpoint.Scope).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("checkpoint delete escaped rollback: count=%d err=%v", count, err)
+	}
+	if err := store.DeleteCheckpoint(ctx, checkpoint.Operation, checkpoint.Scope); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := store.LoadCheckpoint(ctx, checkpoint.Operation, checkpoint.Scope); err != nil || found {
+		t.Fatalf("checkpoint after delete: found=%t err=%v", found, err)
 	}
 }
 

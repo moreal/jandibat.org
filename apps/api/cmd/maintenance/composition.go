@@ -74,7 +74,7 @@ func buildMaintenance(ctx context.Context, settings config.Config, logger *zap.L
 		}
 	}()
 
-	store, err := operationsstore.New(db)
+	store, err := operationsstore.NewWithPGXPool(db, database.Pool)
 	if err != nil {
 		return nil, fmt.Errorf("maintenance: construct operations store: %w", err)
 	}

@@ -93,3 +93,22 @@ SET status = CASE WHEN attempts >= $5::INT8 THEN 'dead' ELSE 'pending' END,
   terminal_reason = CASE WHEN attempts >= $5::INT8 THEN $6::STRING ELSE NULL END
 WHERE id = $1::UUID AND claim_token = $2::UUID AND status = 'processing'
 RETURNING status;
+
+-- @name GetMaintenanceCheckpoint
+-- @returns :opt
+SELECT operation, scope, payload, updated_at
+FROM maintenance_checkpoints
+WHERE operation = $1::STRING AND scope = $2::STRING;
+
+-- @name SaveMaintenanceCheckpoint
+-- @returns :exec
+INSERT INTO maintenance_checkpoints (operation, scope, payload, updated_at)
+VALUES ($1::STRING, $2::STRING, $3::JSONB, $4::TIMESTAMPTZ)
+ON CONFLICT (operation, scope) DO UPDATE SET
+  payload = excluded.payload,
+  updated_at = excluded.updated_at;
+
+-- @name DeleteMaintenanceCheckpoint
+-- @returns :exec
+DELETE FROM maintenance_checkpoints
+WHERE operation = $1::STRING AND scope = $2::STRING;

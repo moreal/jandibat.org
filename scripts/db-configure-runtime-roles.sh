@@ -118,7 +118,8 @@ GRANT DELETE ON TABLE
   user_sessions, magic_link_tokens,
   auth_challenges, ingest_idempotency_keys, timeline_cache,
   activity_refresh_cache, api_rate_limit_buckets, deletion_request_inbox, deletion_request_claims,
-  deleted_identity_tombstones, deleted_identity_tombstones_v2, magic_link_mail_outbox, mutation_audit_outbox
+  deleted_identity_tombstones, deleted_identity_tombstones_v2, magic_link_mail_outbox, mutation_audit_outbox,
+  maintenance_checkpoints
 TO jandibat_maintenance;
 GRANT INSERT ON TABLE audit_events TO jandibat_maintenance;
 "

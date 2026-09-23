@@ -49,6 +49,7 @@ sql "$WORKER_DATABASE_URL" "DELETE FROM provider_token_revocation_jobs WHERE fal
 sql "$MAINTENANCE_DATABASE_URL" "SELECT count(*) FROM provider_token_revocation_jobs" >/dev/null
 sql "$MAINTENANCE_DATABASE_URL" "UPDATE provider_token_revocation_jobs SET token_key_id = token_key_id WHERE false" >/dev/null
 sql "$MAINTENANCE_DATABASE_URL" "BEGIN; INSERT INTO maintenance_checkpoints (operation, scope, payload) VALUES ('retention', 'role-verify', '{}'::JSONB); UPDATE maintenance_checkpoints SET payload = '{}'::JSONB WHERE operation = 'retention' AND scope = 'role-verify'; ROLLBACK" >/dev/null
+sql "$MAINTENANCE_DATABASE_URL" "DELETE FROM maintenance_checkpoints WHERE false" >/dev/null
 sql "$MAINTENANCE_DATABASE_URL" "SELECT count(*) FROM legal_holds" >/dev/null
 sql "$MAINTENANCE_DATABASE_URL" "BEGIN; INSERT INTO deletion_requests (request_id, target_type, target_id) VALUES ('role-verify', 'subject', 'role-verify'); UPDATE deletion_requests SET updated_at = updated_at WHERE request_id = 'role-verify'; ROLLBACK" >/dev/null
 sql "$API_DATABASE_URL" "INSERT INTO deletion_request_inbox (request_id, target_type, target_id) VALUES ('role-verify-api', 'subject', 'role-verify-api') ON CONFLICT (request_id) DO NOTHING" >/dev/null
@@ -92,6 +93,8 @@ expect_denied "maintenance auth insert" "$MAINTENANCE_DATABASE_URL" "INSERT INTO
 expect_denied "maintenance audit update" "$MAINTENANCE_DATABASE_URL" "UPDATE audit_events SET outcome = 'failed' WHERE false"
 expect_denied "maintenance revocation queue delete" "$MAINTENANCE_DATABASE_URL" "DELETE FROM provider_token_revocation_jobs WHERE false"
 expect_denied "api maintenance checkpoint read" "$API_DATABASE_URL" "SELECT count(*) FROM maintenance_checkpoints"
+expect_denied "api maintenance checkpoint delete" "$API_DATABASE_URL" "DELETE FROM maintenance_checkpoints WHERE false"
+expect_denied "worker maintenance checkpoint delete" "$WORKER_DATABASE_URL" "DELETE FROM maintenance_checkpoints WHERE false"
 expect_denied "api deletion request update" "$API_DATABASE_URL" "UPDATE deletion_requests SET updated_at = updated_at WHERE false"
 expect_denied "api durable deletion request read" "$API_DATABASE_URL" "SELECT count(*) FROM deletion_requests"
 expect_denied "api deletion inbox update" "$API_DATABASE_URL" "UPDATE deletion_request_inbox SET status = 'promoted', promoted_at = now() WHERE false"

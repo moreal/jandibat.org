@@ -10,11 +10,10 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	generated "github.com/moreal/jandibat.org/apps/api/internal/adapters/integrations/cockroach/generated"
-	"github.com/moreal/jandibat.org/apps/api/internal/adapters/internal/fakedb"
 	"github.com/moreal/jandibat.org/apps/api/internal/integrations"
 )
 
-func TestNewRejectsNilDatabase(t *testing.T) {
+func TestNewRejectsNilPool(t *testing.T) {
 	store, err := New(nil)
 	if !errors.Is(err, ErrNilDB) {
 		t.Fatalf("New(nil) error = %v, want %v", err, ErrNilDB)
@@ -24,20 +23,14 @@ func TestNewRejectsNilDatabase(t *testing.T) {
 	}
 }
 
-func TestNewWithPGXPoolAcceptsPoolWithoutSQLHandle(t *testing.T) {
+func TestNewAcceptsPool(t *testing.T) {
 	pool := new(pgxpool.Pool)
-	store, err := NewWithPGXPool(nil, pool)
+	store, err := New(pool)
 	if err != nil {
-		t.Fatalf("NewWithPGXPool(nil, pool) error = %v", err)
+		t.Fatalf("New(pool) error = %v", err)
 	}
 	if store == nil || store.pool != pool {
-		t.Fatalf("NewWithPGXPool(nil, pool) = %#v; want store using supplied pool", store)
-	}
-}
-
-func TestNewWithPGXPoolRejectsNilPool(t *testing.T) {
-	if store, err := NewWithPGXPool(nil, nil); store != nil || !errors.Is(err, ErrNilDB) {
-		t.Fatalf("NewWithPGXPool(nil, nil) = %#v, %v; want ErrNilDB", store, err)
+		t.Fatalf("New(pool) = %#v; want store using supplied pool", store)
 	}
 }
 
@@ -74,14 +67,9 @@ func TestGeneratedSyncJobMapsQueuedAndPayload(t *testing.T) {
 }
 
 func TestSyncExecutionRequiresPGXPool(t *testing.T) {
-	db := fakedb.New().Open()
-	defer db.Close()
-	store, err := New(db)
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := &Store{}
 	connectionID := "018f0000-0000-7000-8000-000000000001"
-	_, _, err = store.TryAcquireSyncExecution(context.Background(), connectionID)
+	_, _, err := store.TryAcquireSyncExecution(context.Background(), connectionID)
 	if !errors.Is(err, ErrNilDB) {
 		t.Fatalf("TryAcquireSyncExecution() error = %v, want %v", err, ErrNilDB)
 	}

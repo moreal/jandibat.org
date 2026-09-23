@@ -6,17 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/moreal/jandibat.org/apps/api/internal/adapters/internal/fakedb"
 	"github.com/moreal/jandibat.org/apps/api/internal/integrations"
 )
 
 func TestSyncJobOperationsRequirePGXPool(t *testing.T) {
-	db := fakedb.New().Open()
-	t.Cleanup(func() { _ = db.Close() })
-	store, err := New(db)
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := &Store{}
 	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
 	job := integrations.SyncJob{
 		ID:           "018f0000-0000-7000-8000-000000000003",
@@ -30,7 +24,7 @@ func TestSyncJobOperationsRequirePGXPool(t *testing.T) {
 		}
 	}
 	check("SaveSyncJob", store.SaveSyncJob(context.Background(), job))
-	_, err = store.GetSyncJob(context.Background(), job.ID)
+	_, err := store.GetSyncJob(context.Background(), job.ID)
 	check("GetSyncJob", err)
 	_, err = store.ListSyncJobs(context.Background(), job.ConnectionID)
 	check("ListSyncJobs", err)

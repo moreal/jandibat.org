@@ -2,7 +2,6 @@ package cockroach_test
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"net/url"
@@ -12,7 +11,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	_ "github.com/jackc/pgx/v5/stdlib"
 	integrationstore "github.com/moreal/jandibat.org/apps/api/internal/adapters/integrations/cockroach"
 	appdb "github.com/moreal/jandibat.org/apps/api/internal/database"
 )
@@ -65,15 +63,8 @@ func TestCockroachSyncExecutionUsesPGXAndRollsBackLease(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	legacy, err := sql.Open("pgx", apiDSN)
+	store, err := integrationstore.New(pool)
 	if err != nil {
-		t.Fatal(err)
-	}
-	store, err := integrationstore.NewWithPGXPool(legacy, pool)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := legacy.Close(); err != nil {
 		t.Fatal(err)
 	}
 

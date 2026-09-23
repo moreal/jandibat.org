@@ -6,17 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/moreal/jandibat.org/apps/api/internal/adapters/internal/fakedb"
 	"github.com/moreal/jandibat.org/apps/api/internal/integrations"
 )
 
 func TestConnectionOperationsRequirePGXPool(t *testing.T) {
-	db := fakedb.New().Open()
-	t.Cleanup(func() { _ = db.Close() })
-	store, err := New(db)
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := &Store{}
 	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
 	id := "018f0000-0000-7000-8000-000000000001"
 	record := integrations.ConnectionRecord{Connection: integrations.ProviderConnection{
@@ -31,7 +25,7 @@ func TestConnectionOperationsRequirePGXPool(t *testing.T) {
 		}
 	}
 	check("SaveConnection", store.SaveConnection(context.Background(), record))
-	_, err = store.GetConnection(context.Background(), id)
+	_, err := store.GetConnection(context.Background(), id)
 	check("GetConnection", err)
 	_, err = store.ListConnections(context.Background(), "subject-1")
 	check("ListConnections", err)

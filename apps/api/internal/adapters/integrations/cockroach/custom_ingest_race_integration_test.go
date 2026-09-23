@@ -64,7 +64,7 @@ func newCustomIngestRaceFixture(t *testing.T) customIngestRaceFixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	store, err := integrationstore.NewWithPGXPool(db, pool)
+	store, err := integrationstore.New(pool)
 	if err != nil {
 		t.Fatal(err)
 	}

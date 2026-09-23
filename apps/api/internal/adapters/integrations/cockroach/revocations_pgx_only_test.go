@@ -5,17 +5,10 @@ import (
 	"errors"
 	"testing"
 	"time"
-
-	"github.com/moreal/jandibat.org/apps/api/internal/adapters/internal/fakedb"
 )
 
 func TestRevocationOperationsRequirePGXPool(t *testing.T) {
-	db := fakedb.New().Open()
-	t.Cleanup(func() { _ = db.Close() })
-	store, err := New(db)
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := &Store{}
 	ctx := context.Background()
 	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
 	id := "018f0000-0000-7000-8000-000000000010"

@@ -75,20 +75,13 @@ func TestCockroachSyncJobsUsePGXWithoutLegacyHandle(t *testing.T) {
 		}
 		parsed.User = url.User(role)
 		roleDSN := parsed.String()
-		legacy, err := sql.Open("pgx", roleDSN)
-		if err != nil {
-			t.Fatal(err)
-		}
 		pool, err := pgxpool.New(ctx, roleDSN)
 		if err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(pool.Close)
-		store, err := integrationstore.NewWithPGXPool(legacy, pool)
+		store, err := integrationstore.New(pool)
 		if err != nil {
-			t.Fatal(err)
-		}
-		if err := legacy.Close(); err != nil {
 			t.Fatal(err)
 		}
 		return store, pool

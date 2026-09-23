@@ -2,7 +2,6 @@
 package cockroach
 
 import (
-	"database/sql"
 	"errors"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -27,16 +26,7 @@ var (
 	_ integrations.SyncConnectionStateStore = (*Store)(nil)
 )
 
-func New(db *sql.DB) (*Store, error) {
-	if db == nil {
-		return nil, ErrNilDB
-	}
-	return &Store{}, nil
-}
-
-// NewWithPGXPool uses only pool; the SQL handle argument remains for callers
-// that have not yet switched to a PGX-only constructor signature.
-func NewWithPGXPool(_ *sql.DB, pool *pgxpool.Pool) (*Store, error) {
+func New(pool *pgxpool.Pool) (*Store, error) {
 	if pool == nil {
 		return nil, ErrNilDB
 	}

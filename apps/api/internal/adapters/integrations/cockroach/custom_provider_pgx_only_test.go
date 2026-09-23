@@ -6,17 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/moreal/jandibat.org/apps/api/internal/adapters/internal/fakedb"
 	"github.com/moreal/jandibat.org/apps/api/internal/integrations"
 )
 
-func TestCustomProviderOperationsRejectLegacySQLOnlyStore(t *testing.T) {
-	db := fakedb.New().Open()
-	t.Cleanup(func() { _ = db.Close() })
-	store, err := New(db)
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestCustomProviderOperationsRequirePGXPool(t *testing.T) {
+	store := &Store{}
 	ctx := context.Background()
 	id := "018f0000-0000-7000-8000-000000000002"
 	now := time.Now().UTC()
@@ -60,7 +54,7 @@ func TestCustomProviderOperationsRejectLegacySQLOnlyStore(t *testing.T) {
 	for _, operation := range operations {
 		t.Run(operation.name, func(t *testing.T) {
 			if err := operation.run(); !errors.Is(err, ErrNilDB) {
-				t.Fatalf("SQL-only custom provider operation error = %v, want ErrNilDB", err)
+				t.Fatalf("custom provider operation without pool error = %v, want ErrNilDB", err)
 			}
 		})
 	}

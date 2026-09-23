@@ -97,7 +97,7 @@ VALUES ($1, $1, 'Consent integration', 'subject', $2, $3, $3)`, environmentID, s
 		t.Fatal(err)
 	}
 	t.Cleanup(apiPool.Close)
-	generatedStore, err := integrationstore.NewWithPGXPool(apiDB, apiPool)
+	generatedStore, err := integrationstore.New(apiPool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,7 +289,7 @@ FROM provider_connections WHERE id = $1`, connectionID).Scan(&credentialColumnsN
 		t.Fatal(err)
 	}
 	t.Cleanup(workerPool.Close)
-	workerStore, err := integrationstore.NewWithPGXPool(workerDB, workerPool)
+	workerStore, err := integrationstore.New(workerPool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -499,7 +499,7 @@ func TestCockroachRevocationSchemaProbeUsesPGXPool(t *testing.T) {
 	}
 
 	// A migrated Store must operate without any database/sql handle.
-	store, err := integrationstore.NewWithPGXPool(nil, pool)
+	store, err := integrationstore.New(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -570,7 +570,7 @@ VALUES ($1, $2, $3, 'UTC', true, now(), now())`, subjectID, userID, handle); err
 		t.Fatal(err)
 	}
 	t.Cleanup(activityPool.Close)
-	integrationDB, err := integrationstore.NewWithPGXPool(db, activityPool)
+	integrationDB, err := integrationstore.New(activityPool)
 	if err != nil {
 		t.Fatal(err)
 	}

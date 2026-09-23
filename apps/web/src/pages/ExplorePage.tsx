@@ -1,55 +1,137 @@
 import type { ActivityTimelineResponseDto } from "@jandibat/contracts";
 import { useNavigate } from "@solidjs/router";
-import { Match, Switch, createEffect, createMemo, createSignal } from "solid-js";
-import { api } from "../api/client";
+import { Match, Show, Switch, createEffect, createMemo, createSignal } from "solid-js";
 import { useAppState } from "../app/state";
 import { ErrorCallout, Icon } from "../components/common";
 import { buildHeatmapCalendar, todayDateKey } from "../heatmap/calendar";
 import { Heatmap } from "../heatmap/Heatmap";
+import { createRelayQuery } from "../relay";
+import type { ExploreActivityQuery } from "./__generated__/ExploreActivityQuery.graphql";
+import query from "./__generated__/ExploreActivityQuery.graphql";
 
-type TimelineState =
-  | { kind: "idle" }
-  | { kind: "loading" }
-  | { kind: "ready"; timeline: ActivityTimelineResponseDto }
-  | { kind: "error"; error: unknown };
+function activityLong(value: unknown): number {
+  if (typeof value !== "string" || !/^(0|[1-9][0-9]*)$/.test(value)) {
+    throw new Error("Invalid activity Long");
+  }
+  const number = Number(value);
+  if (!Number.isSafeInteger(number)) throw new Error("Activity Long exceeds safe integer range");
+  return number;
+}
+
+function safeSum(total: number, value: number): number {
+  const sum = total + value;
+  if (!Number.isSafeInteger(sum)) throw new Error("Activity sum exceeds safe integer range");
+  return sum;
+}
+
+function timelineFromSnapshot(
+  subject: NonNullable<ExploreActivityQuery["response"]["subject"]>,
+  timezone: string,
+): ActivityTimelineResponseDto {
+  const snapshot = subject.activitySnapshot;
+  let total = 0;
+  const environmentTotals = new Map<string, number>();
+  const days = snapshot.days.map((day) => {
+    const count = activityLong(day.count);
+    total = safeSum(total, count);
+    return {
+      date: day.date,
+      count,
+      level: day.level,
+      entries: day.entries.map((entry) => {
+        const value = activityLong(entry.metricValue);
+        environmentTotals.set(entry.environmentID, safeSum(environmentTotals.get(entry.environmentID) ?? 0, value));
+        return {
+          environmentId: entry.environmentID,
+          action: entry.action,
+          metric: { name: entry.metricName, value },
+          metadata: Object.fromEntries(entry.metadata.map((item) => [item.key, item.value])),
+        };
+      }),
+    };
+  });
+  return {
+    subject: subject.handle,
+    timezone,
+    from: snapshot.range.from,
+    to: snapshot.range.to,
+    generatedAt: snapshot.generatedAt,
+    // ActivitySnapshot SDL has no refresh-status field, so the legacy stale banner cannot be derived here.
+    stale: false,
+    days,
+    environments: snapshot.environments.map((environment) => ({
+      id: environment.id,
+      key: environment.key,
+      name: environment.name,
+      scope: environment.scope === "subject" ? "subject" : "global",
+      metadata: Object.fromEntries(environment.metadata.map((item) => [item.key, item.value])),
+    })),
+  };
+}
+
+function browserTimezone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+}
+
+function ActivityResult(props: { subject: string }) {
+  const [retryNonce, setRetryNonce] = createSignal(0);
+  const timezone = browserTimezone();
+  const range = createMemo(() => {
+    const { from, to } = buildHeatmapCalendar([], todayDateKey());
+    return { from, to };
+  });
+  const result = createRelayQuery<ExploreActivityQuery>(query, () => ({
+    handle: props.subject,
+    range: range(),
+    timezone,
+  }), { fetchKey: retryNonce });
+  const projection = createMemo(() => {
+    if (result.error || result.pending) return { kind: "loading" } as const;
+    const data = result();
+    if (!data) return { kind: "loading" } as const;
+    if (!data.subject) return { kind: "missing" } as const;
+    try {
+      return { kind: "ready", timeline: timelineFromSnapshot(data.subject, timezone) } as const;
+    } catch {
+      return { kind: "invalid" } as const;
+    }
+  });
+
+  return (
+    <Switch>
+      <Match when={result.error}>
+        <ErrorCallout error={result.error} retry={() => setRetryNonce((value) => value + 1)} />
+      </Match>
+      <Match when={projection().kind === "loading"}>
+        <div class="heatmap-loading" role="status">
+          <div><span /><span /><span /><span /></div>
+          <p>@{props.subject}의 기록을 불러오는 중…</p>
+        </div>
+      </Match>
+      <Match when={projection().kind === "invalid"}>
+        <ErrorCallout error={new Error("활동 데이터를 표시할 수 없어요. 잠시 후 다시 시도해 주세요.")} />
+      </Match>
+      <Match when={projection().kind === "ready"}>
+        <Heatmap timeline={(projection() as Extract<ReturnType<typeof projection>, { kind: "ready" }>).timeline} />
+      </Match>
+      <Match when={projection().kind === "missing"}>
+        <div class="empty-heatmap" role="alert">
+          <span class="empty-sprout" aria-hidden="true" />
+          <h2>@{props.subject}의 공개 잔디밭을 찾을 수 없어요.</h2>
+          <p>프로필 주소를 확인하거나 공개 설정을 확인해 주세요.</p>
+        </div>
+      </Match>
+    </Switch>
+  );
+}
 
 export function ExplorePage(props: { subject?: string }) {
   const app = useAppState();
   const navigate = useNavigate();
   const subject = createMemo(() => (props.subject ?? app.exploreSubject()).trim());
-  const [timeline, setTimeline] = createSignal<TimelineState>({ kind: "idle" });
-  let controller: AbortController | undefined;
-
-  const load = async (handle: string) => {
-    controller?.abort();
-    if (!handle) {
-      setTimeline({ kind: "idle" });
-      return;
-    }
-    app.setExploreSubject(handle);
-    controller = new AbortController();
-    setTimeline({ kind: "loading" });
-    const calendar = buildHeatmapCalendar([], todayDateKey());
-    try {
-      const response = await api.getActivities(handle, {
-        from: calendar.from,
-        to: calendar.to,
-        signal: controller.signal,
-      });
-      setTimeline({ kind: "ready", timeline: response });
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") return;
-      setTimeline({ kind: "error", error });
-    }
-  };
-
-  createEffect(
-    () => subject(),
-    (handle) => {
-      void load(handle);
-      return () => controller?.abort();
-    },
-  );
+  createEffect(() => subject(), (handle) => {
+    if (handle) app.setExploreSubject(handle);
+  });
 
   const search = (event: SubmitEvent) => {
     event.preventDefault();
@@ -103,36 +185,14 @@ export function ExplorePage(props: { subject?: string }) {
       </section>
 
       <section class="heatmap-section section-shell" aria-live="polite">
-        <Switch>
-          <Match when={timeline().kind === "idle"}>
+        <Show when={subject()} fallback={
             <div class="heatmap-loading" role="status">
               <div><span /><span /><span /><span /></div>
               <p>보고 싶은 공개 프로필을 입력해 주세요.</p>
             </div>
-          </Match>
-          <Match when={timeline().kind === "loading"}>
-            <div class="heatmap-loading" role="status">
-              <div><span /><span /><span /><span /></div>
-              <p>@{subject()}의 기록을 불러오는 중…</p>
-            </div>
-          </Match>
-          <Match when={timeline().kind === "ready"}>
-            <Heatmap
-              timeline={(timeline() as Extract<TimelineState, { kind: "ready" }>).timeline}
-            />
-          </Match>
-          <Match when={timeline().kind === "error"}>
-            <ErrorCallout
-              error={(timeline() as Extract<TimelineState, { kind: "error" }>).error}
-              retry={() => void load(subject())}
-            />
-            <div class="empty-heatmap">
-              <span class="empty-sprout" aria-hidden="true" />
-              <h2>@{subject()}의 잔디밭을 기다리고 있어요.</h2>
-              <p>API가 연결되면 최근 1년 활동이 이곳에 표시됩니다.</p>
-            </div>
-          </Match>
-        </Switch>
+          }>
+          {(handle) => <ActivityResult subject={handle()} />}
+        </Show>
       </section>
 
       <section class="feature-strip" aria-label="jandibat의 특징">

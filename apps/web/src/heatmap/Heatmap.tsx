@@ -162,33 +162,32 @@ export function Heatmap(props: { timeline: ActivityTimelineResponseDto }) {
                     <div class="heatmap-week" role="row">
                       <For each={week.cells}>
                         {(cell) => {
-                          if (!cell.inRange) {
-                            return <span class="heatmap-cell is-outside" aria-hidden="true" />;
-                          }
-                          const day = cell.day ?? {
+                          const day = createMemo(() => cell.day ?? {
                             date: cell.date,
                             count: 0,
                             level: 0,
                             entries: [],
-                          };
-                          const label = dayLabel(day, environmentMap());
+                          });
+                          const label = createMemo(() => dayLabel(day(), environmentMap()));
                           return (
-                            <button
-                              class={`heatmap-cell level-${levelClass(day.level)}`}
-                              type="button"
-                              role="gridcell"
-                              tabindex={day.date === props.timeline.to ? 0 : -1}
-                              aria-label={label}
-                              aria-describedby="heatmap-tooltip"
-                              data-tooltip={label}
-                              data-date={day.date}
-                              onPointerOver={(event) => showTooltip(event.currentTarget)}
-                              onPointerOut={() => setTooltip(undefined)}
-                              onClick={(event) => showTooltip(event.currentTarget)}
-                              onFocus={(event) => showTooltip(event.currentTarget)}
-                              onBlur={() => setTooltip(undefined)}
-                              onKeyDown={navigateGrid}
-                            />
+                            <Show when={cell.inRange} fallback={<span class="heatmap-cell is-outside" aria-hidden="true" />}>
+                              <button
+                                class={`heatmap-cell level-${levelClass(day().level)}`}
+                                type="button"
+                                role="gridcell"
+                                tabindex={day().date === props.timeline.to ? 0 : -1}
+                                aria-label={label()}
+                                aria-describedby="heatmap-tooltip"
+                                data-tooltip={label()}
+                                data-date={day().date}
+                                onPointerOver={(event) => showTooltip(event.currentTarget)}
+                                onPointerOut={() => setTooltip(undefined)}
+                                onClick={(event) => showTooltip(event.currentTarget)}
+                                onFocus={(event) => showTooltip(event.currentTarget)}
+                                onBlur={() => setTooltip(undefined)}
+                                onKeyDown={navigateGrid}
+                              />
+                            </Show>
                           );
                         }}
                       </For>

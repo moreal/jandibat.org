@@ -60,3 +60,13 @@ queries = ["apps/api/internal/adapters/integrations/cockroach/queries/integratio
 [[sql.gen]]
 backend = "go-pgx"
 output = "apps/api/internal/adapters/integrations/cockroach/generated"
+
+[[sql]]
+name = "ratelimit"
+engine = "cockroachdb"
+schema = ["db/migrations/0001_baseline.sql"]
+queries = ["apps/api/internal/adapters/ratelimit/cockroach/queries/ratelimit.sql"]
+
+[[sql.gen]]
+backend = "go-pgx"
+output = "apps/api/internal/adapters/ratelimit/cockroach/generated"

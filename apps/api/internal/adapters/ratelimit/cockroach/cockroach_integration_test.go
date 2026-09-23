@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	operationsstore "github.com/moreal/jandibat.org/apps/api/internal/adapters/operations/cockroach"
 	"github.com/moreal/jandibat.org/apps/api/internal/http/handlers"
@@ -42,7 +43,12 @@ func TestCockroachLimiterIsAtomicAndRetentionPurgesExpiredBuckets(t *testing.T) 
 		_, _ = db.ExecContext(cleanupCtx, `DELETE FROM api_rate_limit_buckets WHERE scope = $1`, scope)
 	})
 	now := time.Now().UTC()
-	limiter, err := New(db, map[string]handlers.RateLimitPolicy{scope: {Limit: 2, Window: time.Minute}}, func() time.Time { return now })
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	limiter, err := New(pool, map[string]handlers.RateLimitPolicy{scope: {Limit: 2, Window: time.Minute}}, func() time.Time { return now })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +59,8 @@ func TestCockroachLimiterIsAtomicAndRetentionPurgesExpiredBuckets(t *testing.T) 
 		}
 	}
 	allowed, retryAfter, err := limiter.Allow(ctx, scope, rawKey)
-	if err != nil || allowed || retryAfter <= 0 || retryAfter > time.Minute {
+	wantRetryAfter := maxDuration(now.Truncate(time.Minute).Add(time.Minute).Sub(now), time.Second)
+	if err != nil || allowed || retryAfter != wantRetryAfter {
 		t.Fatalf("denied attempt = %t, %s, %v", allowed, retryAfter, err)
 	}
 	var count int

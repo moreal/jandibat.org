@@ -192,7 +192,7 @@ func buildApplication(ctx context.Context, settings config.Config, logger *zap.L
 	}
 	rateLimiter := handlers.RateLimiter(handlers.DefaultRateLimiter())
 	if stores.db != nil {
-		rateLimiter, err = ratelimitstore.New(stores.db, handlers.DefaultRateLimitPolicies(), nil)
+		rateLimiter, err = ratelimitstore.New(stores.pool, handlers.DefaultRateLimitPolicies(), nil)
 		if err != nil {
 			return nil, fmt.Errorf("runtime: construct distributed rate limiter: %w", err)
 		}

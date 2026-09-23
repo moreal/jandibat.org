@@ -119,9 +119,11 @@ VALUES ($1, $1, 'Consent integration', 'subject', $2, $3, $3)`, environmentID, s
 	if err := generatedStore.ReleaseSyncExecution(ctx, connectionID, claim); err != nil {
 		t.Fatal(err)
 	}
-	if _, acquired, err := generatedStore.TryAcquireSyncExecution(ctx, connectionID); err != nil || !acquired {
+	claim2, acquired, err := generatedStore.TryAcquireSyncExecution(ctx, connectionID)
+	if err != nil || !acquired {
 		t.Fatalf("claim after release = %t, %v", acquired, err)
 	}
+	t.Cleanup(func() { _ = generatedStore.ReleaseSyncExecution(context.Background(), connectionID, claim2) })
 	loaded, err := generatedStore.GetConnection(ctx, connectionID)
 	if err != nil || !loaded.Connection.PrivateDataEnabled {
 		t.Fatalf("loaded private consent = %#v, error=%v", loaded.Connection, err)
@@ -145,6 +147,27 @@ VALUES ($1, $1, 'Consent integration', 'subject', $2, $3, $3)`, environmentID, s
 	})
 	if !errors.Is(err, rollbackProbe) {
 		t.Fatalf("rollback read probe = %v", err)
+	}
+	syncedAt := now.Add(4 * time.Second)
+	syncRecord := record
+	syncRecord.Connection.LastSyncedAt = &syncedAt
+	syncRecord.Connection.UpdatedAt = syncedAt
+	err = appdb.InTx(ctx, apiPool, appdb.RetryOptions{}, func(txctx context.Context, _ pgx.Tx) error {
+		if err := generatedStore.UpdateConnectionAfterSync(txctx, syncRecord, claim2); err != nil {
+			return err
+		}
+		inside, err := generatedStore.GetConnection(txctx, connectionID)
+		if err != nil || inside.Connection.LastSyncedAt == nil || !inside.Connection.LastSyncedAt.Equal(syncedAt) {
+			return fmt.Errorf("sync update in transaction = (%+v, %v)", inside.Connection, err)
+		}
+		return rollbackProbe
+	})
+	if !errors.Is(err, rollbackProbe) {
+		t.Fatalf("rollback sync probe = %v", err)
+	}
+	outsideSync, err := generatedStore.GetConnection(ctx, connectionID)
+	if err != nil || outsideSync.Connection.LastSyncedAt != nil {
+		t.Fatalf("sync after rollback = (%+v, %v)", outsideSync.Connection, err)
 	}
 	record.Connection.PrivateDataEnabled = false
 	record.Connection.TokenExpiresAt = func() *time.Time { value := now.Add(time.Hour); return &value }()
@@ -195,6 +218,41 @@ FROM provider_connections WHERE id = $1`, connectionID).Scan(&credentialColumnsN
 	outside, err := generatedStore.GetConnection(ctx, connectionID)
 	if err != nil || outside.Connection.ExternalAccountID == "rollback-probe" || outside.Connection.PrivateDataEnabled {
 		t.Fatalf("connection after rollback = (%+v, %v)", outside.Connection, err)
+	}
+	workerDSN := os.Getenv("JANDIBAT_TEST_WORKER_DATABASE_URL")
+	if workerDSN == "" {
+		parsed, parseErr := url.Parse(dsn)
+		if parseErr != nil {
+			t.Fatal(parseErr)
+		}
+		parsed.User = url.User("jandibat_worker")
+		workerDSN = parsed.String()
+	}
+	workerDB, err := sql.Open("pgx", workerDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = workerDB.Close() })
+	workerPool, err := pgxpool.New(ctx, workerDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(workerPool.Close)
+	workerStore, err := integrationstore.NewWithPGXPool(workerDB, workerPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workerRecord := record
+	workerRecord.Connection.ExternalAccountID = ""
+	workerRecord.Connection.PrivateDataEnabled = false
+	workerRecord.Connection.LastSyncedAt = &syncedAt
+	workerRecord.Connection.UpdatedAt = syncedAt
+	if err := workerStore.UpdateConnectionAfterSync(ctx, workerRecord, claim2); err != nil {
+		t.Fatalf("worker sync update: %v", err)
+	}
+	workerUpdated, err := generatedStore.GetConnection(ctx, connectionID)
+	if err != nil || workerUpdated.Connection.LastSyncedAt == nil || !workerUpdated.Connection.LastSyncedAt.Equal(syncedAt) {
+		t.Fatalf("worker sync state = (%+v, %v)", workerUpdated.Connection, err)
 	}
 }
 

@@ -224,6 +224,28 @@ func (s *Store) UpdateConnectionAfterSync(ctx context.Context, record integratio
 	if connection.ID == "" || claimToken == "" {
 		return integrations.ErrInvalidConnectionStatus
 	}
+	if s.pool != nil {
+		id, err := uuid.Parse(connection.ID)
+		if err != nil {
+			return integrations.ErrInvalidIdentifier
+		}
+		if connection.LastSyncAttempt < math.MinInt32 || connection.LastSyncAttempt > math.MaxInt32 ||
+			connection.ConsecutiveFailures < math.MinInt32 || connection.ConsecutiveFailures > math.MaxInt32 {
+			return integrations.ErrInvalidConnectionStatus
+		}
+		count, err := generated.UpdateConnectionAfterSync(ctx, appdb.PGXExecutorFor(ctx, s.pool),
+			id, string(databaseConnectionStatus(connection.Status)), optionalTimeText(connection.LastSyncedAt),
+			connection.LastError, connection.UpdatedAt, string(connection.Status),
+			optionalTimeText(connection.LastSyncAttemptAt), optionalTimeText(connection.NextSyncAttemptAt),
+			int32(connection.LastSyncAttempt), int32(connection.ConsecutiveFailures), claimToken)
+		if err != nil {
+			return persistenceError(err, integrations.ErrConflict)
+		}
+		if count != 1 {
+			return integrations.ErrInvalidConnectionStatus
+		}
+		return nil
+	}
 	executor, err := s.mutationExecutor(ctx)
 	if err != nil {
 		return err

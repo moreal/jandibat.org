@@ -118,3 +118,21 @@ ON CONFLICT (connection_id) DO UPDATE SET enabled = true, updated_at = excluded.
 -- @name DisableConnectionPrivateConsent
 -- @returns :exec
 DELETE FROM provider_connection_private_consents WHERE connection_id = $1::UUID;
+
+-- @name UpdateConnectionAfterSync
+-- @returns :exec_result
+UPDATE provider_connections SET
+  status = $2::STRING,
+  last_synced_at = NULLIF($3::STRING, '')::TIMESTAMPTZ,
+  last_error = NULLIF($4::STRING, ''),
+  updated_at = $5::TIMESTAMPTZ,
+  sync_cursor = COALESCE(sync_cursor, '{}'::JSONB) || jsonb_build_object(
+    'connection_status', $6::STRING,
+    'last_sync_attempt_at', NULLIF($7::STRING, '')::TIMESTAMPTZ,
+    'next_sync_attempt_at', NULLIF($8::STRING, '')::TIMESTAMPTZ,
+    'last_sync_attempt', $9::INT,
+    'consecutive_failures', $10::INT
+  )
+WHERE id = $1::UUID
+  AND COALESCE(sync_cursor->>'connection_status', status) IN ('active', 'error')
+  AND sync_cursor->>'sync_execution_claim_token' = $11::STRING;

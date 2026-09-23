@@ -17,6 +17,46 @@ func (r *mutationResolver) Contract(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
+// RequestMagicLink is the resolver for the requestMagicLink field.
+func (r *mutationResolver) RequestMagicLink(ctx context.Context, input model.RequestMagicLinkInput) (*model.RequestMagicLinkPayload, error) {
+	return resolveRequestMagicLink(ctx, input.Email, input.RedirectURI)
+}
+
+// BeginPasskeyRegistration is the resolver for the beginPasskeyRegistration field.
+func (r *mutationResolver) BeginPasskeyRegistration(ctx context.Context) (*model.BeginPasskeyRegistrationPayload, error) {
+	return r.resolveBeginPasskeyRegistration(ctx)
+}
+
+// FinishPasskeyRegistration is the resolver for the finishPasskeyRegistration field.
+func (r *mutationResolver) FinishPasskeyRegistration(ctx context.Context, input model.FinishPasskeyRegistrationInput) (*model.FinishPasskeyRegistrationPayload, error) {
+	return r.resolveFinishPasskeyRegistration(ctx, input)
+}
+
+// BeginPasskeySignIn is the resolver for the beginPasskeySignIn field.
+func (r *mutationResolver) BeginPasskeySignIn(ctx context.Context) (*model.BeginPasskeySignInPayload, error) {
+	return r.resolveBeginPasskeySignIn(ctx)
+}
+
+// FinishPasskeySignIn is the resolver for the finishPasskeySignIn field.
+func (r *mutationResolver) FinishPasskeySignIn(ctx context.Context, input model.FinishPasskeySignInInput) (*model.FinishPasskeySignInPayload, error) {
+	return r.resolveFinishPasskeySignIn(ctx, input)
+}
+
+// SignOut is the resolver for the signOut field.
+func (r *mutationResolver) SignOut(ctx context.Context) (*model.SignOutPayload, error) {
+	return resolveSignOut(ctx)
+}
+
+// RevokeSession is the resolver for the revokeSession field.
+func (r *mutationResolver) RevokeSession(ctx context.Context, input model.RevokeSessionInput) (*model.RevokeSessionPayload, error) {
+	return resolveRevokeSession(ctx, input.ID)
+}
+
+// RevokeOtherSessions is the resolver for the revokeOtherSessions field.
+func (r *mutationResolver) RevokeOtherSessions(ctx context.Context) (*model.RevokeOtherSessionsPayload, error) {
+	return resolveRevokeOtherSessions(ctx)
+}
+
 // SyncJobs is the resolver for the syncJobs field.
 func (r *providerConnectionResolver) SyncJobs(ctx context.Context, obj *model.ProviderConnection, first *int, after *scalar.Cursor) (*model.SyncJobConnection, error) {
 	return resolveSyncJobs(ctx, obj, first, after)

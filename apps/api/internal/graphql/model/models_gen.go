@@ -61,6 +61,40 @@ type ActivitySnapshot struct {
 	Revision      string           `json:"revision"`
 }
 
+type BeginPasskeyRegistrationPayload struct {
+	Errors  []*MutationError `json:"errors"`
+	Options *PasskeyOptions  `json:"options,omitempty"`
+}
+
+func (BeginPasskeyRegistrationPayload) IsMutationPayload() {}
+func (this BeginPasskeyRegistrationPayload) GetErrors() []*MutationError {
+	if this.Errors == nil {
+		return nil
+	}
+	interfaceSlice := make([]*MutationError, 0, len(this.Errors))
+	for _, concrete := range this.Errors {
+		interfaceSlice = append(interfaceSlice, concrete)
+	}
+	return interfaceSlice
+}
+
+type BeginPasskeySignInPayload struct {
+	Errors  []*MutationError `json:"errors"`
+	Options *PasskeyOptions  `json:"options,omitempty"`
+}
+
+func (BeginPasskeySignInPayload) IsMutationPayload() {}
+func (this BeginPasskeySignInPayload) GetErrors() []*MutationError {
+	if this.Errors == nil {
+		return nil
+	}
+	interfaceSlice := make([]*MutationError, 0, len(this.Errors))
+	for _, concrete := range this.Errors {
+		interfaceSlice = append(interfaceSlice, concrete)
+	}
+	return interfaceSlice
+}
+
 type CustomProvider struct {
 	ID string `json:"id"`
 }
@@ -76,6 +110,52 @@ type DateRange struct {
 type DateRangeInput struct {
 	From scalar.Date `json:"from"`
 	To   scalar.Date `json:"to"`
+}
+
+type FinishPasskeyRegistrationInput struct {
+	CeremonyID     string  `json:"ceremonyID"`
+	CredentialJSON string  `json:"credentialJSON"`
+	Label          *string `json:"label,omitempty"`
+}
+
+type FinishPasskeyRegistrationPayload struct {
+	Errors     []*MutationError   `json:"errors"`
+	Credential *PasskeyCredential `json:"credential,omitempty"`
+}
+
+func (FinishPasskeyRegistrationPayload) IsMutationPayload() {}
+func (this FinishPasskeyRegistrationPayload) GetErrors() []*MutationError {
+	if this.Errors == nil {
+		return nil
+	}
+	interfaceSlice := make([]*MutationError, 0, len(this.Errors))
+	for _, concrete := range this.Errors {
+		interfaceSlice = append(interfaceSlice, concrete)
+	}
+	return interfaceSlice
+}
+
+type FinishPasskeySignInInput struct {
+	CeremonyID     string `json:"ceremonyID"`
+	CredentialJSON string `json:"credentialJSON"`
+}
+
+type FinishPasskeySignInPayload struct {
+	Errors []*MutationError `json:"errors"`
+	// Only session metadata is returned; the trusted transport sets the cookie.
+	Session *Session `json:"session,omitempty"`
+}
+
+func (FinishPasskeySignInPayload) IsMutationPayload() {}
+func (this FinishPasskeySignInPayload) GetErrors() []*MutationError {
+	if this.Errors == nil {
+		return nil
+	}
+	interfaceSlice := make([]*MutationError, 0, len(this.Errors))
+	for _, concrete := range this.Errors {
+		interfaceSlice = append(interfaceSlice, concrete)
+	}
+	return interfaceSlice
 }
 
 // Mutation root; domain mutations are added after their authorization tests.
@@ -97,6 +177,22 @@ type PageInfo struct {
 	EndCursor       *scalar.Cursor `json:"endCursor,omitempty"`
 }
 
+// A credential's public account metadata; key material is never exposed.
+type PasskeyCredential struct {
+	ID         string           `json:"id"`
+	Label      *string          `json:"label,omitempty"`
+	Transports []string         `json:"transports"`
+	CreatedAt  scalar.DateTime  `json:"createdAt"`
+	LastUsedAt *scalar.DateTime `json:"lastUsedAt,omitempty"`
+}
+
+// WebAuthn JSON is bounded and validated at the GraphQL HTTP boundary.
+type PasskeyOptions struct {
+	CeremonyID    string          `json:"ceremonyID"`
+	PublicKeyJSON string          `json:"publicKeyJSON"`
+	ExpiresAt     scalar.DateTime `json:"expiresAt"`
+}
+
 type ProviderConnection struct {
 	ID string `json:"id"`
 	// Forward page; first: 1..100, default 25.
@@ -108,6 +204,67 @@ func (this ProviderConnection) GetID() string { return this.ID }
 
 // Root of the domain API. Domain fields are added with resolver authorization.
 type Query struct {
+}
+
+type RequestMagicLinkInput struct {
+	Email       string  `json:"email"`
+	RedirectURI *string `json:"redirectURI,omitempty"`
+}
+
+type RequestMagicLinkPayload struct {
+	Errors []*MutationError `json:"errors"`
+	// Always true for accepted requests, regardless of account existence.
+	Accepted bool `json:"accepted"`
+}
+
+func (RequestMagicLinkPayload) IsMutationPayload() {}
+func (this RequestMagicLinkPayload) GetErrors() []*MutationError {
+	if this.Errors == nil {
+		return nil
+	}
+	interfaceSlice := make([]*MutationError, 0, len(this.Errors))
+	for _, concrete := range this.Errors {
+		interfaceSlice = append(interfaceSlice, concrete)
+	}
+	return interfaceSlice
+}
+
+type RevokeOtherSessionsPayload struct {
+	Errors         []*MutationError `json:"errors"`
+	CurrentSession *Session         `json:"currentSession,omitempty"`
+}
+
+func (RevokeOtherSessionsPayload) IsMutationPayload() {}
+func (this RevokeOtherSessionsPayload) GetErrors() []*MutationError {
+	if this.Errors == nil {
+		return nil
+	}
+	interfaceSlice := make([]*MutationError, 0, len(this.Errors))
+	for _, concrete := range this.Errors {
+		interfaceSlice = append(interfaceSlice, concrete)
+	}
+	return interfaceSlice
+}
+
+type RevokeSessionInput struct {
+	ID string `json:"id"`
+}
+
+type RevokeSessionPayload struct {
+	Errors  []*MutationError `json:"errors"`
+	Session *Session         `json:"session,omitempty"`
+}
+
+func (RevokeSessionPayload) IsMutationPayload() {}
+func (this RevokeSessionPayload) GetErrors() []*MutationError {
+	if this.Errors == nil {
+		return nil
+	}
+	interfaceSlice := make([]*MutationError, 0, len(this.Errors))
+	for _, concrete := range this.Errors {
+		interfaceSlice = append(interfaceSlice, concrete)
+	}
+	return interfaceSlice
 }
 
 type Session struct {
@@ -131,6 +288,23 @@ type SessionConnection struct {
 type SessionEdge struct {
 	Cursor scalar.Cursor `json:"cursor"`
 	Node   *Session      `json:"node"`
+}
+
+type SignOutPayload struct {
+	Errors  []*MutationError `json:"errors"`
+	Session *Session         `json:"session,omitempty"`
+}
+
+func (SignOutPayload) IsMutationPayload() {}
+func (this SignOutPayload) GetErrors() []*MutationError {
+	if this.Errors == nil {
+		return nil
+	}
+	interfaceSlice := make([]*MutationError, 0, len(this.Errors))
+	for _, concrete := range this.Errors {
+		interfaceSlice = append(interfaceSlice, concrete)
+	}
+	return interfaceSlice
 }
 
 type Subject struct {

@@ -13,4 +13,12 @@ interface MutationPayload {
 "Mutation root; domain mutations are added after their authorization tests."
 type Mutation {
   _contract: Boolean!
+  requestMagicLink(input: RequestMagicLinkInput!): RequestMagicLinkPayload!
+  beginPasskeyRegistration: BeginPasskeyRegistrationPayload!
+  finishPasskeyRegistration(input: FinishPasskeyRegistrationInput!): FinishPasskeyRegistrationPayload!
+  beginPasskeySignIn: BeginPasskeySignInPayload!
+  finishPasskeySignIn(input: FinishPasskeySignInInput!): FinishPasskeySignInPayload!
+  signOut: SignOutPayload!
+  revokeSession(input: RevokeSessionInput!): RevokeSessionPayload!
+  revokeOtherSessions: RevokeOtherSessionsPayload!
 }

@@ -85,6 +85,84 @@ type SessionConnection {
   pageInfo: PageInfo!
 }
 
+input RequestMagicLinkInput {
+  email: String!
+  redirectURI: String
+}
+
+type RequestMagicLinkPayload implements MutationPayload {
+  errors: [MutationError!]!
+  "Always true for accepted requests, regardless of account existence."
+  accepted: Boolean!
+}
+
+"WebAuthn JSON is bounded and validated at the GraphQL HTTP boundary."
+type PasskeyOptions {
+  ceremonyID: String!
+  publicKeyJSON: String!
+  expiresAt: DateTime!
+}
+
+"A credential's public account metadata; key material is never exposed."
+type PasskeyCredential {
+  id: String!
+  label: String
+  transports: [String!]!
+  createdAt: DateTime!
+  lastUsedAt: DateTime
+}
+
+type BeginPasskeyRegistrationPayload implements MutationPayload {
+  errors: [MutationError!]!
+  options: PasskeyOptions
+}
+
+input FinishPasskeyRegistrationInput {
+  ceremonyID: String!
+  credentialJSON: String!
+  label: String
+}
+
+type FinishPasskeyRegistrationPayload implements MutationPayload {
+  errors: [MutationError!]!
+  credential: PasskeyCredential
+}
+
+type BeginPasskeySignInPayload implements MutationPayload {
+  errors: [MutationError!]!
+  options: PasskeyOptions
+}
+
+input FinishPasskeySignInInput {
+  ceremonyID: String!
+  credentialJSON: String!
+}
+
+type FinishPasskeySignInPayload implements MutationPayload {
+  errors: [MutationError!]!
+  "Only session metadata is returned; the trusted transport sets the cookie."
+  session: Session
+}
+
+type SignOutPayload implements MutationPayload {
+  errors: [MutationError!]!
+  session: Session
+}
+
+input RevokeSessionInput {
+  id: ID!
+}
+
+type RevokeSessionPayload implements MutationPayload {
+  errors: [MutationError!]!
+  session: Session
+}
+
+type RevokeOtherSessionsPayload implements MutationPayload {
+  errors: [MutationError!]!
+  currentSession: Session
+}
+
 type SyncJobEdge {
   cursor: Cursor!
   node: SyncJob!
@@ -110,6 +188,14 @@ interface MutationPayload {
 "Mutation root; domain mutations are added after their authorization tests."
 type Mutation {
   _contract: Boolean!
+  requestMagicLink(input: RequestMagicLinkInput!): RequestMagicLinkPayload!
+  beginPasskeyRegistration: BeginPasskeyRegistrationPayload!
+  finishPasskeyRegistration(input: FinishPasskeyRegistrationInput!): FinishPasskeyRegistrationPayload!
+  beginPasskeySignIn: BeginPasskeySignInPayload!
+  finishPasskeySignIn(input: FinishPasskeySignInInput!): FinishPasskeySignInPayload!
+  signOut: SignOutPayload!
+  revokeSession(input: RevokeSessionInput!): RevokeSessionPayload!
+  revokeOtherSessions: RevokeOtherSessionsPayload!
 }
 
 "A durable entity with an opaque, globally unique identity."

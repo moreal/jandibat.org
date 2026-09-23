@@ -65,6 +65,21 @@ Subject 조회 저장소와 같이 handle이 다른 Subject의 local ID와 같�
 - Frontend: 생성된 connection artifact를 사용하고 cursor를 해석하거나 DB offset으로
   바꾸지 않습니다.
 
+## 2026-09-24 — 인증 mutation의 GraphQL 계약
+
+호환성: 기존 REST 도메인 인증 operation의 GraphQL 대체를 추가하는 additive 전환입니다.
+Magic Link 소비는 브라우저 callback HTTP edge에 남기고, 요청은 GraphQL mutation으로
+옮깁니다. Passkey ceremony 시작·완료와 세션 철회는 typed payload를 반환합니다.
+
+- credential JSON은 mutation 변수로만 전달하며 Node 필드·오류·로그에 복제하지 않습니다.
+  WebAuthn 옵션 JSON은 구조화된 문자열로 반환하고, HTTP 경계에서 크기·형식을 검증합니다.
+- 로그인 성공 시 raw session token은 GraphQL 응답에 넣지 않고 신뢰된 HTTP transport가
+  HttpOnly cookie로 전달합니다. `revokeOtherSessions`는 bearer token 대신 검증된 현재
+  Session ID를 사용합니다.
+- 오류 payload는 입력·도메인 오류에 한정하고 인증·transport·내부 실패는 GraphQL 오류로
+  처리합니다. Task 5의 operation-aware 감사·CSRF·cookie 경계가 완성되기 전에는
+  새 mutation을 공개 라우트에 연결하지 않습니다.
+
 ## 2026-08-12 — 운영·보안 계약 강화 (`1.1.0`)
 
 호환성: `1.0.0` 개발 기준선 대비 breaking change. 아직 배포되지 않은 계약의 Phase 3 완료 조건을 명시적으로 고정합니다.

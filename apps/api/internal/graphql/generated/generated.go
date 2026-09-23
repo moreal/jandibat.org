@@ -80,6 +80,16 @@ type ComplexityRoot struct {
 		Total         func(childComplexity int) int
 	}
 
+	BeginPasskeyRegistrationPayload struct {
+		Errors  func(childComplexity int) int
+		Options func(childComplexity int) int
+	}
+
+	BeginPasskeySignInPayload struct {
+		Errors  func(childComplexity int) int
+		Options func(childComplexity int) int
+	}
+
 	CustomProvider struct {
 		ID func(childComplexity int) int
 	}
@@ -89,8 +99,26 @@ type ComplexityRoot struct {
 		To   func(childComplexity int) int
 	}
 
+	FinishPasskeyRegistrationPayload struct {
+		Credential func(childComplexity int) int
+		Errors     func(childComplexity int) int
+	}
+
+	FinishPasskeySignInPayload struct {
+		Errors  func(childComplexity int) int
+		Session func(childComplexity int) int
+	}
+
 	Mutation struct {
-		Contract func(childComplexity int) int
+		BeginPasskeyRegistration  func(childComplexity int) int
+		BeginPasskeySignIn        func(childComplexity int) int
+		Contract                  func(childComplexity int) int
+		FinishPasskeyRegistration func(childComplexity int, input model.FinishPasskeyRegistrationInput) int
+		FinishPasskeySignIn       func(childComplexity int, input model.FinishPasskeySignInInput) int
+		RequestMagicLink          func(childComplexity int, input model.RequestMagicLinkInput) int
+		RevokeOtherSessions       func(childComplexity int) int
+		RevokeSession             func(childComplexity int, input model.RevokeSessionInput) int
+		SignOut                   func(childComplexity int) int
 	}
 
 	MutationError struct {
@@ -106,6 +134,20 @@ type ComplexityRoot struct {
 		StartCursor     func(childComplexity int) int
 	}
 
+	PasskeyCredential struct {
+		CreatedAt  func(childComplexity int) int
+		ID         func(childComplexity int) int
+		Label      func(childComplexity int) int
+		LastUsedAt func(childComplexity int) int
+		Transports func(childComplexity int) int
+	}
+
+	PasskeyOptions struct {
+		CeremonyID    func(childComplexity int) int
+		ExpiresAt     func(childComplexity int) int
+		PublicKeyJSON func(childComplexity int) int
+	}
+
 	ProviderConnection struct {
 		ID       func(childComplexity int) int
 		SyncJobs func(childComplexity int, first *int, after *scalar.Cursor) int
@@ -116,6 +158,21 @@ type ComplexityRoot struct {
 		Node     func(childComplexity int, id string) int
 		Subject  func(childComplexity int, handleOrID string) int
 		Viewer   func(childComplexity int) int
+	}
+
+	RequestMagicLinkPayload struct {
+		Accepted func(childComplexity int) int
+		Errors   func(childComplexity int) int
+	}
+
+	RevokeOtherSessionsPayload struct {
+		CurrentSession func(childComplexity int) int
+		Errors         func(childComplexity int) int
+	}
+
+	RevokeSessionPayload struct {
+		Errors  func(childComplexity int) int
+		Session func(childComplexity int) int
 	}
 
 	Session struct {
@@ -136,6 +193,11 @@ type ComplexityRoot struct {
 	SessionEdge struct {
 		Cursor func(childComplexity int) int
 		Node   func(childComplexity int) int
+	}
+
+	SignOutPayload struct {
+		Errors  func(childComplexity int) int
+		Session func(childComplexity int) int
 	}
 
 	Subject struct {
@@ -182,6 +244,14 @@ type ComplexityRoot struct {
 
 type MutationResolver interface {
 	Contract(ctx context.Context) (bool, error)
+	RequestMagicLink(ctx context.Context, input model.RequestMagicLinkInput) (*model.RequestMagicLinkPayload, error)
+	BeginPasskeyRegistration(ctx context.Context) (*model.BeginPasskeyRegistrationPayload, error)
+	FinishPasskeyRegistration(ctx context.Context, input model.FinishPasskeyRegistrationInput) (*model.FinishPasskeyRegistrationPayload, error)
+	BeginPasskeySignIn(ctx context.Context) (*model.BeginPasskeySignInPayload, error)
+	FinishPasskeySignIn(ctx context.Context, input model.FinishPasskeySignInInput) (*model.FinishPasskeySignInPayload, error)
+	SignOut(ctx context.Context) (*model.SignOutPayload, error)
+	RevokeSession(ctx context.Context, input model.RevokeSessionInput) (*model.RevokeSessionPayload, error)
+	RevokeOtherSessions(ctx context.Context) (*model.RevokeOtherSessionsPayload, error)
 }
 type ProviderConnectionResolver interface {
 	SyncJobs(ctx context.Context, obj *model.ProviderConnection, first *int, after *scalar.Cursor) (*model.SyncJobConnection, error)
@@ -372,6 +442,32 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.ActivitySnapshot.Total(childComplexity), true
 
+	case "BeginPasskeyRegistrationPayload.errors":
+		if e.ComplexityRoot.BeginPasskeyRegistrationPayload.Errors == nil {
+			break
+		}
+
+		return e.ComplexityRoot.BeginPasskeyRegistrationPayload.Errors(childComplexity), true
+	case "BeginPasskeyRegistrationPayload.options":
+		if e.ComplexityRoot.BeginPasskeyRegistrationPayload.Options == nil {
+			break
+		}
+
+		return e.ComplexityRoot.BeginPasskeyRegistrationPayload.Options(childComplexity), true
+
+	case "BeginPasskeySignInPayload.errors":
+		if e.ComplexityRoot.BeginPasskeySignInPayload.Errors == nil {
+			break
+		}
+
+		return e.ComplexityRoot.BeginPasskeySignInPayload.Errors(childComplexity), true
+	case "BeginPasskeySignInPayload.options":
+		if e.ComplexityRoot.BeginPasskeySignInPayload.Options == nil {
+			break
+		}
+
+		return e.ComplexityRoot.BeginPasskeySignInPayload.Options(childComplexity), true
+
 	case "CustomProvider.id":
 		if e.ComplexityRoot.CustomProvider.ID == nil {
 			break
@@ -392,12 +488,106 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.DateRange.To(childComplexity), true
 
+	case "FinishPasskeyRegistrationPayload.credential":
+		if e.ComplexityRoot.FinishPasskeyRegistrationPayload.Credential == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FinishPasskeyRegistrationPayload.Credential(childComplexity), true
+	case "FinishPasskeyRegistrationPayload.errors":
+		if e.ComplexityRoot.FinishPasskeyRegistrationPayload.Errors == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FinishPasskeyRegistrationPayload.Errors(childComplexity), true
+
+	case "FinishPasskeySignInPayload.errors":
+		if e.ComplexityRoot.FinishPasskeySignInPayload.Errors == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FinishPasskeySignInPayload.Errors(childComplexity), true
+	case "FinishPasskeySignInPayload.session":
+		if e.ComplexityRoot.FinishPasskeySignInPayload.Session == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FinishPasskeySignInPayload.Session(childComplexity), true
+
+	case "Mutation.beginPasskeyRegistration":
+		if e.ComplexityRoot.Mutation.BeginPasskeyRegistration == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Mutation.BeginPasskeyRegistration(childComplexity), true
+	case "Mutation.beginPasskeySignIn":
+		if e.ComplexityRoot.Mutation.BeginPasskeySignIn == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Mutation.BeginPasskeySignIn(childComplexity), true
 	case "Mutation._contract":
 		if e.ComplexityRoot.Mutation.Contract == nil {
 			break
 		}
 
 		return e.ComplexityRoot.Mutation.Contract(childComplexity), true
+	case "Mutation.finishPasskeyRegistration":
+		if e.ComplexityRoot.Mutation.FinishPasskeyRegistration == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_finishPasskeyRegistration_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.FinishPasskeyRegistration(childComplexity, args["input"].(model.FinishPasskeyRegistrationInput)), true
+	case "Mutation.finishPasskeySignIn":
+		if e.ComplexityRoot.Mutation.FinishPasskeySignIn == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_finishPasskeySignIn_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.FinishPasskeySignIn(childComplexity, args["input"].(model.FinishPasskeySignInInput)), true
+	case "Mutation.requestMagicLink":
+		if e.ComplexityRoot.Mutation.RequestMagicLink == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_requestMagicLink_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.RequestMagicLink(childComplexity, args["input"].(model.RequestMagicLinkInput)), true
+	case "Mutation.revokeOtherSessions":
+		if e.ComplexityRoot.Mutation.RevokeOtherSessions == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Mutation.RevokeOtherSessions(childComplexity), true
+	case "Mutation.revokeSession":
+		if e.ComplexityRoot.Mutation.RevokeSession == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_revokeSession_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.RevokeSession(childComplexity, args["input"].(model.RevokeSessionInput)), true
+	case "Mutation.signOut":
+		if e.ComplexityRoot.Mutation.SignOut == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Mutation.SignOut(childComplexity), true
 
 	case "MutationError.code":
 		if e.ComplexityRoot.MutationError.Code == nil {
@@ -442,6 +632,56 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.PageInfo.StartCursor(childComplexity), true
+
+	case "PasskeyCredential.createdAt":
+		if e.ComplexityRoot.PasskeyCredential.CreatedAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PasskeyCredential.CreatedAt(childComplexity), true
+	case "PasskeyCredential.id":
+		if e.ComplexityRoot.PasskeyCredential.ID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PasskeyCredential.ID(childComplexity), true
+	case "PasskeyCredential.label":
+		if e.ComplexityRoot.PasskeyCredential.Label == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PasskeyCredential.Label(childComplexity), true
+	case "PasskeyCredential.lastUsedAt":
+		if e.ComplexityRoot.PasskeyCredential.LastUsedAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PasskeyCredential.LastUsedAt(childComplexity), true
+	case "PasskeyCredential.transports":
+		if e.ComplexityRoot.PasskeyCredential.Transports == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PasskeyCredential.Transports(childComplexity), true
+
+	case "PasskeyOptions.ceremonyID":
+		if e.ComplexityRoot.PasskeyOptions.CeremonyID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PasskeyOptions.CeremonyID(childComplexity), true
+	case "PasskeyOptions.expiresAt":
+		if e.ComplexityRoot.PasskeyOptions.ExpiresAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PasskeyOptions.ExpiresAt(childComplexity), true
+	case "PasskeyOptions.publicKeyJSON":
+		if e.ComplexityRoot.PasskeyOptions.PublicKeyJSON == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PasskeyOptions.PublicKeyJSON(childComplexity), true
 
 	case "ProviderConnection.id":
 		if e.ComplexityRoot.ProviderConnection.ID == nil {
@@ -496,6 +736,45 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Query.Viewer(childComplexity), true
+
+	case "RequestMagicLinkPayload.accepted":
+		if e.ComplexityRoot.RequestMagicLinkPayload.Accepted == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RequestMagicLinkPayload.Accepted(childComplexity), true
+	case "RequestMagicLinkPayload.errors":
+		if e.ComplexityRoot.RequestMagicLinkPayload.Errors == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RequestMagicLinkPayload.Errors(childComplexity), true
+
+	case "RevokeOtherSessionsPayload.currentSession":
+		if e.ComplexityRoot.RevokeOtherSessionsPayload.CurrentSession == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RevokeOtherSessionsPayload.CurrentSession(childComplexity), true
+	case "RevokeOtherSessionsPayload.errors":
+		if e.ComplexityRoot.RevokeOtherSessionsPayload.Errors == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RevokeOtherSessionsPayload.Errors(childComplexity), true
+
+	case "RevokeSessionPayload.errors":
+		if e.ComplexityRoot.RevokeSessionPayload.Errors == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RevokeSessionPayload.Errors(childComplexity), true
+	case "RevokeSessionPayload.session":
+		if e.ComplexityRoot.RevokeSessionPayload.Session == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RevokeSessionPayload.Session(childComplexity), true
 
 	case "Session.createdAt":
 		if e.ComplexityRoot.Session.CreatedAt == nil {
@@ -565,6 +844,19 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.SessionEdge.Node(childComplexity), true
+
+	case "SignOutPayload.errors":
+		if e.ComplexityRoot.SignOutPayload.Errors == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SignOutPayload.Errors(childComplexity), true
+	case "SignOutPayload.session":
+		if e.ComplexityRoot.SignOutPayload.Session == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SignOutPayload.Session(childComplexity), true
 
 	case "Subject.activitySnapshot":
 		if e.ComplexityRoot.Subject.ActivitySnapshot == nil {
@@ -705,6 +997,10 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 	ec := newExecutionContext(opCtx, e, make(chan graphql.DeferredResult))
 	inputUnmarshalMap := graphql.BuildUnmarshalerMap(
 		ec.unmarshalInputDateRangeInput,
+		ec.unmarshalInputFinishPasskeyRegistrationInput,
+		ec.unmarshalInputFinishPasskeySignInInput,
+		ec.unmarshalInputRequestMagicLinkInput,
+		ec.unmarshalInputRevokeSessionInput,
 	)
 	first := true
 
@@ -866,6 +1162,84 @@ type SessionConnection {
   edges: [SessionEdge!]!
   pageInfo: PageInfo!
 }
+
+input RequestMagicLinkInput {
+  email: String!
+  redirectURI: String
+}
+
+type RequestMagicLinkPayload implements MutationPayload {
+  errors: [MutationError!]!
+  "Always true for accepted requests, regardless of account existence."
+  accepted: Boolean!
+}
+
+"WebAuthn JSON is bounded and validated at the GraphQL HTTP boundary."
+type PasskeyOptions {
+  ceremonyID: String!
+  publicKeyJSON: String!
+  expiresAt: DateTime!
+}
+
+"A credential's public account metadata; key material is never exposed."
+type PasskeyCredential {
+  id: String!
+  label: String
+  transports: [String!]!
+  createdAt: DateTime!
+  lastUsedAt: DateTime
+}
+
+type BeginPasskeyRegistrationPayload implements MutationPayload {
+  errors: [MutationError!]!
+  options: PasskeyOptions
+}
+
+input FinishPasskeyRegistrationInput {
+  ceremonyID: String!
+  credentialJSON: String!
+  label: String
+}
+
+type FinishPasskeyRegistrationPayload implements MutationPayload {
+  errors: [MutationError!]!
+  credential: PasskeyCredential
+}
+
+type BeginPasskeySignInPayload implements MutationPayload {
+  errors: [MutationError!]!
+  options: PasskeyOptions
+}
+
+input FinishPasskeySignInInput {
+  ceremonyID: String!
+  credentialJSON: String!
+}
+
+type FinishPasskeySignInPayload implements MutationPayload {
+  errors: [MutationError!]!
+  "Only session metadata is returned; the trusted transport sets the cookie."
+  session: Session
+}
+
+type SignOutPayload implements MutationPayload {
+  errors: [MutationError!]!
+  session: Session
+}
+
+input RevokeSessionInput {
+  id: ID!
+}
+
+type RevokeSessionPayload implements MutationPayload {
+  errors: [MutationError!]!
+  session: Session
+}
+
+type RevokeOtherSessionsPayload implements MutationPayload {
+  errors: [MutationError!]!
+  currentSession: Session
+}
 `, BuiltIn: false},
 	{Name: "../../../../../graphql/schema/integrations.graphqls", Input: `type SyncJobEdge {
   cursor: Cursor!
@@ -892,6 +1266,14 @@ interface MutationPayload {
 "Mutation root; domain mutations are added after their authorization tests."
 type Mutation {
   _contract: Boolean!
+  requestMagicLink(input: RequestMagicLinkInput!): RequestMagicLinkPayload!
+  beginPasskeyRegistration: BeginPasskeyRegistrationPayload!
+  finishPasskeyRegistration(input: FinishPasskeyRegistrationInput!): FinishPasskeyRegistrationPayload!
+  beginPasskeySignIn: BeginPasskeySignInPayload!
+  finishPasskeySignIn(input: FinishPasskeySignInInput!): FinishPasskeySignInPayload!
+  signOut: SignOutPayload!
+  revokeSession(input: RevokeSessionInput!): RevokeSessionPayload!
+  revokeOtherSessions: RevokeOtherSessionsPayload!
 }
 `, BuiltIn: false},
 	{Name: "../../../../../graphql/schema/node.graphqls", Input: `"A durable entity with an opaque, globally unique identity."
@@ -1049,6 +1431,26 @@ func (ec *executionContext) childFields_ActivitySnapshot(ctx context.Context, fi
 	return nil, fmt.Errorf("no field named %q was found under type ActivitySnapshot", field.Name)
 }
 
+func (ec *executionContext) childFields_BeginPasskeyRegistrationPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "errors":
+		return ec.fieldContext_BeginPasskeyRegistrationPayload_errors(ctx, field)
+	case "options":
+		return ec.fieldContext_BeginPasskeyRegistrationPayload_options(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type BeginPasskeyRegistrationPayload", field.Name)
+}
+
+func (ec *executionContext) childFields_BeginPasskeySignInPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "errors":
+		return ec.fieldContext_BeginPasskeySignInPayload_errors(ctx, field)
+	case "options":
+		return ec.fieldContext_BeginPasskeySignInPayload_options(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type BeginPasskeySignInPayload", field.Name)
+}
+
 func (ec *executionContext) childFields_DateRange(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "from":
@@ -1057,6 +1459,38 @@ func (ec *executionContext) childFields_DateRange(ctx context.Context, field gra
 		return ec.fieldContext_DateRange_to(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type DateRange", field.Name)
+}
+
+func (ec *executionContext) childFields_FinishPasskeyRegistrationPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "errors":
+		return ec.fieldContext_FinishPasskeyRegistrationPayload_errors(ctx, field)
+	case "credential":
+		return ec.fieldContext_FinishPasskeyRegistrationPayload_credential(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type FinishPasskeyRegistrationPayload", field.Name)
+}
+
+func (ec *executionContext) childFields_FinishPasskeySignInPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "errors":
+		return ec.fieldContext_FinishPasskeySignInPayload_errors(ctx, field)
+	case "session":
+		return ec.fieldContext_FinishPasskeySignInPayload_session(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type FinishPasskeySignInPayload", field.Name)
+}
+
+func (ec *executionContext) childFields_MutationError(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "code":
+		return ec.fieldContext_MutationError_code(ctx, field)
+	case "message":
+		return ec.fieldContext_MutationError_message(ctx, field)
+	case "field":
+		return ec.fieldContext_MutationError_field(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type MutationError", field.Name)
 }
 
 func (ec *executionContext) childFields_PageInfo(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -1071,6 +1505,64 @@ func (ec *executionContext) childFields_PageInfo(ctx context.Context, field grap
 		return ec.fieldContext_PageInfo_endCursor(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type PageInfo", field.Name)
+}
+
+func (ec *executionContext) childFields_PasskeyCredential(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "id":
+		return ec.fieldContext_PasskeyCredential_id(ctx, field)
+	case "label":
+		return ec.fieldContext_PasskeyCredential_label(ctx, field)
+	case "transports":
+		return ec.fieldContext_PasskeyCredential_transports(ctx, field)
+	case "createdAt":
+		return ec.fieldContext_PasskeyCredential_createdAt(ctx, field)
+	case "lastUsedAt":
+		return ec.fieldContext_PasskeyCredential_lastUsedAt(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type PasskeyCredential", field.Name)
+}
+
+func (ec *executionContext) childFields_PasskeyOptions(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "ceremonyID":
+		return ec.fieldContext_PasskeyOptions_ceremonyID(ctx, field)
+	case "publicKeyJSON":
+		return ec.fieldContext_PasskeyOptions_publicKeyJSON(ctx, field)
+	case "expiresAt":
+		return ec.fieldContext_PasskeyOptions_expiresAt(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type PasskeyOptions", field.Name)
+}
+
+func (ec *executionContext) childFields_RequestMagicLinkPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "errors":
+		return ec.fieldContext_RequestMagicLinkPayload_errors(ctx, field)
+	case "accepted":
+		return ec.fieldContext_RequestMagicLinkPayload_accepted(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type RequestMagicLinkPayload", field.Name)
+}
+
+func (ec *executionContext) childFields_RevokeOtherSessionsPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "errors":
+		return ec.fieldContext_RevokeOtherSessionsPayload_errors(ctx, field)
+	case "currentSession":
+		return ec.fieldContext_RevokeOtherSessionsPayload_currentSession(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type RevokeOtherSessionsPayload", field.Name)
+}
+
+func (ec *executionContext) childFields_RevokeSessionPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "errors":
+		return ec.fieldContext_RevokeSessionPayload_errors(ctx, field)
+	case "session":
+		return ec.fieldContext_RevokeSessionPayload_session(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type RevokeSessionPayload", field.Name)
 }
 
 func (ec *executionContext) childFields_Session(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -1111,6 +1603,16 @@ func (ec *executionContext) childFields_SessionEdge(ctx context.Context, field g
 		return ec.fieldContext_SessionEdge_node(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type SessionEdge", field.Name)
+}
+
+func (ec *executionContext) childFields_SignOutPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "errors":
+		return ec.fieldContext_SignOutPayload_errors(ctx, field)
+	case "session":
+		return ec.fieldContext_SignOutPayload_session(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type SignOutPayload", field.Name)
 }
 
 func (ec *executionContext) childFields_Subject(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -1302,6 +1804,62 @@ func (ec *executionContext) childFields___Type(ctx context.Context, field graphq
 // endregion ************************** internal!.gotpl ***************************
 
 // region    ***************************** args.gotpl *****************************
+
+func (ec *executionContext) field_Mutation_finishPasskeyRegistration_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
+		func(ctx context.Context, v any) (model.FinishPasskeyRegistrationInput, error) {
+			return ec.unmarshalNFinishPasskeyRegistrationInput2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐFinishPasskeyRegistrationInput(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_finishPasskeySignIn_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
+		func(ctx context.Context, v any) (model.FinishPasskeySignInInput, error) {
+			return ec.unmarshalNFinishPasskeySignInInput2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐFinishPasskeySignInInput(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_requestMagicLink_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
+		func(ctx context.Context, v any) (model.RequestMagicLinkInput, error) {
+			return ec.unmarshalNRequestMagicLinkInput2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐRequestMagicLinkInput(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_revokeSession_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
+		func(ctx context.Context, v any) (model.RevokeSessionInput, error) {
+			return ec.unmarshalNRevokeSessionInput2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐRevokeSessionInput(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg0
+	return args, nil
+}
 
 func (ec *executionContext) field_ProviderConnection_syncJobs_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
@@ -2117,6 +2675,134 @@ func (ec *executionContext) fieldContext_ActivitySnapshot_revision(_ context.Con
 	return graphql.NewScalarFieldContext("ActivitySnapshot", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
+func (ec *executionContext) _BeginPasskeyRegistrationPayload_errors(ctx context.Context, field graphql.CollectedField, obj *model.BeginPasskeyRegistrationPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_BeginPasskeyRegistrationPayload_errors(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Errors, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*model.MutationError) graphql.Marshaler {
+			return ec.marshalNMutationError2ᚕᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐMutationErrorᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_BeginPasskeyRegistrationPayload_errors(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "BeginPasskeyRegistrationPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_MutationError(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _BeginPasskeyRegistrationPayload_options(ctx context.Context, field graphql.CollectedField, obj *model.BeginPasskeyRegistrationPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_BeginPasskeyRegistrationPayload_options(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Options, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.PasskeyOptions) graphql.Marshaler {
+			return ec.marshalOPasskeyOptions2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐPasskeyOptions(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_BeginPasskeyRegistrationPayload_options(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "BeginPasskeyRegistrationPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_PasskeyOptions(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _BeginPasskeySignInPayload_errors(ctx context.Context, field graphql.CollectedField, obj *model.BeginPasskeySignInPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_BeginPasskeySignInPayload_errors(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Errors, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*model.MutationError) graphql.Marshaler {
+			return ec.marshalNMutationError2ᚕᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐMutationErrorᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_BeginPasskeySignInPayload_errors(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "BeginPasskeySignInPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_MutationError(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _BeginPasskeySignInPayload_options(ctx context.Context, field graphql.CollectedField, obj *model.BeginPasskeySignInPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_BeginPasskeySignInPayload_options(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Options, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.PasskeyOptions) graphql.Marshaler {
+			return ec.marshalOPasskeyOptions2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐPasskeyOptions(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_BeginPasskeySignInPayload_options(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "BeginPasskeySignInPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_PasskeyOptions(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _CustomProvider_id(ctx context.Context, field graphql.CollectedField, obj *model.CustomProvider) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -2186,6 +2872,134 @@ func (ec *executionContext) fieldContext_DateRange_to(_ context.Context, field g
 	return graphql.NewScalarFieldContext("DateRange", field, false, false, errors.New("field of type Date does not have child fields"))
 }
 
+func (ec *executionContext) _FinishPasskeyRegistrationPayload_errors(ctx context.Context, field graphql.CollectedField, obj *model.FinishPasskeyRegistrationPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_FinishPasskeyRegistrationPayload_errors(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Errors, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*model.MutationError) graphql.Marshaler {
+			return ec.marshalNMutationError2ᚕᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐMutationErrorᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_FinishPasskeyRegistrationPayload_errors(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "FinishPasskeyRegistrationPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_MutationError(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _FinishPasskeyRegistrationPayload_credential(ctx context.Context, field graphql.CollectedField, obj *model.FinishPasskeyRegistrationPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_FinishPasskeyRegistrationPayload_credential(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Credential, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.PasskeyCredential) graphql.Marshaler {
+			return ec.marshalOPasskeyCredential2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐPasskeyCredential(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_FinishPasskeyRegistrationPayload_credential(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "FinishPasskeyRegistrationPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_PasskeyCredential(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _FinishPasskeySignInPayload_errors(ctx context.Context, field graphql.CollectedField, obj *model.FinishPasskeySignInPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_FinishPasskeySignInPayload_errors(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Errors, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*model.MutationError) graphql.Marshaler {
+			return ec.marshalNMutationError2ᚕᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐMutationErrorᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_FinishPasskeySignInPayload_errors(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "FinishPasskeySignInPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_MutationError(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _FinishPasskeySignInPayload_session(ctx context.Context, field graphql.CollectedField, obj *model.FinishPasskeySignInPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_FinishPasskeySignInPayload_session(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Session, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.Session) graphql.Marshaler {
+			return ec.marshalOSession2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐSession(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_FinishPasskeySignInPayload_session(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "FinishPasskeySignInPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Session(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Mutation__contract(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -2207,6 +3021,310 @@ func (ec *executionContext) _Mutation__contract(ctx context.Context, field graph
 }
 func (ec *executionContext) fieldContext_Mutation__contract(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("Mutation", field, true, true, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _Mutation_requestMagicLink(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_requestMagicLink(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().RequestMagicLink(ctx, fc.Args["input"].(model.RequestMagicLinkInput))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.RequestMagicLinkPayload) graphql.Marshaler {
+			return ec.marshalNRequestMagicLinkPayload2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐRequestMagicLinkPayload(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_requestMagicLink(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_RequestMagicLinkPayload(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_requestMagicLink_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_beginPasskeyRegistration(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_beginPasskeyRegistration(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Mutation().BeginPasskeyRegistration(ctx)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.BeginPasskeyRegistrationPayload) graphql.Marshaler {
+			return ec.marshalNBeginPasskeyRegistrationPayload2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐBeginPasskeyRegistrationPayload(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_beginPasskeyRegistration(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_BeginPasskeyRegistrationPayload(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_finishPasskeyRegistration(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_finishPasskeyRegistration(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().FinishPasskeyRegistration(ctx, fc.Args["input"].(model.FinishPasskeyRegistrationInput))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.FinishPasskeyRegistrationPayload) graphql.Marshaler {
+			return ec.marshalNFinishPasskeyRegistrationPayload2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐFinishPasskeyRegistrationPayload(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_finishPasskeyRegistration(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_FinishPasskeyRegistrationPayload(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_finishPasskeyRegistration_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_beginPasskeySignIn(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_beginPasskeySignIn(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Mutation().BeginPasskeySignIn(ctx)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.BeginPasskeySignInPayload) graphql.Marshaler {
+			return ec.marshalNBeginPasskeySignInPayload2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐBeginPasskeySignInPayload(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_beginPasskeySignIn(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_BeginPasskeySignInPayload(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_finishPasskeySignIn(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_finishPasskeySignIn(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().FinishPasskeySignIn(ctx, fc.Args["input"].(model.FinishPasskeySignInInput))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.FinishPasskeySignInPayload) graphql.Marshaler {
+			return ec.marshalNFinishPasskeySignInPayload2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐFinishPasskeySignInPayload(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_finishPasskeySignIn(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_FinishPasskeySignInPayload(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_finishPasskeySignIn_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_signOut(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_signOut(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Mutation().SignOut(ctx)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.SignOutPayload) graphql.Marshaler {
+			return ec.marshalNSignOutPayload2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐSignOutPayload(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_signOut(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_SignOutPayload(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_revokeSession(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_revokeSession(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().RevokeSession(ctx, fc.Args["input"].(model.RevokeSessionInput))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.RevokeSessionPayload) graphql.Marshaler {
+			return ec.marshalNRevokeSessionPayload2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐRevokeSessionPayload(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_revokeSession(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_RevokeSessionPayload(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_revokeSession_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_revokeOtherSessions(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_revokeOtherSessions(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Mutation().RevokeOtherSessions(ctx)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.RevokeOtherSessionsPayload) graphql.Marshaler {
+			return ec.marshalNRevokeOtherSessionsPayload2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐRevokeOtherSessionsPayload(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_revokeOtherSessions(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_RevokeOtherSessionsPayload(ctx, field)
+		},
+	}
+	return fc, nil
 }
 
 func (ec *executionContext) _MutationError_code(ctx context.Context, field graphql.CollectedField, obj *model.MutationError) (ret graphql.Marshaler) {
@@ -2368,6 +3486,190 @@ func (ec *executionContext) _PageInfo_endCursor(ctx context.Context, field graph
 }
 func (ec *executionContext) fieldContext_PageInfo_endCursor(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("PageInfo", field, false, false, errors.New("field of type Cursor does not have child fields"))
+}
+
+func (ec *executionContext) _PasskeyCredential_id(ctx context.Context, field graphql.CollectedField, obj *model.PasskeyCredential) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_PasskeyCredential_id(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ID, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_PasskeyCredential_id(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("PasskeyCredential", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _PasskeyCredential_label(ctx context.Context, field graphql.CollectedField, obj *model.PasskeyCredential) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_PasskeyCredential_label(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Label, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_PasskeyCredential_label(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("PasskeyCredential", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _PasskeyCredential_transports(ctx context.Context, field graphql.CollectedField, obj *model.PasskeyCredential) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_PasskeyCredential_transports(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Transports, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []string) graphql.Marshaler {
+			return ec.marshalNString2ᚕstringᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_PasskeyCredential_transports(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("PasskeyCredential", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _PasskeyCredential_createdAt(ctx context.Context, field graphql.CollectedField, obj *model.PasskeyCredential) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_PasskeyCredential_createdAt(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.CreatedAt, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v scalar.DateTime) graphql.Marshaler {
+			return ec.marshalNDateTime2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋscalarᚐDateTime(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_PasskeyCredential_createdAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("PasskeyCredential", field, false, false, errors.New("field of type DateTime does not have child fields"))
+}
+
+func (ec *executionContext) _PasskeyCredential_lastUsedAt(ctx context.Context, field graphql.CollectedField, obj *model.PasskeyCredential) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_PasskeyCredential_lastUsedAt(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.LastUsedAt, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *scalar.DateTime) graphql.Marshaler {
+			return ec.marshalODateTime2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋscalarᚐDateTime(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_PasskeyCredential_lastUsedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("PasskeyCredential", field, false, false, errors.New("field of type DateTime does not have child fields"))
+}
+
+func (ec *executionContext) _PasskeyOptions_ceremonyID(ctx context.Context, field graphql.CollectedField, obj *model.PasskeyOptions) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_PasskeyOptions_ceremonyID(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.CeremonyID, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_PasskeyOptions_ceremonyID(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("PasskeyOptions", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _PasskeyOptions_publicKeyJSON(ctx context.Context, field graphql.CollectedField, obj *model.PasskeyOptions) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_PasskeyOptions_publicKeyJSON(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.PublicKeyJSON, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_PasskeyOptions_publicKeyJSON(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("PasskeyOptions", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _PasskeyOptions_expiresAt(ctx context.Context, field graphql.CollectedField, obj *model.PasskeyOptions) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_PasskeyOptions_expiresAt(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ExpiresAt, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v scalar.DateTime) graphql.Marshaler {
+			return ec.marshalNDateTime2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋscalarᚐDateTime(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_PasskeyOptions_expiresAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("PasskeyOptions", field, false, false, errors.New("field of type DateTime does not have child fields"))
 }
 
 func (ec *executionContext) _ProviderConnection_id(ctx context.Context, field graphql.CollectedField, obj *model.ProviderConnection) (ret graphql.Marshaler) {
@@ -2656,6 +3958,189 @@ func (ec *executionContext) fieldContext_Query___schema(_ context.Context, field
 	return fc, nil
 }
 
+func (ec *executionContext) _RequestMagicLinkPayload_errors(ctx context.Context, field graphql.CollectedField, obj *model.RequestMagicLinkPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_RequestMagicLinkPayload_errors(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Errors, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*model.MutationError) graphql.Marshaler {
+			return ec.marshalNMutationError2ᚕᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐMutationErrorᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_RequestMagicLinkPayload_errors(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RequestMagicLinkPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_MutationError(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RequestMagicLinkPayload_accepted(ctx context.Context, field graphql.CollectedField, obj *model.RequestMagicLinkPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_RequestMagicLinkPayload_accepted(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Accepted, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_RequestMagicLinkPayload_accepted(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("RequestMagicLinkPayload", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _RevokeOtherSessionsPayload_errors(ctx context.Context, field graphql.CollectedField, obj *model.RevokeOtherSessionsPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_RevokeOtherSessionsPayload_errors(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Errors, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*model.MutationError) graphql.Marshaler {
+			return ec.marshalNMutationError2ᚕᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐMutationErrorᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_RevokeOtherSessionsPayload_errors(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RevokeOtherSessionsPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_MutationError(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RevokeOtherSessionsPayload_currentSession(ctx context.Context, field graphql.CollectedField, obj *model.RevokeOtherSessionsPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_RevokeOtherSessionsPayload_currentSession(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.CurrentSession, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.Session) graphql.Marshaler {
+			return ec.marshalOSession2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐSession(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_RevokeOtherSessionsPayload_currentSession(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RevokeOtherSessionsPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Session(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RevokeSessionPayload_errors(ctx context.Context, field graphql.CollectedField, obj *model.RevokeSessionPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_RevokeSessionPayload_errors(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Errors, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*model.MutationError) graphql.Marshaler {
+			return ec.marshalNMutationError2ᚕᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐMutationErrorᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_RevokeSessionPayload_errors(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RevokeSessionPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_MutationError(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RevokeSessionPayload_session(ctx context.Context, field graphql.CollectedField, obj *model.RevokeSessionPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_RevokeSessionPayload_session(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Session, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.Session) graphql.Marshaler {
+			return ec.marshalOSession2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐSession(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_RevokeSessionPayload_session(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RevokeSessionPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Session(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Session_id(ctx context.Context, field graphql.CollectedField, obj *model.Session) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -2926,6 +4411,70 @@ func (ec *executionContext) _SessionEdge_node(ctx context.Context, field graphql
 func (ec *executionContext) fieldContext_SessionEdge_node(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "SessionEdge",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Session(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SignOutPayload_errors(ctx context.Context, field graphql.CollectedField, obj *model.SignOutPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_SignOutPayload_errors(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Errors, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*model.MutationError) graphql.Marshaler {
+			return ec.marshalNMutationError2ᚕᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐMutationErrorᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_SignOutPayload_errors(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SignOutPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_MutationError(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SignOutPayload_session(ctx context.Context, field graphql.CollectedField, obj *model.SignOutPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_SignOutPayload_session(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Session, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.Session) graphql.Marshaler {
+			return ec.marshalOSession2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐSession(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_SignOutPayload_session(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SignOutPayload",
 		Field:      field,
 		IsMethod:   false,
 		IsResolver: false,
@@ -4547,6 +6096,154 @@ func (ec *executionContext) unmarshalInputDateRangeInput(ctx context.Context, ob
 	return it, nil
 }
 
+func (ec *executionContext) unmarshalInputFinishPasskeyRegistrationInput(ctx context.Context, obj any) (model.FinishPasskeyRegistrationInput, error) {
+	var it model.FinishPasskeyRegistrationInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"ceremonyID", "credentialJSON", "label"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "ceremonyID":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("ceremonyID"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.CeremonyID = data
+		case "credentialJSON":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("credentialJSON"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.CredentialJSON = data
+		case "label":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("label"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Label = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputFinishPasskeySignInInput(ctx context.Context, obj any) (model.FinishPasskeySignInInput, error) {
+	var it model.FinishPasskeySignInInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"ceremonyID", "credentialJSON"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "ceremonyID":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("ceremonyID"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.CeremonyID = data
+		case "credentialJSON":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("credentialJSON"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.CredentialJSON = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputRequestMagicLinkInput(ctx context.Context, obj any) (model.RequestMagicLinkInput, error) {
+	var it model.RequestMagicLinkInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"email", "redirectURI"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "email":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("email"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Email = data
+		case "redirectURI":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("redirectURI"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.RedirectURI = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputRevokeSessionInput(ctx context.Context, obj any) (model.RevokeSessionInput, error) {
+	var it model.RevokeSessionInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"id"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "id":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("id"))
+			data, err := ec.unmarshalNID2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ID = data
+		}
+	}
+	return it, nil
+}
+
 // endregion **************************** input.gotpl *****************************
 
 // region    ************************** interface.gotpl ***************************
@@ -4555,6 +6252,62 @@ func (ec *executionContext) _MutationPayload(ctx context.Context, sel ast.Select
 	switch obj := (obj).(type) {
 	case nil:
 		return graphql.Null
+	case model.SignOutPayload:
+		return ec._SignOutPayload(ctx, sel, &obj)
+	case *model.SignOutPayload:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._SignOutPayload(ctx, sel, obj)
+	case model.RevokeSessionPayload:
+		return ec._RevokeSessionPayload(ctx, sel, &obj)
+	case *model.RevokeSessionPayload:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._RevokeSessionPayload(ctx, sel, obj)
+	case model.RevokeOtherSessionsPayload:
+		return ec._RevokeOtherSessionsPayload(ctx, sel, &obj)
+	case *model.RevokeOtherSessionsPayload:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._RevokeOtherSessionsPayload(ctx, sel, obj)
+	case model.RequestMagicLinkPayload:
+		return ec._RequestMagicLinkPayload(ctx, sel, &obj)
+	case *model.RequestMagicLinkPayload:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._RequestMagicLinkPayload(ctx, sel, obj)
+	case model.FinishPasskeySignInPayload:
+		return ec._FinishPasskeySignInPayload(ctx, sel, &obj)
+	case *model.FinishPasskeySignInPayload:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._FinishPasskeySignInPayload(ctx, sel, obj)
+	case model.FinishPasskeyRegistrationPayload:
+		return ec._FinishPasskeyRegistrationPayload(ctx, sel, &obj)
+	case *model.FinishPasskeyRegistrationPayload:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._FinishPasskeyRegistrationPayload(ctx, sel, obj)
+	case model.BeginPasskeySignInPayload:
+		return ec._BeginPasskeySignInPayload(ctx, sel, &obj)
+	case *model.BeginPasskeySignInPayload:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._BeginPasskeySignInPayload(ctx, sel, obj)
+	case model.BeginPasskeyRegistrationPayload:
+		return ec._BeginPasskeyRegistrationPayload(ctx, sel, &obj)
+	case *model.BeginPasskeyRegistrationPayload:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._BeginPasskeyRegistrationPayload(ctx, sel, obj)
 	default:
 		if typedObj, ok := obj.(graphql.Marshaler); ok {
 			return typedObj
@@ -4906,6 +6659,92 @@ func (ec *executionContext) _ActivitySnapshot(ctx context.Context, sel ast.Selec
 	return out
 }
 
+var beginPasskeyRegistrationPayloadImplementors = []string{"BeginPasskeyRegistrationPayload", "MutationPayload"}
+
+func (ec *executionContext) _BeginPasskeyRegistrationPayload(ctx context.Context, sel ast.SelectionSet, obj *model.BeginPasskeyRegistrationPayload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, beginPasskeyRegistrationPayloadImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("BeginPasskeyRegistrationPayload")
+		case "errors":
+			out.Values[i] = ec._BeginPasskeyRegistrationPayload_errors(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "options":
+			out.Values[i] = ec._BeginPasskeyRegistrationPayload_options(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var beginPasskeySignInPayloadImplementors = []string{"BeginPasskeySignInPayload", "MutationPayload"}
+
+func (ec *executionContext) _BeginPasskeySignInPayload(ctx context.Context, sel ast.SelectionSet, obj *model.BeginPasskeySignInPayload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, beginPasskeySignInPayloadImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("BeginPasskeySignInPayload")
+		case "errors":
+			out.Values[i] = ec._BeginPasskeySignInPayload_errors(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "options":
+			out.Values[i] = ec._BeginPasskeySignInPayload_options(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
 var customProviderImplementors = []string{"CustomProvider", "Node"}
 
 func (ec *executionContext) _CustomProvider(ctx context.Context, sel ast.SelectionSet, obj *model.CustomProvider) graphql.Marshaler {
@@ -4987,6 +6826,92 @@ func (ec *executionContext) _DateRange(ctx context.Context, sel ast.SelectionSet
 	return out
 }
 
+var finishPasskeyRegistrationPayloadImplementors = []string{"FinishPasskeyRegistrationPayload", "MutationPayload"}
+
+func (ec *executionContext) _FinishPasskeyRegistrationPayload(ctx context.Context, sel ast.SelectionSet, obj *model.FinishPasskeyRegistrationPayload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, finishPasskeyRegistrationPayloadImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("FinishPasskeyRegistrationPayload")
+		case "errors":
+			out.Values[i] = ec._FinishPasskeyRegistrationPayload_errors(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "credential":
+			out.Values[i] = ec._FinishPasskeyRegistrationPayload_credential(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var finishPasskeySignInPayloadImplementors = []string{"FinishPasskeySignInPayload", "MutationPayload"}
+
+func (ec *executionContext) _FinishPasskeySignInPayload(ctx context.Context, sel ast.SelectionSet, obj *model.FinishPasskeySignInPayload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, finishPasskeySignInPayloadImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("FinishPasskeySignInPayload")
+		case "errors":
+			out.Values[i] = ec._FinishPasskeySignInPayload_errors(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "session":
+			out.Values[i] = ec._FinishPasskeySignInPayload_session(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
 var mutationImplementors = []string{"Mutation"}
 
 func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet) graphql.Marshaler {
@@ -5010,6 +6935,62 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 		case "_contract":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Mutation__contract(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "requestMagicLink":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_requestMagicLink(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "beginPasskeyRegistration":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_beginPasskeyRegistration(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "finishPasskeyRegistration":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_finishPasskeyRegistration(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "beginPasskeySignIn":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_beginPasskeySignIn(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "finishPasskeySignIn":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_finishPasskeySignIn(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "signOut":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_signOut(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "revokeSession":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_revokeSession(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "revokeOtherSessions":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_revokeOtherSessions(ctx, field)
 			})
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
@@ -5113,6 +7094,112 @@ func (ec *executionContext) _PageInfo(ctx context.Context, sel ast.SelectionSet,
 		case "endCursor":
 			out.Values[i] = ec._PageInfo_endCursor(ctx, field, obj)
 			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var passkeyCredentialImplementors = []string{"PasskeyCredential"}
+
+func (ec *executionContext) _PasskeyCredential(ctx context.Context, sel ast.SelectionSet, obj *model.PasskeyCredential) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, passkeyCredentialImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("PasskeyCredential")
+		case "id":
+			out.Values[i] = ec._PasskeyCredential_id(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "label":
+			out.Values[i] = ec._PasskeyCredential_label(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "transports":
+			out.Values[i] = ec._PasskeyCredential_transports(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "createdAt":
+			out.Values[i] = ec._PasskeyCredential_createdAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "lastUsedAt":
+			out.Values[i] = ec._PasskeyCredential_lastUsedAt(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var passkeyOptionsImplementors = []string{"PasskeyOptions"}
+
+func (ec *executionContext) _PasskeyOptions(ctx context.Context, sel ast.SelectionSet, obj *model.PasskeyOptions) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, passkeyOptionsImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("PasskeyOptions")
+		case "ceremonyID":
+			out.Values[i] = ec._PasskeyOptions_ceremonyID(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "publicKeyJSON":
+			out.Values[i] = ec._PasskeyOptions_publicKeyJSON(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "expiresAt":
+			out.Values[i] = ec._PasskeyOptions_expiresAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
 		default:
@@ -5355,6 +7442,135 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 	return out
 }
 
+var requestMagicLinkPayloadImplementors = []string{"RequestMagicLinkPayload", "MutationPayload"}
+
+func (ec *executionContext) _RequestMagicLinkPayload(ctx context.Context, sel ast.SelectionSet, obj *model.RequestMagicLinkPayload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, requestMagicLinkPayloadImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("RequestMagicLinkPayload")
+		case "errors":
+			out.Values[i] = ec._RequestMagicLinkPayload_errors(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "accepted":
+			out.Values[i] = ec._RequestMagicLinkPayload_accepted(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var revokeOtherSessionsPayloadImplementors = []string{"RevokeOtherSessionsPayload", "MutationPayload"}
+
+func (ec *executionContext) _RevokeOtherSessionsPayload(ctx context.Context, sel ast.SelectionSet, obj *model.RevokeOtherSessionsPayload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, revokeOtherSessionsPayloadImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("RevokeOtherSessionsPayload")
+		case "errors":
+			out.Values[i] = ec._RevokeOtherSessionsPayload_errors(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "currentSession":
+			out.Values[i] = ec._RevokeOtherSessionsPayload_currentSession(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var revokeSessionPayloadImplementors = []string{"RevokeSessionPayload", "MutationPayload"}
+
+func (ec *executionContext) _RevokeSessionPayload(ctx context.Context, sel ast.SelectionSet, obj *model.RevokeSessionPayload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, revokeSessionPayloadImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("RevokeSessionPayload")
+		case "errors":
+			out.Values[i] = ec._RevokeSessionPayload_errors(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "session":
+			out.Values[i] = ec._RevokeSessionPayload_session(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
 var sessionImplementors = []string{"Session", "Node"}
 
 func (ec *executionContext) _Session(ctx context.Context, sel ast.SelectionSet, obj *model.Session) graphql.Marshaler {
@@ -5486,6 +7702,49 @@ func (ec *executionContext) _SessionEdge(ctx context.Context, sel ast.SelectionS
 		case "node":
 			out.Values[i] = ec._SessionEdge_node(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var signOutPayloadImplementors = []string{"SignOutPayload", "MutationPayload"}
+
+func (ec *executionContext) _SignOutPayload(ctx context.Context, sel ast.SelectionSet, obj *model.SignOutPayload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, signOutPayloadImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("SignOutPayload")
+		case "errors":
+			out.Values[i] = ec._SignOutPayload_errors(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "session":
+			out.Values[i] = ec._SignOutPayload_session(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
 				out.Invalids++
 			}
 		default:
@@ -6378,6 +8637,34 @@ func (ec *executionContext) marshalNActivitySnapshot2ᚖgithubᚗcomᚋmorealᚋ
 	return ec._ActivitySnapshot(ctx, sel, v)
 }
 
+func (ec *executionContext) marshalNBeginPasskeyRegistrationPayload2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐBeginPasskeyRegistrationPayload(ctx context.Context, sel ast.SelectionSet, v model.BeginPasskeyRegistrationPayload) graphql.Marshaler {
+	return ec._BeginPasskeyRegistrationPayload(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNBeginPasskeyRegistrationPayload2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐBeginPasskeyRegistrationPayload(ctx context.Context, sel ast.SelectionSet, v *model.BeginPasskeyRegistrationPayload) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._BeginPasskeyRegistrationPayload(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNBeginPasskeySignInPayload2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐBeginPasskeySignInPayload(ctx context.Context, sel ast.SelectionSet, v model.BeginPasskeySignInPayload) graphql.Marshaler {
+	return ec._BeginPasskeySignInPayload(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNBeginPasskeySignInPayload2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐBeginPasskeySignInPayload(ctx context.Context, sel ast.SelectionSet, v *model.BeginPasskeySignInPayload) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._BeginPasskeySignInPayload(ctx, sel, v)
+}
+
 func (ec *executionContext) unmarshalNBoolean2bool(ctx context.Context, v any) (bool, error) {
 	res, err := graphql.UnmarshalBoolean(v)
 	return res, graphql.ErrorOnPath(ctx, err)
@@ -6439,6 +8726,44 @@ func (ec *executionContext) marshalNDateTime2githubᚗcomᚋmorealᚋjandibatᚗ
 	return v
 }
 
+func (ec *executionContext) unmarshalNFinishPasskeyRegistrationInput2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐFinishPasskeyRegistrationInput(ctx context.Context, v any) (model.FinishPasskeyRegistrationInput, error) {
+	res, err := ec.unmarshalInputFinishPasskeyRegistrationInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNFinishPasskeyRegistrationPayload2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐFinishPasskeyRegistrationPayload(ctx context.Context, sel ast.SelectionSet, v model.FinishPasskeyRegistrationPayload) graphql.Marshaler {
+	return ec._FinishPasskeyRegistrationPayload(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNFinishPasskeyRegistrationPayload2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐFinishPasskeyRegistrationPayload(ctx context.Context, sel ast.SelectionSet, v *model.FinishPasskeyRegistrationPayload) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._FinishPasskeyRegistrationPayload(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNFinishPasskeySignInInput2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐFinishPasskeySignInInput(ctx context.Context, v any) (model.FinishPasskeySignInInput, error) {
+	res, err := ec.unmarshalInputFinishPasskeySignInInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNFinishPasskeySignInPayload2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐFinishPasskeySignInPayload(ctx context.Context, sel ast.SelectionSet, v model.FinishPasskeySignInPayload) graphql.Marshaler {
+	return ec._FinishPasskeySignInPayload(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNFinishPasskeySignInPayload2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐFinishPasskeySignInPayload(ctx context.Context, sel ast.SelectionSet, v *model.FinishPasskeySignInPayload) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._FinishPasskeySignInPayload(ctx, sel, v)
+}
+
 func (ec *executionContext) unmarshalNID2string(ctx context.Context, v any) (string, error) {
 	res, err := graphql.UnmarshalID(v)
 	return res, graphql.ErrorOnPath(ctx, err)
@@ -6481,6 +8806,32 @@ func (ec *executionContext) marshalNLong2githubᚗcomᚋmorealᚋjandibatᚗorg�
 	return v
 }
 
+func (ec *executionContext) marshalNMutationError2ᚕᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐMutationErrorᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.MutationError) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNMutationError2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐMutationError(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNMutationError2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐMutationError(ctx context.Context, sel ast.SelectionSet, v *model.MutationError) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._MutationError(ctx, sel, v)
+}
+
 func (ec *executionContext) marshalNPageInfo2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐPageInfo(ctx context.Context, sel ast.SelectionSet, v *model.PageInfo) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
@@ -6489,6 +8840,58 @@ func (ec *executionContext) marshalNPageInfo2ᚖgithubᚗcomᚋmorealᚋjandibat
 		return graphql.Null
 	}
 	return ec._PageInfo(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNRequestMagicLinkInput2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐRequestMagicLinkInput(ctx context.Context, v any) (model.RequestMagicLinkInput, error) {
+	res, err := ec.unmarshalInputRequestMagicLinkInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNRequestMagicLinkPayload2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐRequestMagicLinkPayload(ctx context.Context, sel ast.SelectionSet, v model.RequestMagicLinkPayload) graphql.Marshaler {
+	return ec._RequestMagicLinkPayload(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNRequestMagicLinkPayload2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐRequestMagicLinkPayload(ctx context.Context, sel ast.SelectionSet, v *model.RequestMagicLinkPayload) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._RequestMagicLinkPayload(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNRevokeOtherSessionsPayload2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐRevokeOtherSessionsPayload(ctx context.Context, sel ast.SelectionSet, v model.RevokeOtherSessionsPayload) graphql.Marshaler {
+	return ec._RevokeOtherSessionsPayload(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNRevokeOtherSessionsPayload2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐRevokeOtherSessionsPayload(ctx context.Context, sel ast.SelectionSet, v *model.RevokeOtherSessionsPayload) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._RevokeOtherSessionsPayload(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNRevokeSessionInput2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐRevokeSessionInput(ctx context.Context, v any) (model.RevokeSessionInput, error) {
+	res, err := ec.unmarshalInputRevokeSessionInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNRevokeSessionPayload2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐRevokeSessionPayload(ctx context.Context, sel ast.SelectionSet, v model.RevokeSessionPayload) graphql.Marshaler {
+	return ec._RevokeSessionPayload(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNRevokeSessionPayload2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐRevokeSessionPayload(ctx context.Context, sel ast.SelectionSet, v *model.RevokeSessionPayload) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._RevokeSessionPayload(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalNSession2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐSession(ctx context.Context, sel ast.SelectionSet, v *model.Session) graphql.Marshaler {
@@ -6541,6 +8944,20 @@ func (ec *executionContext) marshalNSessionEdge2ᚖgithubᚗcomᚋmorealᚋjandi
 	return ec._SessionEdge(ctx, sel, v)
 }
 
+func (ec *executionContext) marshalNSignOutPayload2githubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐSignOutPayload(ctx context.Context, sel ast.SelectionSet, v model.SignOutPayload) graphql.Marshaler {
+	return ec._SignOutPayload(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNSignOutPayload2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐSignOutPayload(ctx context.Context, sel ast.SelectionSet, v *model.SignOutPayload) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._SignOutPayload(ctx, sel, v)
+}
+
 func (ec *executionContext) unmarshalNString2string(ctx context.Context, v any) (string, error) {
 	res, err := graphql.UnmarshalString(v)
 	return res, graphql.ErrorOnPath(ctx, err)
@@ -6555,6 +8972,35 @@ func (ec *executionContext) marshalNString2string(ctx context.Context, sel ast.S
 		}
 	}
 	return res
+}
+
+func (ec *executionContext) unmarshalNString2ᚕstringᚄ(ctx context.Context, v any) ([]string, error) {
+	vSlice := graphql.CoerceList(v)
+	var err error
+	res := make([]string, len(vSlice))
+	for i := range vSlice {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
+		res[i], err = ec.unmarshalNString2string(ctx, vSlice[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
+}
+
+func (ec *executionContext) marshalNString2ᚕstringᚄ(ctx context.Context, sel ast.SelectionSet, v []string) graphql.Marshaler {
+	ret := make(graphql.Array, len(v))
+	for i := range v {
+		ret[i] = ec.marshalNString2string(ctx, sel, v[i])
+	}
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
 }
 
 func (ec *executionContext) marshalNSubject2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐSubject(ctx context.Context, sel ast.SelectionSet, v *model.Subject) graphql.Marshaler {
@@ -6848,6 +9294,27 @@ func (ec *executionContext) marshalONode2githubᚗcomᚋmorealᚋjandibatᚗorg�
 		return graphql.Null
 	}
 	return ec._Node(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalOPasskeyCredential2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐPasskeyCredential(ctx context.Context, sel ast.SelectionSet, v *model.PasskeyCredential) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._PasskeyCredential(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalOPasskeyOptions2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐPasskeyOptions(ctx context.Context, sel ast.SelectionSet, v *model.PasskeyOptions) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._PasskeyOptions(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalOSession2ᚖgithubᚗcomᚋmorealᚋjandibatᚗorgᚋappsᚋapiᚋinternalᚋgraphqlᚋmodelᚐSession(ctx context.Context, sel ast.SelectionSet, v *model.Session) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._Session(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalOString2ᚕstringᚄ(ctx context.Context, v any) ([]string, error) {

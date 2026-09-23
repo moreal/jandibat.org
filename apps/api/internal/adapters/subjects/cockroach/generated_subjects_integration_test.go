@@ -132,3 +132,65 @@ func TestGeneratedSubjectRepositoryVerticalSlice(t *testing.T) {
 		t.Fatalf("missing subject lookup error = %v", err)
 	}
 }
+
+func TestSubjectServicePageUsesTupleAfterDeletedAnchor(t *testing.T) {
+	dsn := os.Getenv("JANDIBAT_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("set JANDIBAT_TEST_DATABASE_URL to a migrated CockroachDB test database")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	store, err := New(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := subjects.NewService(store, subjects.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	suffix := uuid.NewString()
+	ownerID, otherID := "page-owner-"+suffix, "page-other-"+suffix
+	ids := []string{"page-a-" + suffix, "page-b-" + suffix, "page-c-" + suffix, "page-other-subject-" + suffix}
+	for _, id := range []string{ownerID, otherID} {
+		if _, err := pool.Exec(ctx, `INSERT INTO users (id, primary_email) VALUES ($1, $2)`, id, id+"@example.invalid"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		for _, id := range ids {
+			_, _ = pool.Exec(cleanupCtx, `DELETE FROM subjects WHERE id = $1`, id)
+		}
+		for _, id := range []string{ownerID, otherID} {
+			_, _ = pool.Exec(cleanupCtx, `DELETE FROM users WHERE id = $1`, id)
+		}
+	})
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	for index, id := range ids {
+		owner := ownerID
+		if index == len(ids)-1 {
+			owner = otherID
+		}
+		if _, err := pool.Exec(ctx, `INSERT INTO subjects (id, owner_user_id, handle, timezone, is_public, created_at, updated_at) VALUES ($1, $2, $3, 'UTC', true, $4, $4)`, id, owner, id, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first, err := service.ListSubjectsPage(ctx, ownerID, nil, 2)
+	if err != nil || len(first.Subjects) != 2 || first.Subjects[0].ID != ids[0] || first.Subjects[1].ID != ids[1] || !first.HasNextPage {
+		t.Fatalf("first page = %+v, %v", first, err)
+	}
+	anchor := subjects.SubjectCursor{CreatedAt: first.Subjects[1].CreatedAt, ID: first.Subjects[1].ID}
+	if _, err := pool.Exec(ctx, `DELETE FROM subjects WHERE id = $1`, anchor.ID); err != nil {
+		t.Fatal(err)
+	}
+	second, err := service.ListSubjectsPage(ctx, ownerID, &anchor, 2)
+	if err != nil || len(second.Subjects) != 1 || second.Subjects[0].ID != ids[2] || second.HasNextPage {
+		t.Fatalf("second page after deleted anchor = %+v, %v", second, err)
+	}
+}

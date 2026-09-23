@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -193,6 +194,82 @@ func TestServiceListSubjectsUsesStableCursorAndOwnerScope(t *testing.T) {
 	}
 	if second.PageInfo.HasNextPage || second.PageInfo.NextCursor != nil {
 		t.Fatalf("second pageInfo = %#v", second.PageInfo)
+	}
+}
+
+func TestServiceListSubjectsPageUsesTypedKeysetAfterDeletedAnchor(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, time.August, 12, 10, 0, 0, 0, time.UTC)
+	ids := []string{"sub_c", "sub_a", "sub_b", "sub_other"}
+	service := newTestService(t, now, func() (string, error) {
+		id := ids[0]
+		ids = ids[1:]
+		return id, nil
+	})
+	provisionTestUser(t, service, "owner", "owner@example.com", now)
+	provisionTestUser(t, service, "other", "other@example.com", now)
+	for _, handle := range []string{"charlie", "alpha", "bravo"} {
+		if _, err := service.CreateSubject(ctx, "owner", CreateSubjectInput{Handle: handle, Timezone: "UTC"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := service.CreateSubject(ctx, "other", CreateSubjectInput{Handle: "outsider", Timezone: "UTC"}); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := service.ListSubjectsPage(ctx, "owner", nil, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := subjectIDs(first.Subjects); fmt.Sprint(got) != fmt.Sprint([]string{"sub_a", "sub_b"}) || !first.HasNextPage {
+		t.Fatalf("first page = %v, next=%t", got, first.HasNextPage)
+	}
+	anchor := SubjectCursor{CreatedAt: first.Subjects[1].CreatedAt, ID: first.Subjects[1].ID}
+	if err := service.DeleteSubject(ctx, "owner", anchor.ID); err != nil {
+		t.Fatal(err)
+	}
+	second, err := service.ListSubjectsPage(ctx, "owner", &anchor, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := subjectIDs(second.Subjects); fmt.Sprint(got) != fmt.Sprint([]string{"sub_c"}) || second.HasNextPage {
+		t.Fatalf("second page after deleted anchor = %v, next=%t", got, second.HasNextPage)
+	}
+	if empty, err := service.ListSubjectsPage(ctx, "owner", &SubjectCursor{CreatedAt: now, ID: "sub_z"}, 2); err != nil || len(empty.Subjects) != 0 || empty.HasNextPage {
+		t.Fatalf("empty page = %+v, %v", empty, err)
+	}
+}
+
+func TestServiceListSubjectsPageRejectsInvalidBoundsAndOwner(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, time.August, 12, 10, 0, 0, 0, time.UTC)
+	service := newTestService(t, now, func() (string, error) { return "unused", nil })
+	provisionTestUser(t, service, "owner", "owner@example.com", now)
+	for _, first := range []int{-1, 0, 101} {
+		if _, err := service.ListSubjectsPage(ctx, "owner", nil, first); !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("first %d error = %v, want invalid input", first, err)
+		}
+	}
+	for _, cursor := range []SubjectCursor{
+		{ID: "subject"},
+		{CreatedAt: now},
+		{CreatedAt: now, ID: strings.Repeat("x", 65)},
+		{CreatedAt: now, ID: "subject\x00id"},
+		{CreatedAt: now, ID: "subject\nid"},
+		{CreatedAt: now, ID: string([]byte{0xff})},
+	} {
+		if _, err := service.ListSubjectsPage(ctx, "owner", &cursor, 1); !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("cursor id %q error = %v, want invalid input", cursor.ID, err)
+		}
+	}
+	validMultibyte := SubjectCursor{CreatedAt: now, ID: strings.Repeat("界", 64)}
+	if _, err := service.ListSubjectsPage(ctx, "owner", &validMultibyte, 1); err != nil {
+		t.Fatalf("64-rune multibyte cursor error = %v", err)
+	}
+	for _, owner := range []string{"", "unknown"} {
+		if _, err := service.ListSubjectsPage(ctx, owner, nil, 1); !errors.Is(err, ErrUnauthenticated) {
+			t.Fatalf("owner %q error = %v, want unauthenticated", owner, err)
+		}
 	}
 }
 

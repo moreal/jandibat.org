@@ -124,6 +124,12 @@ type SubjectList struct {
 	PageInfo PageInfo  `json:"pageInfo"`
 }
 
+// SubjectPage contains a typed keyset page. The transport owns cursor encoding.
+type SubjectPage struct {
+	Subjects    []Subject
+	HasNextPage bool
+}
+
 type SubjectCursor struct {
 	CreatedAt time.Time
 	ID        string

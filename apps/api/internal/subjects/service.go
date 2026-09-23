@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 const (
@@ -188,6 +190,39 @@ func (service *Service) ListSubjects(ctx context.Context, ownerUserID string, in
 		result.PageInfo.NextCursor = &cursor
 	}
 	return result, nil
+}
+
+// ListSubjectsPage exposes the stable tuple cursor without tying the domain
+// service to either REST's legacy encoding or GraphQL's versioned encoding.
+func (service *Service) ListSubjectsPage(ctx context.Context, ownerUserID string, after *SubjectCursor, first int) (SubjectPage, error) {
+	if _, err := service.GetCurrentUser(ctx, ownerUserID); err != nil {
+		return SubjectPage{}, err
+	}
+	if first < 1 || first > maximumListLimit {
+		return SubjectPage{}, invalid("first must be between 1 and %d", maximumListLimit)
+	}
+	if after != nil {
+		if after.CreatedAt.IsZero() || !utf8.ValidString(after.ID) {
+			return SubjectPage{}, invalid("subject cursor is malformed")
+		}
+		if err := validateNonBlankLength("subject cursor id", after.ID, 1, 64); err != nil {
+			return SubjectPage{}, err
+		}
+		for _, r := range after.ID {
+			if unicode.IsControl(r) {
+				return SubjectPage{}, invalid("subject cursor is malformed")
+			}
+		}
+	}
+	items, err := service.repository.ListSubjects(ctx, ownerUserID, after, first+1)
+	if err != nil {
+		return SubjectPage{}, fmt.Errorf("list subjects: %w", err)
+	}
+	page := SubjectPage{Subjects: make([]Subject, 0, min(first, len(items))), HasNextPage: len(items) > first}
+	for _, subject := range items[:min(first, len(items))] {
+		page.Subjects = append(page.Subjects, cloneSubject(subject))
+	}
+	return page, nil
 }
 
 // GetSubject permits anonymous access only to public subjects. An authenticated

@@ -1,5 +1,6 @@
 import type { GraphQLTaggedNode, MutationParameters } from "relay-runtime";
 import { createMutation } from "solid-relay";
+export { createRelayEphemeralMutation } from "./secret-mutation";
 
 // Pages use this project-owned boundary, never solid-relay directly.
 export {

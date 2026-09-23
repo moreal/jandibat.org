@@ -135,12 +135,15 @@ func TestCockroachAPIRoleStateAndMutationAuditCommitOrRollbackTogether(t *testin
 		_, _ = admin.ExecContext(context.Background(), `DELETE FROM mutation_audit_outbox WHERE request_id=$1`, requestID)
 		_, _ = admin.ExecContext(context.Background(), `DELETE FROM users WHERE id=$1`, userID)
 	})
-	operationStore, _ := New(api)
 	pool, err := pgxpool.New(ctx, apiDSN)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
+	operationStore, err := NewWithPGXPool(api, pool)
+	if err != nil {
+		t.Fatal(err)
+	}
 	subjectStore, _ := subjectstore.New(pool)
 	txCtx, transaction, err := operationStore.BeginMutation(ctx)
 	if err != nil {

@@ -13,8 +13,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	operationsstore "github.com/moreal/jandibat.org/apps/api/internal/adapters/operations/cockroach"
+	subjectstore "github.com/moreal/jandibat.org/apps/api/internal/adapters/subjects/cockroach"
 	"github.com/moreal/jandibat.org/apps/api/internal/auth"
 	apihttp "github.com/moreal/jandibat.org/apps/api/internal/http"
 	"github.com/moreal/jandibat.org/apps/api/internal/operations"
@@ -83,12 +85,20 @@ VALUES ($1, $2, $3, 'active', $3, $3)`, userID, email, now); err != nil {
 		_, _ = db.ExecContext(cleanupCtx, `DELETE FROM users WHERE id = $1`, userID)
 	})
 
-	subjectRepository := newPGXSubjectStore(t, ctx, apiDSN)
+	pool, err := pgxpool.New(ctx, apiDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	subjectRepository, err := subjectstore.New(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
 	subjectService, err := subjects.NewService(subjectRepository, subjects.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	operationStore, err := operationsstore.New(apiDB)
+	operationStore, err := operationsstore.NewWithPGXPool(apiDB, pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,6 +183,25 @@ FROM deletion_request_inbox WHERE request_id = $1`, body.RequestID).Scan(
 	}
 	if inboxRows != 1 || outboxRows != 2 {
 		t.Fatalf("repeat durability: inbox=%d success_outboxes=%d", inboxRows, outboxRows)
+	}
+	failedSubjectID := "it_delete_subject_failed_" + suffix
+	failedHandle := "it-delete-failed-" + suffix
+	insertDeletionIntegrationSubject(t, ctx, db, failedSubjectID, userID, failedHandle, now)
+	failedRouter := apihttp.NewRouter(apihttp.Dependencies{
+		Auth: fixedDeletionUserAuth{user: user}, Subjects: subjectService, SubjectDeletions: requester,
+		Audit: auditRecorder, AuditSourceKey: []byte("deletion-integration-audit-source"),
+		MutationAudits: failingEnqueueCoordinator{next: operationStore},
+	})
+	failedRequest := httptest.NewRequest(http.MethodDelete, "/v1/subjects/"+failedHandle, nil)
+	failedRequest.Header.Set("Authorization", "Bearer session-token")
+	failedResponse := httptest.NewRecorder()
+	failedRouter.ServeHTTP(failedResponse, failedRequest)
+	if failedResponse.Code != http.StatusServiceUnavailable {
+		t.Fatalf("failed audit delete status=%d body=%s", failedResponse.Code, failedResponse.Body.String())
+	}
+	var escapedInbox int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM deletion_request_inbox WHERE target_id=$1`, failedSubjectID).Scan(&escapedInbox); err != nil || escapedInbox != 0 {
+		t.Fatalf("failed audit left deletion inbox rows=%d err=%v", escapedInbox, err)
 	}
 }
 

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	generated "github.com/moreal/jandibat.org/apps/api/internal/adapters/operations/cockroach/generated"
+	appdb "github.com/moreal/jandibat.org/apps/api/internal/database"
 	"github.com/moreal/jandibat.org/apps/api/internal/operations"
 )
 
@@ -97,6 +99,29 @@ func (store *Store) EnqueueDeletion(ctx context.Context, request operations.Dele
 	if err := operations.ValidateDeletionRequest(request); err != nil {
 		return operations.DeletionRequest{}, err
 	}
+	if store.pool != nil {
+		executor := appdb.PGXExecutorFor(ctx, store.pool)
+		row, err := generated.GetDeletionInboxForRequest(ctx, executor, request.RequestID, string(request.TargetType), request.TargetID)
+		if err != nil {
+			return operations.DeletionRequest{}, fmt.Errorf("load deletion inbox: %w", err)
+		}
+		if row == nil {
+			if err := generated.InsertDeletionInboxIfAbsent(ctx, executor, request.RequestID, string(request.TargetType), request.TargetID, request.RequestedAt.UTC()); err != nil {
+				return operations.DeletionRequest{}, fmt.Errorf("enqueue deletion request: %w", err)
+			}
+			row, err = generated.GetDeletionInboxForRequest(ctx, executor, request.RequestID, string(request.TargetType), request.TargetID)
+			if err != nil {
+				return operations.DeletionRequest{}, fmt.Errorf("load deletion inbox: %w", err)
+			}
+		}
+		if row == nil {
+			return operations.DeletionRequest{}, operations.ErrDeletionNotFound
+		}
+		if operations.DeletionTargetType(row.TargetType) != request.TargetType || row.TargetId != request.TargetID {
+			return operations.DeletionRequest{}, fmt.Errorf("%w: request ID is already bound to another target", operations.ErrInvalidDeletionRequest)
+		}
+		return inboxDeletionFromGenerated(*row), nil
+	}
 	executor, err := store.mutationExecutor(ctx)
 	if err != nil {
 		return operations.DeletionRequest{}, err
@@ -134,6 +159,16 @@ LIMIT 1`, request.RequestID, request.TargetType, request.TargetID))
 		return operations.DeletionRequest{}, fmt.Errorf("%w: request ID is already bound to another target", operations.ErrInvalidDeletionRequest)
 	}
 	return stored, nil
+}
+
+func inboxDeletionFromGenerated(row generated.GetDeletionInboxForRequestRow) operations.DeletionRequest {
+	return operations.DeletionRequest{
+		ID: row.Id, RequestID: row.RequestId,
+		TargetType: operations.DeletionTargetType(row.TargetType), TargetID: row.TargetId,
+		Status: operations.DeletionRequested, LastCompletedStage: operations.DeletionStageRequested,
+		SubjectIDs: []string{}, RequestedAt: row.RequestedAt, UpdatedAt: row.RequestedAt,
+		AvailableAt: row.RequestedAt,
+	}
 }
 
 func (store *Store) LoadDeletion(ctx context.Context, requestID string) (operations.DeletionRequest, error) {

@@ -40,6 +40,18 @@ func WithLazyPGXTransaction(ctx context.Context, pool PGXLazyPool) (context.Cont
 	return context.WithValue(ctx, lazyPGXContextKey{}, lazy), lazy
 }
 
+// HasPendingLazyPGXTransaction reports a request boundary that has not yet
+// started a transaction. Adapters may preflight known no-op mutations before
+// claiming durable state, while their conditional write remains authoritative.
+func HasPendingLazyPGXTransaction(ctx context.Context, pool DBTX) bool {
+	lazy, ok := ctx.Value(lazyPGXContextKey{}).(*LazyPGXTransaction)
+	if !ok || lazy == nil || lazy.Active() || lazy.isClosed() {
+		return false
+	}
+	identity, err := transactionPoolIdentity(pool)
+	return err == nil && lazy.poolIdentity == identity
+}
+
 func (lazy *LazyPGXTransaction) Transaction() (pgx.Tx, bool) {
 	if lazy == nil {
 		return nil, false

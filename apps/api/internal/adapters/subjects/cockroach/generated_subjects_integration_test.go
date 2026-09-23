@@ -26,7 +26,7 @@ func TestGeneratedSubjectRepositoryVerticalSlice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer pool.Close()
+	t.Cleanup(pool.Close)
 	store, err := New(pool)
 	if err != nil {
 		t.Fatal(err)

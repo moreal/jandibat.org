@@ -25,6 +25,8 @@ import (
 	adapteroauth "github.com/moreal/jandibat.org/apps/api/internal/adapters/integrations/oauth"
 	oauthstore "github.com/moreal/jandibat.org/apps/api/internal/adapters/integrations/oauth/cockroach"
 	operationsstore "github.com/moreal/jandibat.org/apps/api/internal/adapters/operations/cockroach"
+	activitystore "github.com/moreal/jandibat.org/apps/api/internal/adapters/storage/cockroach"
+	subjectstore "github.com/moreal/jandibat.org/apps/api/internal/adapters/subjects/cockroach"
 	"github.com/moreal/jandibat.org/apps/api/internal/auth"
 	apihttp "github.com/moreal/jandibat.org/apps/api/internal/http"
 	"github.com/moreal/jandibat.org/apps/api/internal/integrations"
@@ -74,12 +76,23 @@ func TestCockroachOAuthCallbackOutboxFailureConsumesStateRollsBackConnectionAndR
 		t.Fatal(err)
 	}
 
-	integrationDB, err := integrationstore.New(apiDB)
+	appPool, err := pgxpool.New(ctx, apiDSN)
 	if err != nil {
 		t.Fatal(err)
 	}
-	activityDB := newPGXActivityStore(t, ctx, apiDSN)
-	subjectDB := newPGXSubjectStore(t, ctx, apiDSN)
+	t.Cleanup(appPool.Close)
+	integrationDB, err := integrationstore.NewWithPGXPool(apiDB, appPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	activityDB, err := activitystore.New(appPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	subjectDB, err := subjectstore.New(appPool)
+	if err != nil {
+		t.Fatal(err)
+	}
 	subjectService, err := subjects.NewService(subjectDB, subjects.Config{})
 	if err != nil {
 		t.Fatal(err)
@@ -171,7 +184,7 @@ func TestCockroachOAuthCallbackOutboxFailureConsumesStateRollsBackConnectionAndR
 		t.Fatalf("begin OAuth state: %v", err)
 	}
 
-	operationStore, err := operationsstore.New(apiDB)
+	operationStore, err := operationsstore.NewWithPGXPool(apiDB, appPool)
 	if err != nil {
 		t.Fatal(err)
 	}

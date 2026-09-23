@@ -9,6 +9,9 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	generated "github.com/moreal/jandibat.org/apps/api/internal/adapters/operations/cockroach/generated"
 	appdb "github.com/moreal/jandibat.org/apps/api/internal/database"
 	"github.com/moreal/jandibat.org/apps/api/internal/operations"
 )
@@ -40,6 +43,7 @@ AND column_name IN (
 type mutationAuditTransaction struct {
 	store   *Store
 	lazy    *appdb.LazyTransaction
+	lazyPGX *appdb.LazyPGXTransaction
 	hooks   *operations.MutationRollbackScope
 	failure *operations.MutationFailureCommitMarker
 }
@@ -49,7 +53,13 @@ func (transaction *mutationAuditTransaction) CommitFailure() bool {
 }
 
 func (transaction *mutationAuditTransaction) Active() bool {
-	if transaction == nil || transaction.lazy == nil {
+	if transaction == nil {
+		return false
+	}
+	if transaction.lazyPGX != nil {
+		return transaction.lazyPGX.Active()
+	}
+	if transaction.lazy == nil {
 		return false
 	}
 	_, active := transaction.lazy.Transaction()
@@ -57,6 +67,12 @@ func (transaction *mutationAuditTransaction) Active() bool {
 }
 
 func (store *Store) BeginMutation(ctx context.Context) (context.Context, operations.MutationAuditTransaction, error) {
+	if store.pool != nil {
+		ctx, lazy := appdb.WithLazyPGXTransaction(ctx, store.pool)
+		ctx, hooks := operations.WithMutationRollbackScope(ctx)
+		ctx, failure := operations.WithMutationFailureCommitMarker(ctx)
+		return ctx, &mutationAuditTransaction{store: store, lazyPGX: lazy, hooks: hooks, failure: failure}, nil
+	}
 	ctx, lazy := appdb.WithLazyTransaction(ctx, store.db)
 	ctx, hooks := operations.WithMutationRollbackScope(ctx)
 	ctx, failure := operations.WithMutationFailureCommitMarker(ctx)
@@ -64,10 +80,17 @@ func (store *Store) BeginMutation(ctx context.Context) (context.Context, operati
 }
 
 func (transaction *mutationAuditTransaction) Enqueue(ctx context.Context, event operations.AuditEvent) error {
-	if transaction == nil || transaction.lazy == nil {
+	if transaction == nil || (transaction.lazy == nil && transaction.lazyPGX == nil) {
 		return operations.ErrInvalidAuditOutbox
 	}
-	tx, ok := transaction.lazy.Transaction()
+	var sqlTx *sql.Tx
+	var pgxTx pgx.Tx
+	var ok bool
+	if transaction.lazyPGX != nil {
+		pgxTx, ok = transaction.lazyPGX.Transaction()
+	} else {
+		sqlTx, ok = transaction.lazy.Transaction()
+	}
 	if !ok {
 		// A successful registered mutation without a participating state write is
 		// a deployment/configuration defect; never create a misleading outcome.
@@ -96,7 +119,20 @@ func (transaction *mutationAuditTransaction) Enqueue(ctx context.Context, event 
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `
+	if pgxTx != nil {
+		outboxUUID, err := uuid.Parse(outboxID)
+		if err != nil {
+			return err
+		}
+		eventUUID, err := uuid.Parse(event.ID)
+		if err != nil {
+			return err
+		}
+		return generated.InsertMutationAuditOutcome(ctx, pgxTx, outboxUUID, eventUUID,
+			event.RequestID, event.OccurredAt, string(event.Actor.Type), &event.Actor.ID,
+			event.Action, event.Target.Type, &event.Target.ID, string(event.Outcome), encoded)
+	}
+	_, err = sqlTx.ExecContext(ctx, `
 INSERT INTO mutation_audit_outbox (
   id, audit_event_id, request_id, occurred_at, actor_type, actor_id, action,
   target_type, target_id, outcome, metadata, status, attempts, available_at,
@@ -111,10 +147,16 @@ INSERT INTO mutation_audit_outbox (
 }
 
 func (transaction *mutationAuditTransaction) Commit() error {
-	if transaction == nil || transaction.lazy == nil {
+	if transaction == nil || (transaction.lazy == nil && transaction.lazyPGX == nil) {
 		return operations.ErrInvalidAuditOutbox
 	}
-	if err := transaction.lazy.Commit(); err != nil {
+	var err error
+	if transaction.lazyPGX != nil {
+		err = transaction.lazyPGX.Commit()
+	} else {
+		err = transaction.lazy.Commit()
+	}
+	if err != nil {
 		return err
 	}
 	transaction.hooks.Commit()
@@ -122,10 +164,15 @@ func (transaction *mutationAuditTransaction) Commit() error {
 }
 
 func (transaction *mutationAuditTransaction) Rollback() error {
-	if transaction == nil || transaction.lazy == nil {
+	if transaction == nil || (transaction.lazy == nil && transaction.lazyPGX == nil) {
 		return nil
 	}
-	err := transaction.lazy.Rollback()
+	var err error
+	if transaction.lazyPGX != nil {
+		err = transaction.lazyPGX.Rollback()
+	} else {
+		err = transaction.lazy.Rollback()
+	}
 	transaction.hooks.Rollback()
 	return err
 }

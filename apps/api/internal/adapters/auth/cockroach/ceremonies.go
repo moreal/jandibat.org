@@ -67,6 +67,11 @@ func (store *Store) ConsumeCeremony(ctx context.Context, id string, kind coreaut
 		if err != nil {
 			return coreauth.PasskeyCeremony{}, coreauth.ErrInvalidInput
 		}
+		if appdb.HasPendingLazyPGXTransaction(ctx, store.pool) {
+			if stateErr := store.ceremonyStatePGX(ctx, parsedID, kind, now); !errors.Is(stateErr, coreauth.ErrConflict) {
+				return coreauth.PasskeyCeremony{}, stateErr
+			}
+		}
 		row, err := generated.ConsumeCeremony(ctx, appdb.PGXExecutorFor(ctx, store.pool), parsedID, databaseCeremonyKind(kind), now)
 		if err != nil {
 			return coreauth.PasskeyCeremony{}, persistenceError(err)

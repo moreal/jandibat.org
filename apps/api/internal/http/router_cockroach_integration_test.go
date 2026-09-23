@@ -15,16 +15,28 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	authstore "github.com/moreal/jandibat.org/apps/api/internal/adapters/auth/cockroach"
 	operationsstore "github.com/moreal/jandibat.org/apps/api/internal/adapters/operations/cockroach"
+	subjectstore "github.com/moreal/jandibat.org/apps/api/internal/adapters/subjects/cockroach"
 	"github.com/moreal/jandibat.org/apps/api/internal/auth"
-	appdb "github.com/moreal/jandibat.org/apps/api/internal/database"
 	"github.com/moreal/jandibat.org/apps/api/internal/http/handlers"
 	"github.com/moreal/jandibat.org/apps/api/internal/operations"
+	"github.com/moreal/jandibat.org/apps/api/internal/subjects"
 )
 
 type integrationMailer struct{}
+
+func newAuditTestPool(t *testing.T, ctx context.Context, dsn string) *pgxpool.Pool {
+	t.Helper()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	return pool
+}
 
 func (integrationMailer) SendMagicLink(context.Context, auth.MagicLinkMail) error { return nil }
 
@@ -93,11 +105,16 @@ func TestCockroachAuditTimeoutRollsBackStateAndOutbox(t *testing.T) {
 		_, _ = admin.ExecContext(cleanup, `DELETE FROM user_settings WHERE user_id=$1`, userID)
 		_, _ = admin.ExecContext(cleanup, `DELETE FROM users WHERE id=$1`, userID)
 	})
-	operationStore, err := operationsstore.New(api)
+	pool := newAuditTestPool(t, ctx, apiDSN)
+	operationStore, err := operationsstore.NewWithPGXPool(api, pool)
 	if err != nil {
 		t.Fatal(err)
 	}
 	recorder, err := operations.NewAuditRecorder(operationStore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settingsStore, err := subjectstore.New(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,12 +123,7 @@ func TestCockroachAuditTimeoutRollsBackStateAndOutbox(t *testing.T) {
 	router.Use(timeoutProblems(25 * time.Millisecond))
 	router.Use(auditRequests(recorder, []byte("timeout-audit-source-key"), operationStore))
 	router.Patch("/v1/subjects/{subject}", func(w http.ResponseWriter, r *http.Request) {
-		executor, execErr := appdb.MutationExecutor(r.Context(), api)
-		if execErr != nil {
-			t.Errorf("mutation executor: %v", execErr)
-			return
-		}
-		if _, execErr = executor.ExecContext(r.Context(), `UPDATE user_settings SET locale='ja-JP',updated_at=$2 WHERE user_id=$1`, userID, now.Add(time.Second)); execErr != nil {
+		if execErr := settingsStore.SaveUserSettings(r.Context(), userID, subjects.UserSettings{Locale: "ja-JP", Timezone: "UTC", Theme: subjects.ThemeSystem, UpdatedAt: now.Add(time.Second)}); execErr != nil {
 			t.Errorf("update settings: %v", execErr)
 			return
 		}
@@ -179,11 +191,12 @@ func TestNewRouterCockroachPasskeyFailureCommitsReplayGuardAndOutbox(t *testing.
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	suffix := strings.ReplaceAll(now.Format("150405.000000000"), ".", "")[:12]
 	ceremonyID := "f17d0f6a-04ae-4e72-b2f3-" + suffix
-	authRepository, err := authstore.New(api)
+	pool := newAuditTestPool(t, ctx, apiDSN)
+	authRepository, err := authstore.New(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
-	operationStore, err := operationsstore.New(api)
+	operationStore, err := operationsstore.NewWithPGXPool(api, pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,6 +275,7 @@ ORDER BY occurred_at DESC LIMIT 1`, now, auditRequestID).Scan(&replayAuditReques
 
 func TestNewRouterCockroachMagicLinkNewUserSuccessCommitsSessionAndOutbox(t *testing.T) {
 	admin, api, ctx := openRouterIntegrationDatabases(t)
+	apiDSN := os.Getenv("JANDIBAT_TEST_API_DATABASE_URL")
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	suffix := strings.ReplaceAll(now.Format("150405.000000000"), ".", "")[:12]
 	token := "magic-success-token-" + suffix + "-sufficient-entropy"
@@ -278,7 +292,8 @@ func TestNewRouterCockroachMagicLinkNewUserSuccessCommitsSessionAndOutbox(t *tes
 		_, _ = admin.ExecContext(cleanup, `DELETE FROM users WHERE primary_email=$1`, email)
 		_, _ = admin.ExecContext(cleanup, `DELETE FROM magic_link_tokens WHERE id=$1`, linkID)
 	})
-	repository, err := authstore.New(api)
+	pool := newAuditTestPool(t, ctx, apiDSN)
+	repository, err := authstore.New(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -293,7 +308,7 @@ VALUES($1,$2,$3,'signin',$4,$5)`, linkID, email, digest[:], now, now.Add(15*time
 	if err != nil {
 		t.Fatal(err)
 	}
-	operationStore, _ := operationsstore.New(api)
+	operationStore, _ := operationsstore.NewWithPGXPool(api, pool)
 	recorder, _ := operations.NewAuditRecorder(operationStore)
 	router := NewRouter(Dependencies{Auth: service, Audit: recorder, AuditSourceKey: auditKey, MutationAudits: operationStore, Now: func() time.Time { return now.Add(time.Second) }})
 	body := `{"token":"` + token + `"}`
@@ -337,6 +352,7 @@ VALUES($1,$2,$3,'signin',$4,$5)`, linkID, email, digest[:], now, now.Add(15*time
 
 func TestNewRouterCockroachPasskeySuccessCommitsCounterSessionAndOutbox(t *testing.T) {
 	admin, api, ctx := openRouterIntegrationDatabases(t)
+	apiDSN := os.Getenv("JANDIBAT_TEST_API_DATABASE_URL")
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	suffix := strings.ReplaceAll(now.Format("150405.000000000"), ".", "")[:12]
 	userID := "passkey-success-user-" + suffix
@@ -356,7 +372,8 @@ func TestNewRouterCockroachPasskeySuccessCommitsCounterSessionAndOutbox(t *testi
 		_, _ = admin.ExecContext(cleanup, `DELETE FROM audit_events WHERE metadata->>'source_ip'=$1`, source)
 		_, _ = admin.ExecContext(cleanup, `DELETE FROM users WHERE id=$1`, userID)
 	})
-	repository, err := authstore.New(api)
+	pool := newAuditTestPool(t, ctx, apiDSN)
+	repository, err := authstore.New(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -378,7 +395,7 @@ func TestNewRouterCockroachPasskeySuccessCommitsCounterSessionAndOutbox(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	operationStore, _ := operationsstore.New(api)
+	operationStore, _ := operationsstore.NewWithPGXPool(api, pool)
 	recorder, _ := operations.NewAuditRecorder(operationStore)
 	router := NewRouter(Dependencies{Auth: service, Audit: recorder, AuditSourceKey: auditKey, MutationAudits: operationStore, Now: func() time.Time { return now.Add(time.Second) }})
 	encodedID := base64.RawURLEncoding.EncodeToString(credentialID)

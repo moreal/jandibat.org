@@ -119,6 +119,8 @@ VALUES ($1, $1, 'Consent integration', 'subject', $2, $3, $3)`, environmentID, s
 	transactionJob.IdempotencyKeyHash = transactionKey[:]
 	transactionJob.RequestHash = transactionRequest[:]
 	transactionJob.IdempotencyExpires = &transactionExpiry
+	isolatedAvailableAt := time.Date(1500, time.January, 1, 0, 0, 0, 0, time.UTC)
+	transactionJob.NextAttemptAt = &isolatedAvailableAt
 	err = appdb.InTx(ctx, apiPool, appdb.RetryOptions{}, func(txctx context.Context, _ pgx.Tx) error {
 		if err := generatedStore.SaveSyncJob(txctx, transactionJob); err != nil {
 			return err
@@ -137,7 +139,7 @@ VALUES ($1, $1, 'Consent integration', 'subject', $2, $3, $3)`, environmentID, s
 		if err != nil || !found || idempotent.ID != transactionJobID {
 			return fmt.Errorf("transactional idempotent sync job = (%+v, %t, %v)", idempotent, found, err)
 		}
-		claimable, err := generatedStore.ListClaimableSyncJobs(readCtx, now, 5)
+		claimable, err := generatedStore.ListClaimableSyncJobs(readCtx, now, 1)
 		if err != nil || len(claimable) != 1 || claimable[0] != transactionJobID {
 			return fmt.Errorf("transactional claimable jobs = (%+v, %v)", claimable, err)
 		}

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	appdb "github.com/moreal/jandibat.org/apps/api/internal/database"
 	"github.com/moreal/jandibat.org/apps/api/internal/operations"
 )
@@ -86,6 +87,7 @@ var ErrInvalidDeletedIdentityHMAC = errors.New("operations cockroach: invalid de
 
 type Store struct {
 	db                    *sql.DB
+	pool                  *pgxpool.Pool
 	redactor              operations.Redactor
 	identityHMACMu        sync.RWMutex
 	identityHMACActiveKey string
@@ -144,6 +146,15 @@ func New(db *sql.DB, extraSensitiveAuditKeys ...string) (*Store, error) {
 		return nil, ErrNilDB
 	}
 	return &Store{db: db, redactor: operations.NewRedactor(extraSensitiveAuditKeys...)}, nil
+}
+
+// NewWithPGXPool keeps legacy operational methods on db while migrated
+// request-audit methods share pool with the other pgx-backed stores.
+func NewWithPGXPool(db *sql.DB, pool *pgxpool.Pool, extraSensitiveAuditKeys ...string) (*Store, error) {
+	if db == nil || pool == nil {
+		return nil, ErrNilDB
+	}
+	return &Store{db: db, pool: pool, redactor: operations.NewRedactor(extraSensitiveAuditKeys...)}, nil
 }
 
 // Check implements operations.DependencyProbe.

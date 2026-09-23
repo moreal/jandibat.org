@@ -13,9 +13,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	integrationstore "github.com/moreal/jandibat.org/apps/api/internal/adapters/integrations/cockroach"
 	operationsstore "github.com/moreal/jandibat.org/apps/api/internal/adapters/operations/cockroach"
+	activitystore "github.com/moreal/jandibat.org/apps/api/internal/adapters/storage/cockroach"
+	subjectstore "github.com/moreal/jandibat.org/apps/api/internal/adapters/subjects/cockroach"
 	"github.com/moreal/jandibat.org/apps/api/internal/auth"
 	apihttp "github.com/moreal/jandibat.org/apps/api/internal/http"
 	"github.com/moreal/jandibat.org/apps/api/internal/integrations"
@@ -88,15 +91,32 @@ func TestCockroachCustomAndConnectionHTTPMutationsShareAuditTransaction(t *testi
 		_, _ = admin.ExecContext(cleanup, `DELETE FROM users WHERE id IN ($1,$2)`, userID, otherUserID)
 	})
 
-	integrationDB, _ := integrationstore.New(apiDB)
-	activityDB := newPGXActivityStore(t, ctx, apiDSN)
-	subjectDB := newPGXSubjectStore(t, ctx, apiDSN)
+	pool, err := pgxpool.New(ctx, apiDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	integrationDB, err := integrationstore.NewWithPGXPool(apiDB, pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	activityDB, err := activitystore.New(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	subjectDB, err := subjectstore.New(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
 	subjectService, _ := subjects.NewService(subjectDB, subjects.Config{})
 	cipher, _ := integrations.NewAESGCMCipher(bytes.Repeat([]byte{0x45}, 32))
 	customService, _ := integrations.NewCustomProviderService(integrationDB, cipher, activityDB, nil, nil)
 	connectionService, _ := integrations.NewConnectionService(integrationDB, cipher, nil, nil, activityDB)
 	syncService, _ := integrations.NewSyncService(integrationDB, integrationDB, activityDB, cipher, nil, nil, nil)
-	operationStore, _ := operationsstore.New(apiDB)
+	operationStore, err := operationsstore.NewWithPGXPool(apiDB, pool)
+	if err != nil {
+		t.Fatal(err)
+	}
 	recorder, _ := operations.NewAuditRecorder(operationStore)
 	user := auth.User{ID: userID, PrimaryEmail: email, Status: auth.UserStatusActive, CreatedAt: now, UpdatedAt: now}
 	dependencies := apihttp.Dependencies{

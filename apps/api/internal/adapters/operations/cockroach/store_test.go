@@ -200,14 +200,8 @@ func TestAuditQueryMatchesExistingSchema(t *testing.T) {
 	}
 }
 
-func TestAuditSinkRedactsAndPersistsSourceIP(t *testing.T) {
-	script := fakedb.New(fakedb.Step{Operation: fakedb.Exec, Affected: 1})
-	db := script.Open()
-	defer db.Close()
-	store, err := New(db)
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestAuditSinkRedactsAndEncodesSourceIP(t *testing.T) {
+	store := &Store{redactor: operations.NewRedactor()}
 	event := operations.AuditEvent{
 		ID: "018f0000-0000-7000-8000-000000000001", OccurredAt: time.Now(),
 		Actor:  operations.AuditActor{Type: operations.AuditActorUser, ID: "user-1"},
@@ -215,16 +209,9 @@ func TestAuditSinkRedactsAndPersistsSourceIP(t *testing.T) {
 		Outcome: operations.AuditSucceeded, RequestID: "request-1", SourceIP: "127.0.0.1",
 		Metadata: map[string]any{"api_key": "do-not-store"},
 	}
-	if err := store.WriteAuditEvent(context.Background(), event); err != nil {
+	_, encoded, err := store.prepareAuditEvent(event)
+	if err != nil {
 		t.Fatal(err)
-	}
-	calls := script.Calls()
-	if len(calls) != 1 || calls[0].Operation != fakedb.Exec || len(calls[0].Args) != 10 {
-		t.Fatalf("calls = %#v", calls)
-	}
-	encoded, ok := calls[0].Args[9].Value.([]byte)
-	if !ok {
-		t.Fatalf("metadata argument = %T", calls[0].Args[9].Value)
 	}
 	var metadata map[string]any
 	if err := json.Unmarshal(encoded, &metadata); err != nil {

@@ -22,30 +22,30 @@ INSERT INTO audit_events (
 )`
 
 func (store *Store) WriteAuditEvent(ctx context.Context, event operations.AuditEvent) error {
-	if store.pool != nil {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		redacted, encoded, err := store.prepareAuditEvent(event)
-		if err != nil {
-			return err
-		}
-		id, err := uuid.Parse(redacted.ID)
-		if err != nil {
-			return fmt.Errorf("write audit event: %w", err)
-		}
-		err = appdb.InTx(ctx, store.pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
-			return generated.InsertAuditEvent(txctx, tx, id, redacted.OccurredAt,
-				string(redacted.Actor.Type), &redacted.Actor.ID, redacted.Action,
-				redacted.Target.Type, &redacted.Target.ID, string(redacted.Outcome),
-				redacted.RequestID, encoded)
-		})
-		if err != nil {
-			return fmt.Errorf("write audit event: %w", err)
-		}
-		return nil
+	if store.pool == nil {
+		return ErrNilDB
 	}
-	return store.writeAuditEvent(ctx, store.db, event)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	redacted, encoded, err := store.prepareAuditEvent(event)
+	if err != nil {
+		return err
+	}
+	id, err := uuid.Parse(redacted.ID)
+	if err != nil {
+		return fmt.Errorf("write audit event: %w", err)
+	}
+	err = appdb.InTx(ctx, store.pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
+		return generated.InsertAuditEvent(txctx, tx, id, redacted.OccurredAt,
+			string(redacted.Actor.Type), &redacted.Actor.ID, redacted.Action,
+			redacted.Target.Type, &redacted.Target.ID, string(redacted.Outcome),
+			redacted.RequestID, encoded)
+	})
+	if err != nil {
+		return fmt.Errorf("write audit event: %w", err)
+	}
+	return nil
 }
 
 type auditExecutor interface {

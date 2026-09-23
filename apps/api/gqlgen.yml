@@ -1,0 +1,29 @@
+schema:
+  - ../../graphql/schema/**/*.graphqls
+
+exec:
+  filename: internal/graphql/generated/generated.go
+  package: generated
+
+model:
+  filename: internal/graphql/model/models_gen.go
+  package: model
+
+resolver:
+  layout: single-file
+  filename: internal/graphql/schema.resolvers.go
+  package: graphql
+
+models:
+  Date:
+    model:
+      - github.com/moreal/jandibat.org/apps/api/internal/graphql/scalar.Date
+  DateTime:
+    model:
+      - github.com/moreal/jandibat.org/apps/api/internal/graphql/scalar.DateTime
+  TimeZone:
+    model:
+      - github.com/moreal/jandibat.org/apps/api/internal/graphql/scalar.TimeZone
+  Cursor:
+    model:
+      - github.com/moreal/jandibat.org/apps/api/internal/graphql/scalar.Cursor

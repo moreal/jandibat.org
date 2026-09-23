@@ -15,6 +15,7 @@ services:
     volumes:
       - cockroach-data-v26:/cockroach/cockroach-data
       - ./scripts:/workspace/scripts:ro
+      - ./db/migrations:/workspace/db/migrations:ro
     healthcheck:
       test:
         [

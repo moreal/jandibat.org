@@ -50,6 +50,25 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
   applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
 )"
 
+# A baseline is valid only for a fresh database or its own prior application.
+# Never mix the new checksum history with the discarded 0001..0013 history.
+if [ -f db/migrations/0001_baseline.sql ]; then
+	legacy=$(sql --database="$database" --format=tsv --execute="
+SELECT CASE WHEN
+  EXISTS (SELECT 1 FROM schema_migrations WHERE version <> '0001_baseline.sql')
+  OR (
+    NOT EXISTS (SELECT 1 FROM schema_migrations WHERE version = '0001_baseline.sql')
+    AND EXISTS (
+      SELECT 1 FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_name <> 'schema_migrations'
+    )
+  ) THEN 1 ELSE 0 END" | tail -n 1 | tr -d '\r')
+	if [ "$legacy" != 0 ]; then
+		echo "legacy or unmanaged schema detected; baseline requires a new database" >&2
+		exit 1
+	fi
+fi
+
 for migration in db/migrations/*.sql; do
 	version=${migration##*/}
 	case "$version" in

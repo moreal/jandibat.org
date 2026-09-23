@@ -68,6 +68,23 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
   applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
 )"
 
+if [ -f "$migrations_dir/0001_baseline.sql" ]; then
+	legacy=$(sql --format=tsv --execute="
+SELECT CASE WHEN
+  EXISTS (SELECT 1 FROM schema_migrations WHERE version <> '0001_baseline.sql')
+  OR (
+    NOT EXISTS (SELECT 1 FROM schema_migrations WHERE version = '0001_baseline.sql')
+    AND EXISTS (
+      SELECT 1 FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_name <> 'schema_migrations'
+    )
+  ) THEN 1 ELSE 0 END" | tail -n 1 | tr -d '\r')
+	if [ "$legacy" != 0 ]; then
+		echo "legacy or unmanaged schema detected; baseline requires a new database" >&2
+		exit 1
+	fi
+fi
+
 for migration in "$migrations_dir"/*.sql; do
 	version=${migration##*/}
 	case "$version" in

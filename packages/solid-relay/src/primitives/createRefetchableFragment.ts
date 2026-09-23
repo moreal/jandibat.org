@@ -207,7 +207,11 @@ export function createRefetchableFragmentInternal<
 					onComplete?.(null);
 				},
 				error(err: Error) {
-					replaySubject.error(err);
+					// The refetch failed, so keep reading the prior fragment reference.
+					// Publishing this error to the fragment's parent operation would
+					// replace valid fragment data with an error and halt Solid updates.
+					setRefetchObservable(undefined);
+					replaySubject.unsubscribe();
 					onComplete?.(err);
 				},
 			});

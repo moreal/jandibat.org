@@ -103,3 +103,64 @@ it("appends a cursor page once, refetches the connection, and releases subscript
   expect(retained).toBe(0);
   expect(storeSubscriptions).toBe(0);
 });
+
+it("reports a synchronous refetch failure, preserves the prior fragment, and permits a retry", async () => {
+  let refetchAttempts = 0;
+  let activeNetwork = 0;
+  const environment = new Environment({
+    network: Network.create((operation) => Observable.create((sink) => {
+      activeNetwork += 1;
+      if (operation.name === "RelayPaginationCompatQuery") {
+        sink.next({ data: { subject: {
+          __typename: "Subject", id: subjectID,
+          providerConnections: page([edge(firstID, "ACTIVE", "cursor-1")], false),
+        } } });
+        sink.complete();
+      } else if (operation.name === "RelayPaginationSubjectRefetchQuery") {
+        refetchAttempts += 1;
+        if (refetchAttempts === 1) {
+          sink.error(new Error("offline"));
+        } else {
+          sink.next({ data: { node: {
+            __typename: "Subject", id: subjectID,
+            providerConnections: page([edge(firstID, "UPDATED", "cursor-1")], false),
+          } } });
+          sink.complete();
+        }
+      } else {
+        sink.error(new Error(`Unexpected operation ${operation.name}`));
+      }
+      return () => { activeNetwork -= 1; };
+    })),
+    store: new Store(new RecordSource()),
+  });
+
+  let connections!: ReturnType<typeof createRelayPaginationFragment<RelayPaginationSubjectRefetchQuery, RelayPaginationSubjectFragment$key>>;
+  function TestApp() {
+    const subject = createRelayQuery<RelayPaginationCompatQuery>(query, { id: subjectID, count: 1 });
+    connections = createRelayPaginationFragment<RelayPaginationSubjectRefetchQuery, RelayPaginationSubjectFragment$key>(
+      fragment, () => subject()?.subject,
+    );
+    return <span data-testid="status">{connections()?.providerConnections?.edges[0]?.node.status}</span>;
+  }
+
+  const view = render(() => <RelayProvider environment={environment}><TestApp /></RelayProvider>);
+  await waitFor(() => expect(view.getByTestId("status").textContent).toBe("ACTIVE"));
+  const completed: Array<Error | null> = [];
+  connections.refetch({ count: 1, cursor: null, id: subjectID }, {
+    onComplete: (error) => completed.push(error),
+  });
+  await waitFor(() => expect(completed).toHaveLength(1));
+  expect(completed[0]?.message).toBe("offline");
+  expect(view.getByTestId("status").textContent).toBe("ACTIVE");
+  expect(activeNetwork).toBe(0);
+
+  connections.refetch({ count: 1, cursor: null, id: subjectID }, {
+    onComplete: (error) => completed.push(error),
+  });
+  await waitFor(() => expect(view.getByTestId("status").textContent).toBe("UPDATED"));
+  expect(completed).toEqual([expect.any(Error), null]);
+  expect(refetchAttempts).toBe(2);
+  view.unmount();
+  expect(activeNetwork).toBe(0);
+});

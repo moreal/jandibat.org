@@ -86,6 +86,20 @@ UPDATE deletion_requests SET
   completed_at = NULL, backup_expiry_at = NULL, audit_event_id = NULL
 WHERE request_id = $1::STRING;
 
+-- @name MarkDeletionFailed
+-- @returns :exec_result
+UPDATE deletion_requests
+SET status = 'failed', error_code = $2::STRING, updated_at = $3::TIMESTAMPTZ
+WHERE request_id = $1::STRING AND status <> 'completed';
+
+-- @name ReleaseFailedDeletionClaim
+-- @returns :exec_result
+UPDATE deletion_request_claims SET
+  available_at = $2::TIMESTAMPTZ + INTERVAL '1 minute',
+  lease_until = NULL, claim_token = NULL, updated_at = $2::TIMESTAMPTZ
+WHERE deletion_request_id = (SELECT id FROM deletion_requests WHERE request_id = $1::STRING)
+  AND claim_token::STRING = $3::STRING;
+
 -- @name GetAccountEmailForDeletion
 -- @returns :opt
 SELECT primary_email FROM users WHERE id = $1::STRING FOR UPDATE;

@@ -723,6 +723,25 @@ func TestCockroachMaintenanceDeletionRequestJoinsPGXTransaction(t *testing.T) {
 	if err := admin.QueryRowContext(ctx, `SELECT count(*) FROM subjects WHERE id=$1`, request.TargetID).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("subject primary deletion escaped rollback: count=%d err=%v", count, err)
 	}
+	err = appdb.InTx(ctx, pool, appdb.RetryOptions{}, func(txctx context.Context, _ pgx.Tx) error {
+		if err := store.FailDeletion(txctx, committed, "transient_failure", now.Add(7*time.Second)); err != nil {
+			return err
+		}
+		return rollback
+	})
+	if !errors.Is(err, rollback) {
+		t.Fatalf("failed deletion rollback=%v", err)
+	}
+	if err := admin.QueryRowContext(ctx, `SELECT status FROM deletion_requests WHERE request_id=$1`, request.RequestID).Scan(&status); err != nil || status != string(operations.DeletionDeletingPrimary) {
+		t.Fatalf("failed deletion escaped rollback: status=%q err=%v", status, err)
+	}
+	if err := store.FailDeletion(ctx, committed, "transient_failure", now.Add(8*time.Second)); err != nil {
+		t.Fatalf("committed failed deletion: %v", err)
+	}
+	var claimToken sql.NullString
+	if err := admin.QueryRowContext(ctx, `SELECT d.status, c.claim_token::STRING FROM deletion_requests d JOIN deletion_request_claims c ON c.deletion_request_id=d.id WHERE d.request_id=$1`, request.RequestID).Scan(&status, &claimToken); err != nil || status != string(operations.DeletionFailed) || claimToken.Valid {
+		t.Fatalf("committed failed deletion status=%q claim_token_valid=%t err=%v", status, claimToken.Valid, err)
+	}
 }
 
 func TestCockroachDeletionResidualsSeeUncommittedPGXState(t *testing.T) {

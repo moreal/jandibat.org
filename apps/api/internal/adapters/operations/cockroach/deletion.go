@@ -1086,6 +1086,30 @@ WHERE deletion_request_id = (SELECT id FROM deletion_requests WHERE request_id =
 }
 
 func (store *Store) FailDeletion(ctx context.Context, request operations.DeletionRequest, code string, now time.Time) error {
+	if store.pool != nil {
+		return appdb.InTx(ctx, store.pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
+			if err := lockDeletionLeasePGX(txctx, tx, request); err != nil {
+				return err
+			}
+			count, err := generated.MarkDeletionFailed(txctx, tx, request.RequestID, code, now.UTC())
+			if err != nil {
+				return fmt.Errorf("fail deletion request: %w", err)
+			}
+			if count != 1 {
+				return operations.ErrDeletionLeaseLost
+			}
+			if request.ClaimToken != "" {
+				count, err = generated.ReleaseFailedDeletionClaim(txctx, tx, request.RequestID, now.UTC(), request.ClaimToken)
+				if err != nil {
+					return fmt.Errorf("release failed deletion claim: %w", err)
+				}
+				if count != 1 {
+					return operations.ErrDeletionLeaseLost
+				}
+			}
+			return nil
+		})
+	}
 	tx, err := store.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("fail deletion request: begin: %w", err)

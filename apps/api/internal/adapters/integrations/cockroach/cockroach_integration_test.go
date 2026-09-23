@@ -97,6 +97,31 @@ VALUES ($1, $1, 'Consent integration', 'subject', $2, $3, $3)`, environmentID, s
 	if err := store.SaveConnection(ctx, record); err != nil {
 		t.Fatalf("save private consent: %v", err)
 	}
+	apiPool, err := pgxpool.New(ctx, apiDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(apiPool.Close)
+	generatedStore, err := integrationstore.NewWithPGXPool(apiDB, apiPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim, acquired, err := generatedStore.TryAcquireSyncExecution(ctx, connectionID)
+	if err != nil || !acquired || claim == "" {
+		t.Fatalf("first claim = %q, %t, %v", claim, acquired, err)
+	}
+	if err := generatedStore.ReleaseSyncExecution(ctx, connectionID, "wrong-claim"); err != nil {
+		t.Fatal(err)
+	}
+	if _, acquired, err := generatedStore.TryAcquireSyncExecution(ctx, connectionID); err != nil || acquired {
+		t.Fatalf("fenced duplicate claim = %t, %v", acquired, err)
+	}
+	if err := generatedStore.ReleaseSyncExecution(ctx, connectionID, claim); err != nil {
+		t.Fatal(err)
+	}
+	if _, acquired, err := generatedStore.TryAcquireSyncExecution(ctx, connectionID); err != nil || !acquired {
+		t.Fatalf("claim after release = %t, %v", acquired, err)
+	}
 	loaded, err := store.GetConnection(ctx, connectionID)
 	if err != nil || !loaded.Connection.PrivateDataEnabled {
 		t.Fatalf("loaded private consent = %#v, error=%v", loaded.Connection, err)

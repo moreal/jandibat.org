@@ -66,7 +66,7 @@ func buildWorker(ctx context.Context, settings config.Config, logger *zap.Logger
 	if err != nil {
 		return nil, fmt.Errorf("worker: construct activity store: %w", err)
 	}
-	integration, err := integrationstore.New(db)
+	integration, err := integrationstore.NewWithPGXPool(db, database.Pool)
 	if err != nil {
 		return nil, fmt.Errorf("worker: construct integration store: %w", err)
 	}

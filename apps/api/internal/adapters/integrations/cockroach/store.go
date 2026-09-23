@@ -7,6 +7,7 @@ import (
 	"errors"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 	appdb "github.com/moreal/jandibat.org/apps/api/internal/database"
 	"github.com/moreal/jandibat.org/apps/api/internal/integrations"
 )
@@ -14,9 +15,10 @@ import (
 var ErrNilDB = errors.New("integration cockroach: database is required")
 
 // Store implements all persistence ports used by the integrations services.
-// The caller owns db and is responsible for closing it.
+// The caller owns and closes both configured handles.
 type Store struct {
-	db *sql.DB
+	db   *sql.DB
+	pool *pgxpool.Pool
 }
 
 func (s *Store) mutationExecutor(ctx context.Context) (appdb.Executor, error) {
@@ -41,6 +43,15 @@ func New(db *sql.DB) (*Store, error) {
 		return nil, ErrNilDB
 	}
 	return &Store{db: db}, nil
+}
+
+// NewWithPGXPool keeps legacy adapters on db while migrated query groups use
+// pool. Both handles must target the same database and runtime role.
+func NewWithPGXPool(db *sql.DB, pool *pgxpool.Pool) (*Store, error) {
+	if db == nil || pool == nil {
+		return nil, ErrNilDB
+	}
+	return &Store{db: db, pool: pool}, nil
 }
 
 type scanner interface {

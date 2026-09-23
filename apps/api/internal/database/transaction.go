@@ -68,6 +68,13 @@ func PGXExecutorFor(ctx context.Context, pool DBTX) DBTX {
 		if identity, err := transactionPoolIdentity(pool); err == nil && active.poolIdentity == identity {
 			return active.tx
 		}
+		return errorPGXExecutor{err: ErrTransactionPoolMismatch}
+	}
+	if lazy, ok := ctx.Value(lazyPGXContextKey{}).(*LazyPGXTransaction); ok {
+		if identity, err := transactionPoolIdentity(pool); err == nil && lazy.poolIdentity == identity {
+			return lazyPGXExecutor{pool: pool, lazy: lazy}
+		}
+		return errorPGXExecutor{err: ErrTransactionPoolMismatch}
 	}
 	return pool
 }
@@ -96,6 +103,17 @@ func InTx(
 			return ErrTransactionPoolMismatch
 		}
 		return callback(ctx, active.tx)
+	}
+	if lazy, ok := ctx.Value(lazyPGXContextKey{}).(*LazyPGXTransaction); ok {
+		if lazy.poolIdentity != identity {
+			return ErrTransactionPoolMismatch
+		}
+		tx, err := lazy.begin(ctx, options.TxOptions)
+		if err != nil {
+			return err
+		}
+		txContext := context.WithValue(ctx, pgxTransactionContextKey{}, activeTransaction{poolIdentity: identity, tx: tx})
+		return invokeCallback(txContext, tx, callback)
 	}
 	options = options.withDefaults()
 	for attempt := 1; attempt <= options.MaxAttempts; attempt++ {

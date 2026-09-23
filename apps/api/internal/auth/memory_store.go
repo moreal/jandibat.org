@@ -303,6 +303,22 @@ func (s *MemoryStore) GetSession(ctx context.Context, tokenHash Digest) (Session
 	return cloneSession(session), nil
 }
 
+func (s *MemoryStore) GetSessionByID(ctx context.Context, userID, sessionID string) (Session, error) {
+	if err := contextError(ctx); err != nil {
+		return Session{}, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, session := range s.sessions {
+		if session.UserID == userID && session.ID == sessionID {
+			result := cloneSession(session)
+			result.TokenHash = Digest{}
+			return result, nil
+		}
+	}
+	return Session{}, ErrNotFound
+}
+
 func (s *MemoryStore) ListSessionsByUser(ctx context.Context, userID string) ([]Session, error) {
 	if err := contextError(ctx); err != nil {
 		return nil, err

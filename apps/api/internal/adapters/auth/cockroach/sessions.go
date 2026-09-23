@@ -97,6 +97,36 @@ func (store *Store) GetSession(ctx context.Context, tokenHash coreauth.Digest) (
 	return sessionFromGenerated(*row)
 }
 
+func (store *Store) GetSessionByID(ctx context.Context, userID, sessionID string) (coreauth.Session, error) {
+	if store.pool == nil {
+		return coreauth.Session{}, ErrNilDB
+	}
+	id, err := uuid.Parse(sessionID)
+	if err != nil {
+		return coreauth.Session{}, coreauth.ErrInvalidInput
+	}
+	row, err := generated.GetSessionByIdOwned(ctx, appdb.PGXExecutorFor(ctx, store.pool), userID, id)
+	if err != nil {
+		return coreauth.Session{}, persistenceError(err)
+	}
+	if row == nil {
+		return coreauth.Session{}, coreauth.ErrNotFound
+	}
+	result := coreauth.Session{
+		ID: row.Id, UserID: row.UserId, CreatedAt: row.CreatedAt,
+		ExpiresAt: row.ExpiresAt, IPAddress: row.Ip, UserAgent: row.UserAgent,
+	}
+	if row.RevokedAt != nil {
+		value := *row.RevokedAt
+		result.RevokedAt = &value
+	}
+	if row.LastSeenAt != nil {
+		value := *row.LastSeenAt
+		result.LastSeenAt = &value
+	}
+	return result, nil
+}
+
 func (store *Store) ListSessionsByUser(ctx context.Context, userID string) ([]coreauth.Session, error) {
 	if store.pool == nil {
 		return nil, ErrNilDB

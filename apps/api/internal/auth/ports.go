@@ -31,6 +31,9 @@ type SessionRepository interface {
 	UseSession(ctx context.Context, tokenHash Digest, now time.Time) (Session, error)
 	RevokeSession(ctx context.Context, tokenHash Digest, now time.Time) error
 	GetSession(ctx context.Context, tokenHash Digest) (Session, error)
+	// GetSessionByID returns owner-visible metadata, including historical
+	// revoked/expired sessions, without bearer-token digest material.
+	GetSessionByID(ctx context.Context, userID, sessionID string) (Session, error)
 	ListSessionsByUser(ctx context.Context, userID string) ([]Session, error)
 	RevokeOtherSessions(ctx context.Context, userID string, exceptTokenHash Digest, now time.Time) error
 	RevokeSessionByID(ctx context.Context, userID, sessionID string, now time.Time) error

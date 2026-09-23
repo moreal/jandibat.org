@@ -85,6 +85,12 @@ SELECT id::STRING AS id, user_id, session_token_hash, created_at, expires_at,
   revoked_at, last_seen_at, COALESCE(ip::STRING, '') AS ip, COALESCE(user_agent, '') AS user_agent
 FROM user_sessions WHERE session_token_hash = $1::BYTES;
 
+-- @name GetSessionByIdOwned
+-- @returns :opt
+SELECT id::STRING AS id, user_id, created_at, expires_at,
+  revoked_at, last_seen_at, COALESCE(ip::STRING, '') AS ip, COALESCE(user_agent, '') AS user_agent
+FROM user_sessions WHERE user_id = $1::STRING AND id = $2::UUID;
+
 -- @name ListSessionsByUser
 -- @returns :many
 SELECT id::STRING AS id, user_id, session_token_hash, created_at, expires_at,

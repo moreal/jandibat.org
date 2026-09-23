@@ -188,6 +188,19 @@ func TestGeneratedSessionsEnforceUserAndRevocationBoundaries(t *testing.T) {
 		stored.IPAddress != "203.0.113.7/32" || stored.UserAgent != keep.UserAgent {
 		t.Fatalf("GetSession did not preserve stored session fields: %+v", stored)
 	}
+	owned, err := store.GetSessionByID(ctx, activeUser, keep.ID)
+	if err != nil || owned.ID != keep.ID || owned.TokenHash != (coreauth.Digest{}) || owned.IPAddress != "203.0.113.7/32" {
+		t.Fatalf("GetSessionByID(owner) = (%+v, %v)", owned, err)
+	}
+	if _, err := store.GetSessionByID(ctx, disabledUser, keep.ID); !errors.Is(err, coreauth.ErrNotFound) {
+		t.Fatalf("GetSessionByID(non-owner) = %v, want ErrNotFound", err)
+	}
+	if _, err := store.GetSessionByID(ctx, activeUser, uuid.NewString()); !errors.Is(err, coreauth.ErrNotFound) {
+		t.Fatalf("GetSessionByID(missing) = %v, want ErrNotFound", err)
+	}
+	if _, err := store.GetSessionByID(ctx, activeUser, "malformed"); !errors.Is(err, coreauth.ErrInvalidInput) {
+		t.Fatalf("GetSessionByID(malformed) = %v, want ErrInvalidInput", err)
+	}
 	if _, err := admin.Exec(ctx, `UPDATE users SET status='disabled' WHERE id=$1`, activeUser); err != nil {
 		t.Fatal(err)
 	}
@@ -237,6 +250,10 @@ func TestGeneratedSessionsEnforceUserAndRevocationBoundaries(t *testing.T) {
 	}
 	if stored.RevokedAt == nil || !stored.RevokedAt.Equal(now) {
 		t.Fatalf("repeated revocation changed first timestamp: revoked=%v", stored.RevokedAt)
+	}
+	owned, err = store.GetSessionByID(ctx, activeUser, keep.ID)
+	if err != nil || owned.RevokedAt == nil || !owned.RevokedAt.Equal(now) || owned.TokenHash != (coreauth.Digest{}) {
+		t.Fatalf("GetSessionByID(revoked) = (%+v, %v)", owned, err)
 	}
 	if _, err := store.UseSession(ctx, keep.TokenHash, now); !errors.Is(err, coreauth.ErrConsumed) {
 		t.Fatalf("UseSession(revoked by ID) = %v, want ErrConsumed", err)

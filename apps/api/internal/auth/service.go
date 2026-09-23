@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
 	"github.com/moreal/jandibat.org/apps/api/internal/identity"
 )
 
@@ -221,6 +222,31 @@ func (s *Service) CurrentSession(ctx context.Context, token string) (Session, er
 	if err != nil || session.RevokedAt != nil || !s.now().UTC().Before(session.ExpiresAt) {
 		return Session{}, ErrInvalidSession
 	}
+	return cloneSession(session), nil
+}
+
+// GetSessionByID is an owner-scoped metadata lookup. Unlike CurrentSession,
+// it includes expired and revoked sessions so account history remains visible.
+func (s *Service) GetSessionByID(ctx context.Context, userID, sessionID string) (Session, error) {
+	if strings.TrimSpace(userID) == "" {
+		return Session{}, ErrInvalidInput
+	}
+	requestedID, err := uuid.Parse(sessionID)
+	if err != nil {
+		return Session{}, ErrInvalidInput
+	}
+	session, err := s.repository.GetSessionByID(ctx, userID, requestedID.String())
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return Session{}, ErrNotFound
+		}
+		return Session{}, fmt.Errorf("get session by id: %w", err)
+	}
+	actualID, err := uuid.Parse(session.ID)
+	if session.UserID != userID || err != nil || actualID != requestedID {
+		return Session{}, ErrNotFound
+	}
+	session.TokenHash = Digest{}
 	return cloneSession(session), nil
 }
 
@@ -541,17 +567,17 @@ func (s *Service) prepareSession(metadata SessionMetadata) (Session, SessionGran
 	now := s.now().UTC()
 	expiresAt := now.Add(s.sessionTTL)
 	return Session{
-			ID:        id,
-			TokenHash: tokenDigest(token),
-			CreatedAt: now,
-			ExpiresAt: expiresAt,
-			IPAddress: strings.TrimSpace(metadata.IPAddress),
-			UserAgent: strings.TrimSpace(metadata.UserAgent),
-		}, SessionGrant{
-			Token:     token,
-			SessionID: id,
-			ExpiresAt: expiresAt,
-		}, nil
+		ID:        id,
+		TokenHash: tokenDigest(token),
+		CreatedAt: now,
+		ExpiresAt: expiresAt,
+		IPAddress: strings.TrimSpace(metadata.IPAddress),
+		UserAgent: strings.TrimSpace(metadata.UserAgent),
+	}, SessionGrant{
+		Token:     token,
+		SessionID: id,
+		ExpiresAt: expiresAt,
+	}, nil
 }
 
 func (s *Service) randomID(prefix string, byteCount int) (string, error) {

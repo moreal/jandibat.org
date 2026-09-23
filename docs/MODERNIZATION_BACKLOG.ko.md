@@ -55,11 +55,11 @@ M2 구현·격리 DB 검증은 완료했다. Task 7의 upstream issue/PR 제출�
 - [ ] M3-09: 수동 `AppStateProvider` 서버 상태와 OpenAPI-generated domain DTO를 제거한다.
 - [ ] M3-10: 정적 GraphQL 소비자 활용 가이드와 TypeScript/curl 예제를 추가한다.
 
-M3-01~04는 생성물 drift, API/race·격리 Cockroach 통합 테스트, 스키마·권한 검사를
-통과했다. Subject와 provider connection·custom provider도 owner-scoped keyset connection을
-사용하며, 내장 provider catalog 3종만 bounded 배열이다. GraphQL HTTP 경계와 공식 UI
-전환은 아직 남아 있어 외부 서비스가 새 query를
-호출할 수 있는 단계로 간주하지 않는다. `dataUpdatedAt`은 조회 범위에 반영된 변경이
+M3-01~04와 GraphQL HTTP 경계는 생성물 drift, API/race·격리 Cockroach 통합 테스트,
+스키마·권한 검사를 통과했다. Subject와 provider connection·custom provider도
+owner-scoped keyset connection을 사용하며, 내장 provider catalog 3종만 bounded 배열이다.
+공식 UI 전환과 REST 도메인 경로 제거는 아직 남아 있으며 운영 Flux reconcile은 하지
+않았다. `dataUpdatedAt`은 조회 범위에 반영된 변경이
 한 번도 없을 때만 `null`이며, 기존 DB의 migration history와 데이터는 이전하지 않는다.
 
 ## M4. 이미지와 런타임 계약

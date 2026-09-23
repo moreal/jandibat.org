@@ -3,6 +3,24 @@
 API 계약 변경 시 이 파일과 GraphQL SDL(도메인) 또는 `openapi/jandibat.yaml`(HTTP edge)을 같은 변경에 포함합니다.
 각 항목에는 날짜, 호환성, 영향받는 operation/schema, 백엔드·프론트엔드 후속 작업을 기록합니다.
 
+## 2026-09-24 — GraphQL HTTP transport 공개 경계
+
+호환성: 기존 REST 도메인 경로를 제거하기 전 `POST /graphql`을 additive로 추가합니다.
+GraphQL SDL만 도메인 계약이며 이 transport 경로는 OpenAPI 도메인 스키마로 중복
+정의하지 않습니다. 아직 운영 Flux reconcile은 하지 않았습니다.
+
+- JSON 단일 POST 요청만 받습니다. GET, WebSocket, batch, 초과 본문과 과도한
+  깊이·필드·비용의 작업을 거부합니다. 운영 요청은 이름을 가져야 하며 introspection은
+  명시적 개발 모드에서만 허용합니다. Subscription은 없습니다.
+- 검증된 bearer 또는 쿠키 세션을 사용하고 잘못된 자격 증명을 익명으로 낮추지 않습니다.
+  쿠키 사용 요청에는 CSRF Origin 검사를 적용하며 OAuth 시작은 같은 쿠키 세션에 state를
+  묶습니다. 로그인 토큰은 GraphQL 응답이 아니라 HttpOnly cookie에만 씁니다.
+- mutation은 응답에서 선택한 필드와 독립적으로 typed 오류·실행 오류를 감사 결과에
+  반영합니다. 인증 후 계정별·민감 작업별 분산 제한과 입력 비노출 로그·고정 카디널리티
+  메트릭을 적용합니다. 일회용 수집 키가 있는 응답을 포함해 cache-control은 no-store입니다.
+- 기존 REST 도메인 경로는 공식 Solid 2 Relay UI 전환·OpenAPI cutover까지 임시로
+  유지합니다. OAuth/magic-link callback, SVG, health, custom ingest는 HTTP edge에 남습니다.
+
 ## 2026-09-24 — GraphQL SDL 도메인 계약 도입
 
 호환성: 최종 프로토콜 전환은 breaking change입니다. 이 단계에서는 신규 도메인 계약의
@@ -61,7 +79,7 @@ Subject 조회 저장소와 같이 handle이 다른 Subject의 local ID와 같�
   내부 저장소 오류와는 구별합니다.
 - Node는 기존 다섯 durable entity로 유지하고 edge·PageInfo·Viewer는 값 객체입니다.
 - Backend: Query/field resolver를 application port에 연결하고 소유자·비소유자·익명
-  보안 테스트를 추가합니다. GraphQL HTTP 경계의 operation-aware 감사는 별도 Task입니다.
+  보안 테스트를 추가합니다. operation-aware 감사는 위 HTTP transport 항목에서 완료했습니다.
 - Frontend: 생성된 connection artifact를 사용하고 cursor를 해석하거나 DB offset으로
   바꾸지 않습니다.
 
@@ -77,8 +95,8 @@ Magic Link 소비는 브라우저 callback HTTP edge에 남기고, 요청은 Gra
   HttpOnly cookie로 전달합니다. `revokeOtherSessions`는 bearer token 대신 검증된 현재
   Session ID를 사용합니다.
 - 오류 payload는 입력·도메인 오류에 한정하고 인증·transport·내부 실패는 GraphQL 오류로
-  처리합니다. Task 5의 operation-aware 감사·CSRF·cookie 경계가 완성되기 전에는
-  새 mutation을 공개 라우트에 연결하지 않습니다.
+  처리합니다. 위 HTTP transport 항목의 감사·CSRF·cookie 경계를 통과한 뒤
+  `POST /graphql`에 연결했습니다. 운영 reconcile은 하지 않았습니다.
 
 ## 2026-09-24 — Subject·설정 GraphQL 계약
 
@@ -92,8 +110,8 @@ connection edge와 삭제 요청은 값 객체입니다.
   수 없습니다. GraphQL의 생략/null 차이를 암묵적으로 DB 변경에 사용하지 않습니다.
 - 삭제는 즉시 Node를 지우지 않고 durable 삭제 요청의 ID·상태를 반환합니다.
 - Backend: 검증된 사용자 ID·Subject 소유권을 각 resolver에서 재검사하고 기존
-  application service 및 삭제 workflow만 호출합니다. Task 5 전에는 공개 라우트에
-  mutation을 연결하지 않습니다.
+  application service 및 삭제 workflow만 호출합니다. HTTP transport의 공통
+  보안 경계를 거쳐 mutation을 노출합니다.
 
 ## 2026-09-24 — 연동 조회 GraphQL 계약
 
@@ -111,8 +129,8 @@ provider 목록은 소유자 전용 nullable Relay connection으로 노출합니
 않습니다. OAuth 시작은 검증된 쿠키 세션 바인딩과 redirect allowlist를 요구하며 callback은
 HTTP edge에 남습니다. 철회된 연결은 Node에서 사라지므로 철회 결과는 클라이언트의
 normalized store 축출에 필요한 Relay ID만 돌려줍니다. 동기화는 기존 24시간
-idempotency 의미를 유지합니다. Task 5의 operation별 rate limit, CSRF 및 감사 경계가
-완료되기 전에는 공개 라우트에 연결하지 않습니다.
+idempotency 의미를 유지합니다. 위 HTTP transport 항목에서 operation별 rate limit,
+CSRF 및 감사 경계를 완료한 뒤 `POST /graphql`에 연결했습니다.
 
 ## 2026-09-24 — Custom provider 변경 GraphQL 계약
 
@@ -120,8 +138,8 @@ idempotency 의미를 유지합니다. Task 5의 operation별 rate limit, CSRF �
 생성·회전 응답의 `ingestionKey`는 한 번만 보여 주는 payload 필드이며 Node·조회·로그·
 Relay normalized record에 저장하지 않습니다. `CustomProvider` Node는 안전한 설정
 메타데이터만 노출합니다. 삭제 결과는 normalized store 축출에 필요한 Relay ID를
-반환합니다. 수집 이벤트 전송은 HTTP edge에 남고, Task 5의 CSRF·operation별
-rate limit·민감 응답 no-store가 완료되기 전에는 mutation을 공개하지 않습니다.
+반환합니다. 수집 이벤트 전송은 HTTP edge에 남습니다. 위 HTTP transport 항목의
+CSRF·operation별 rate limit·민감 응답 no-store를 거쳐 mutation을 노출합니다.
 
 ## 2026-08-12 — 운영·보안 계약 강화 (`1.1.0`)
 

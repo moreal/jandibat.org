@@ -1163,7 +1163,12 @@ func TestCockroachOperationsSchemaReadiness(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	store, err := New(db)
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	store, err := NewWithPGXPool(db, pool)
 	if err != nil {
 		t.Fatal(err)
 	}

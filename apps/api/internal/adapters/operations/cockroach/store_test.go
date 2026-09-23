@@ -77,46 +77,6 @@ func TestDeletionMethodsRequirePGXPool(t *testing.T) {
 	}
 }
 
-func TestCheckValidatesOperationalSchema(t *testing.T) {
-	script := fakedb.New(fakedb.Step{
-		Operation: fakedb.Query, Columns: []string{"required_columns"},
-		Rows: [][]driver.Value{{int64(requiredOperationsSchemaColumns)}},
-	})
-	db := script.Open()
-	defer db.Close()
-	store, _ := New(db)
-	if err := store.Check(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	calls := script.Calls()
-	if len(calls) != 1 {
-		t.Fatalf("calls = %#v", calls)
-	}
-	for _, fragment := range []string{"audit_events", "api_rate_limit_buckets", "access_token_key_id", "refresh_token_key_id", "provider_token_revocation_jobs", "token_ciphertext", "deleted_identity_tombstones_v2", "identity_key_id", "identity_digest", "magic_link_mail_outbox", "token_hash", "token_expires_at", "consumed_at", "recipient_email", "purpose", "mutation_audit_outbox", "audit_event_id", "delivered_at", "terminal_at"} {
-		if !strings.Contains(calls[0].Query, fragment) {
-			t.Errorf("schema check missing %q: %s", fragment, calls[0].Query)
-		}
-	}
-	for _, forbidden := range []string{"FROM audit_events", "FROM api_rate_limit_buckets", "FROM provider_connections"} {
-		if strings.Contains(calls[0].Query, forbidden) {
-			t.Errorf("schema check requires table data SELECT via %q: %s", forbidden, calls[0].Query)
-		}
-	}
-}
-
-func TestCheckRejectsIncompleteOperationalSchema(t *testing.T) {
-	script := fakedb.New(fakedb.Step{
-		Operation: fakedb.Query, Columns: []string{"required_columns"},
-		Rows: [][]driver.Value{{int64(requiredOperationsSchemaColumns - 1)}},
-	})
-	db := script.Open()
-	defer db.Close()
-	store, _ := New(db)
-	if err := store.Check(context.Background()); err == nil || !strings.Contains(err.Error(), "required columns") {
-		t.Fatalf("Check() error = %v", err)
-	}
-}
-
 func TestRetentionQueriesAreBoundedAndAllowlisted(t *testing.T) {
 	wantFilters := map[operations.RetentionDataset][]string{
 		operations.RetentionAuditEvents:             nil,

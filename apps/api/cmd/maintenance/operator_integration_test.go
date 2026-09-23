@@ -32,7 +32,7 @@ func TestMaintenanceDeleteCommandClaimsAndCompletesCanonicalRequest(t *testing.T
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	store, err := operationsstore.NewWithPGXPool(db, pool)
+	store, err := operationsstore.New(pool)
 	if err != nil {
 		t.Fatal(err)
 	}

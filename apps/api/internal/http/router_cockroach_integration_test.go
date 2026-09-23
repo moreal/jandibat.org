@@ -106,7 +106,7 @@ func TestCockroachAuditTimeoutRollsBackStateAndOutbox(t *testing.T) {
 		_, _ = admin.ExecContext(cleanup, `DELETE FROM users WHERE id=$1`, userID)
 	})
 	pool := newAuditTestPool(t, ctx, apiDSN)
-	operationStore, err := operationsstore.NewWithPGXPool(api, pool)
+	operationStore, err := operationsstore.New(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +198,7 @@ func TestNewRouterCockroachPasskeyFailureCommitsReplayGuardAndOutbox(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	operationStore, err := operationsstore.NewWithPGXPool(api, pool)
+	operationStore, err := operationsstore.New(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +276,7 @@ ORDER BY occurred_at DESC LIMIT 1`, now, auditRequestID).Scan(&replayAuditReques
 }
 
 func TestNewRouterCockroachMagicLinkNewUserSuccessCommitsSessionAndOutbox(t *testing.T) {
-	admin, api, ctx := openRouterIntegrationDatabases(t)
+	admin, _, ctx := openRouterIntegrationDatabases(t)
 	apiDSN := os.Getenv("JANDIBAT_TEST_API_DATABASE_URL")
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	suffix := strings.ReplaceAll(now.Format("150405.000000000"), ".", "")[:12]
@@ -310,7 +310,7 @@ VALUES($1,$2,$3,'signin',$4,$5)`, linkID, email, digest[:], now, now.Add(15*time
 	if err != nil {
 		t.Fatal(err)
 	}
-	operationStore, _ := operationsstore.NewWithPGXPool(api, pool)
+	operationStore, _ := operationsstore.New(pool)
 	recorder, _ := operations.NewAuditRecorder(operationStore)
 	router := NewRouter(Dependencies{Auth: service, Audit: recorder, AuditSourceKey: auditKey, MutationAudits: operationStore, Now: func() time.Time { return now.Add(time.Second) }})
 	body := `{"token":"` + token + `"}`
@@ -353,7 +353,7 @@ VALUES($1,$2,$3,'signin',$4,$5)`, linkID, email, digest[:], now, now.Add(15*time
 }
 
 func TestNewRouterCockroachPasskeySuccessCommitsCounterSessionAndOutbox(t *testing.T) {
-	admin, api, ctx := openRouterIntegrationDatabases(t)
+	admin, _, ctx := openRouterIntegrationDatabases(t)
 	apiDSN := os.Getenv("JANDIBAT_TEST_API_DATABASE_URL")
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	suffix := strings.ReplaceAll(now.Format("150405.000000000"), ".", "")[:12]
@@ -397,7 +397,7 @@ func TestNewRouterCockroachPasskeySuccessCommitsCounterSessionAndOutbox(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	operationStore, _ := operationsstore.NewWithPGXPool(api, pool)
+	operationStore, _ := operationsstore.New(pool)
 	recorder, _ := operations.NewAuditRecorder(operationStore)
 	router := NewRouter(Dependencies{Auth: service, Audit: recorder, AuditSourceKey: auditKey, MutationAudits: operationStore, Now: func() time.Time { return now.Add(time.Second) }})
 	encodedID := base64.RawURLEncoding.EncodeToString(credentialID)

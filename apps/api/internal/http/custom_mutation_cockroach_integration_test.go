@@ -96,7 +96,7 @@ func TestCockroachCustomAndConnectionHTTPMutationsShareAuditTransaction(t *testi
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	integrationDB, err := integrationstore.NewWithPGXPool(apiDB, pool)
+	integrationDB, err := integrationstore.New(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func TestCockroachCustomAndConnectionHTTPMutationsShareAuditTransaction(t *testi
 	customService, _ := integrations.NewCustomProviderService(integrationDB, cipher, activityDB, nil, nil)
 	connectionService, _ := integrations.NewConnectionService(integrationDB, cipher, nil, nil, activityDB)
 	syncService, _ := integrations.NewSyncService(integrationDB, integrationDB, activityDB, cipher, nil, nil, nil)
-	operationStore, err := operationsstore.NewWithPGXPool(apiDB, pool)
+	operationStore, err := operationsstore.New(pool)
 	if err != nil {
 		t.Fatal(err)
 	}

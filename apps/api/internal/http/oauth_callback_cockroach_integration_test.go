@@ -81,7 +81,7 @@ func TestCockroachOAuthCallbackOutboxFailureConsumesStateRollsBackConnectionAndR
 		t.Fatal(err)
 	}
 	t.Cleanup(appPool.Close)
-	integrationDB, err := integrationstore.NewWithPGXPool(apiDB, appPool)
+	integrationDB, err := integrationstore.New(appPool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +184,7 @@ func TestCockroachOAuthCallbackOutboxFailureConsumesStateRollsBackConnectionAndR
 		t.Fatalf("begin OAuth state: %v", err)
 	}
 
-	operationStore, err := operationsstore.NewWithPGXPool(apiDB, appPool)
+	operationStore, err := operationsstore.New(appPool)
 	if err != nil {
 		t.Fatal(err)
 	}

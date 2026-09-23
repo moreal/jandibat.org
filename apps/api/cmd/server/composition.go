@@ -412,12 +412,12 @@ func buildStores(ctx context.Context, settings config.Config) (databaseStores, e
 		_ = database.Close()
 		return databaseStores{}, fmt.Errorf("runtime: construct activity store: %w", err)
 	}
-	integrationPersistence, err := integrationstore.NewWithPGXPool(nil, database.Pool)
+	integrationPersistence, err := integrationstore.New(database.Pool)
 	if err != nil {
 		_ = database.Close()
 		return databaseStores{}, fmt.Errorf("runtime: construct integration store: %w", err)
 	}
-	operationalPersistence, err := operationsstore.NewWithPGXPool(nil, database.Pool)
+	operationalPersistence, err := operationsstore.New(database.Pool)
 	if err != nil {
 		_ = database.Close()
 		return databaseStores{}, fmt.Errorf("runtime: construct operations store: %w", err)

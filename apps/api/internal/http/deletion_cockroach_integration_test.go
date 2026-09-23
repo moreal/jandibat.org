@@ -98,7 +98,7 @@ VALUES ($1, $2, $3, 'active', $3, $3)`, userID, email, now); err != nil {
 	if err != nil {
 		t.Fatal(err)
 	}
-	operationStore, err := operationsstore.NewWithPGXPool(apiDB, pool)
+	operationStore, err := operationsstore.New(pool)
 	if err != nil {
 		t.Fatal(err)
 	}

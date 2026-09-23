@@ -76,7 +76,7 @@ WHERE scope = $1`, scope).Scan(&count, &persistedHash, &expiresAt); err != nil {
 		t.Fatalf("persisted bucket count=%d hash=%x", count, persistedHash)
 	}
 
-	retention, err := operationsstore.NewWithPGXPool(db, pool)
+	retention, err := operationsstore.New(pool)
 	if err != nil {
 		t.Fatal(err)
 	}

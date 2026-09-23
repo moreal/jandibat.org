@@ -71,10 +71,10 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 if [ -f "$migrations_dir/0001_baseline.sql" ]; then
 	legacy=$(sql --format=tsv --execute="
 SELECT CASE WHEN
-  EXISTS (SELECT 1 FROM schema_migrations WHERE version <> '0001_baseline.sql')
-  OR (
-    NOT EXISTS (SELECT 1 FROM schema_migrations WHERE version = '0001_baseline.sql')
-    AND EXISTS (
+  NOT EXISTS (SELECT 1 FROM schema_migrations WHERE version = '0001_baseline.sql')
+  AND (
+    EXISTS (SELECT 1 FROM schema_migrations)
+    OR EXISTS (
       SELECT 1 FROM information_schema.tables
       WHERE table_schema = 'public' AND table_name <> 'schema_migrations'
     )
@@ -82,6 +82,28 @@ SELECT CASE WHEN
 	if [ "$legacy" != 0 ]; then
 		echo "legacy or unmanaged schema detected; baseline requires a new database" >&2
 		exit 1
+	fi
+	versions=$(sql --format=tsv \
+		--execute='SELECT version FROM schema_migrations ORDER BY version')
+	versions=$(printf '%s\n' "$versions" | sed '1d;s/\r$//')
+	if [ -n "$versions" ]; then
+		printf '%s\n' "$versions" | while IFS= read -r version; do
+			case "$version" in
+				''|*[!A-Za-z0-9_.-]*)
+					echo "unsafe migration history version: $version" >&2
+					exit 1
+					;;
+				*.sql) ;;
+				*)
+					echo "unmanaged migration history version: $version" >&2
+					exit 1
+					;;
+			esac
+			if [ ! -f "$migrations_dir/$version" ]; then
+				echo "legacy or unmanaged migration history: $version" >&2
+				exit 1
+			fi
+		done
 	fi
 fi
 

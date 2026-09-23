@@ -76,6 +76,8 @@ jobs:
         run: |
           nix develop --command make db-migrate
           nix develop --command make db-migrate
+      - name: Verify baseline schema and migration histories
+        run: nix develop --command make baseline-history-test
       - name: Prove failed DDL and migration ledger roll back together
         run: nix develop --command make migration-atomicity-test
       - name: Configure and verify least-privilege runtime roles

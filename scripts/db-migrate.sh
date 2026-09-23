@@ -2,12 +2,17 @@
 set -eu
 
 database=${COCKROACH_DATABASE:-jandibat}
+migrations_dir=${MIGRATIONS_DIR:-db/migrations}
 case "$database" in
 	*[!A-Za-z0-9_]*|'')
 		echo "COCKROACH_DATABASE must contain only letters, digits, and underscores" >&2
 		exit 2
 		;;
 esac
+if [ ! -d "$migrations_dir" ]; then
+	echo "migration directory not found: $migrations_dir" >&2
+	exit 2
+fi
 
 sql() {
 	docker compose exec -T cockroach cockroach sql \
@@ -52,13 +57,13 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 
 # A baseline is valid only for a fresh database or its own prior application.
 # Never mix the new checksum history with the discarded 0001..0013 history.
-if [ -f db/migrations/0001_baseline.sql ]; then
+if [ -f "$migrations_dir/0001_baseline.sql" ]; then
 	legacy=$(sql --database="$database" --format=tsv --execute="
 SELECT CASE WHEN
-  EXISTS (SELECT 1 FROM schema_migrations WHERE version <> '0001_baseline.sql')
-  OR (
-    NOT EXISTS (SELECT 1 FROM schema_migrations WHERE version = '0001_baseline.sql')
-    AND EXISTS (
+  NOT EXISTS (SELECT 1 FROM schema_migrations WHERE version = '0001_baseline.sql')
+  AND (
+    EXISTS (SELECT 1 FROM schema_migrations)
+    OR EXISTS (
       SELECT 1 FROM information_schema.tables
       WHERE table_schema = 'public' AND table_name <> 'schema_migrations'
     )
@@ -67,9 +72,31 @@ SELECT CASE WHEN
 		echo "legacy or unmanaged schema detected; baseline requires a new database" >&2
 		exit 1
 	fi
+	versions=$(sql --database="$database" --format=tsv \
+		--execute='SELECT version FROM schema_migrations ORDER BY version')
+	versions=$(printf '%s\n' "$versions" | sed '1d;s/\r$//')
+	if [ -n "$versions" ]; then
+		printf '%s\n' "$versions" | while IFS= read -r version; do
+			case "$version" in
+				''|*[!A-Za-z0-9_.-]*)
+					echo "unsafe migration history version: $version" >&2
+					exit 1
+					;;
+				*.sql) ;;
+				*)
+					echo "unmanaged migration history version: $version" >&2
+					exit 1
+					;;
+			esac
+			if [ ! -f "$migrations_dir/$version" ]; then
+				echo "legacy or unmanaged migration history: $version" >&2
+				exit 1
+			fi
+		done
+	fi
 fi
 
-for migration in db/migrations/*.sql; do
+for migration in "$migrations_dir"/*.sql; do
 	version=${migration##*/}
 	case "$version" in
 		*[!A-Za-z0-9_.-]*)

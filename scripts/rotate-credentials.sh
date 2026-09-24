@@ -18,4 +18,4 @@ if [ "$mode" = --execute ] && [ -z "$scope" ]; then echo "--execute requires --s
 set -- reencrypt "$mode"
 [ -n "$scope" ] && set -- "$@" --scope "$scope"
 [ "$resume" = true ] && set -- "$@" --resume
-exec "${MAINTENANCE_BIN:-/jandibat-maintenance}" "$@"
+exec "${MAINTENANCE_BIN:-/bin/maintenance}" "$@"

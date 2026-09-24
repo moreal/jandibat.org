@@ -104,7 +104,7 @@ CREDENTIAL_ENCRYPTION_PRIVATE_KEYS='{"cred-2026-08-a":"<unpadded-base64-pkcs8-de
 - Provider connection access/refresh token의 새 write는 매번 random 256-bit DEK로 AES-GCM 암호화하고 active RSA public key로 DEK를 OAEP-SHA-256 wrap한 authenticated `JDBK` v3 envelope로 저장합니다. Internet-facing API는 public key만 보유하므로 저장 ciphertext를 복호화할 수 없습니다.
 - Sync worker와 maintenance만 RSA private key를 보유해 v3를 읽습니다. `CREDENTIAL_ENCRYPTION_KEYS`와 `CREDENTIAL_ENCRYPTION_KEY`는 기존 v1/v2/raw ciphertext를 maintenance가 v3로 이행하기 위한 transition-only read material이며 새 write에는 선택되지 않습니다.
 - CockroachDB maintenance process는 시작 직후와 `REENCRYPTION_INTERVAL`마다 connection access/refresh token 및 pending provider-revoke queue token의 re-encryption worker를 실행합니다. Worker는 `MAINTENANCE_BATCH_SIZE` cursor page와 ciphertext/key-ID CAS로 concurrent refresh/claim을 덮어쓰지 않고 active v3 envelope로 변환하며 `credential.reencrypt` audit event에 count를 기록합니다.
-- Operations layer의 credential re-encryption은 durable checkpoint/resume를 제공하고 `/jandibat-maintenance reencrypt` 및 `scripts/rotate-credentials.sh`에서 dry-run/execute로 호출할 수 있습니다. 주기 background run도 encrypted row를 bounded cursor로 scan해 current active-key v3만 skip하고 v1/v2/raw row를 v3로 변환하며, 오류는 maintenance log/audit에 남겨 다음 interval에 재시도합니다.
+- Operations layer의 credential re-encryption은 durable checkpoint/resume를 제공하고 `/bin/maintenance reencrypt` 및 `scripts/rotate-credentials.sh`에서 dry-run/execute로 호출할 수 있습니다. 주기 background run도 encrypted row를 bounded cursor로 scan해 current active-key v3만 skip하고 v1/v2/raw row를 v3로 변환하며, 오류는 maintenance log/audit에 남겨 다음 interval에 재시도합니다.
 - Custom provider `ingestionKey`는 credential keyring으로 암호화하지 않습니다. 서버는 SHA-256 digest만 저장하고 create/rotate 응답에서 평문을 한 번 반환합니다. 따라서 credential ciphertext re-encryption 대상으로 취급하지 않습니다.
 
 Production 회전은 구/new RSA pair를 두 map에 함께 둔 뒤 active ID만 전환하고, DB row와 audit count가 수렴한 뒤 구 private key를 제거하는 순서를 지켜야 합니다. API에는 회전 내내 public map만 전달합니다. 절차와 중단 기준은 `docs/runbooks/KEY_ROTATION.ko.md`를 따릅니다.
@@ -117,9 +117,11 @@ Production은 API, worker, maintenance의 별도 image를 서로 다른 containe
 
 | Process | 실행 파일 | DB 환경 변수와 고정 username | 비밀 범위 |
 | --- | --- | --- | --- |
-| API | `/jandibat-api` | `DATABASE_URL`, `jandibat_api` | session, OAuth app secret, credential RSA public key, identity HMAC keyring; SMTP credential 없음 |
-| Sync worker | `/jandibat-worker` | `WORKER_DATABASE_URL`, `jandibat_worker` | provider token RSA keypair/legacy read key, SMTP credential, GitHub/GitLab remote revoke용 OAuth app secret |
-| Maintenance | `/jandibat-maintenance` | `MAINTENANCE_DATABASE_URL`, `jandibat_maintenance` | re-encryption RSA keypair/legacy read key, account 삭제용 `DELETION_PSEUDONYM_KEY`, identity HMAC keyring |
+| API | `/bin/server` | `DATABASE_URL`, `jandibat_api` | session, OAuth app secret, credential RSA public key, identity HMAC keyring; SMTP credential 없음 |
+| Sync worker | `/bin/worker` | `WORKER_DATABASE_URL`, `jandibat_worker` | provider token RSA keypair/legacy read key, SMTP credential, GitHub/GitLab remote revoke용 OAuth app secret |
+| Maintenance | `/bin/maintenance` | `MAINTENANCE_DATABASE_URL`, `jandibat_maintenance` | re-encryption RSA keypair/legacy read key, account 삭제용 `DELETION_PSEUDONYM_KEY`, identity HMAC keyring |
+
+Operator wrapper의 `MAINTENANCE_BIN` 기본값은 `/bin/maintenance`입니다. 별도 restore-tools image는 복구 검증 계약의 `/jandibat-api`, `/jandibat-maintenance` 경로를 유지하며 `RESTORE_API_BIN`, `RESTORE_MAINTENANCE_BIN`으로 지정합니다.
 
 고정 username이 다르므로 같은 권한 role을 다른 비밀번호나 query parameter의 DSN으로 가장할 수 없습니다. Production에서 DSN이 없거나 username이 다르면 listener를 열기 전에 시작을 거부합니다. `DEVELOPMENT_ALL_IN_ONE=true`도 production에서 거부합니다.
 

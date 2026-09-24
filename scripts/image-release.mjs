@@ -64,8 +64,19 @@ function importArchive(name, archive, evidence) {
   save(join(evidence, `${name}.json`), { name, archive, archiveHash: hash(readFileSync(archive)), imageId, layout });
 }
 
-function isCanonicalAbsence(diagnostic) {
+function isCanonicalAbsence(diagnostic, reference) {
   const response = diagnostic.trim();
+  // Captured with flake-locked Skopeo 1.24.1 against a local OCI registry
+  // returning canonical NAME_UNKNOWN and MANIFEST_UNKNOWN. Match the whole
+  // fatal record and both reference occurrences, never strip arbitrary prefixes.
+  const timestamp = response.match(/^time="(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2}))" /)?.[1];
+  const tagged = reference.match(/^(.+):([0-9a-f]{40})$/);
+  if (timestamp && tagged) {
+    for (const absence of ['manifest unknown', 'name unknown']) {
+      const message = `Error parsing image name "docker://${reference}": reading manifest ${tagged[2]} in ${tagged[1]}: ${absence}`;
+      if (response === `time="${timestamp}" level=fatal msg=${JSON.stringify(message)}`) return true;
+    }
+  }
   // Exact Distribution/OCI absence codes and their canonical messages only.
   // Unknown wrappers, details or wording need real registry evidence before
   // they can be added. Do not infer absence from a substring or denylist.
@@ -90,7 +101,7 @@ function isCanonicalAbsence(diagnostic) {
 function existingManifest(reference) {
   const result = command('skopeo', ['inspect', '--raw', `docker://${reference}`], true);
   if (result.status === 0) return hash(result.stdout);
-  if (!result.error && !result.signal && isCanonicalAbsence(result.stderr || '')) return null;
+  if (!result.error && !result.signal && isCanonicalAbsence(result.stderr || '', reference)) return null;
   throw new Error(`cannot inspect immutable tag ${reference}: ${result.stderr || result.error}`);
 }
 

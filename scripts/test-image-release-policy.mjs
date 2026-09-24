@@ -86,6 +86,46 @@ test('Compose gives every workload its own image and migration preflight inputs'
   assert.ok(services['verify-runtime-roles'].entrypoint.includes('/workspace/scripts/db-verify-runtime-roles.sh'));
 });
 
+test('make check executes the host runtime contract', () => {
+  const result = spawnSync('make', ['--no-print-directory', '-n', 'check'], { cwd: root, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(result.stdout.split('\n').includes('sh scripts/test-image-runtime-contract.sh'));
+});
+
+test('CI exercises runtime secrets and worker OAuth after isolated test database migrations and grants', () => {
+  const steps = yaml(join(root, '.github/workflows/ci.yml')).jobs.migrations.steps;
+  const runtime = steps.findIndex(s => s.run?.includes('make image-runtime-contract-test'));
+  const migrate = steps.findIndex(s => s.run?.includes('make db-migrate'));
+  const grants = steps.findIndex(s => s.run?.includes('make db-runtime-roles-test'));
+  assert.ok(runtime > grants && grants > migrate && migrate >= 0, 'runtime gate must follow migrations and role grants');
+  assert.equal(steps[runtime].env.TASK3_WORKER_OAUTH_TEST_DSN, 'postgresql://jandibat_worker@127.0.0.1:26257/jandibat?sslmode=disable');
+});
+
+for (const [file, args, forwarded] of [
+  ['rotate-credentials.sh', ['--dry-run'], ['reencrypt', '--dry-run']],
+  ['purge-expired-data.sh', ['--as-of', '2026-09-24T00:00:00Z', '--dry-run'], ['retention', '--as-of', '2026-09-24T00:00:00Z', '--dry-run']],
+  ['verify-deletion.sh', ['--request-id', 'fixture-request'], ['verify-deletion', '--request-id', 'fixture-request']],
+]) {
+  test(`${file} invokes the maintenance image executable and preserves explicit overrides`, t => {
+    // Trace the real exec attempt: the host intentionally lacks the image binary.
+    const result = spawnSync('sh', ['-x', script(file), ...args], {
+      env: { PATH: process.env.PATH, MAINTENANCE_BIN: '' }, encoding: 'utf8', timeout: 5000,
+    });
+    assert.match(result.stderr, /\+ exec \/bin\/maintenance /);
+    const dir = fixture(t);
+    executable(dir, 'maintenance', 'process.stdout.write(JSON.stringify(process.argv.slice(2)));');
+    const override = invoke(file, { MAINTENANCE_BIN: join(dir, 'bin/maintenance') }, args);
+    assert.equal(override.status, 0, override.stderr);
+    assert.deepEqual(JSON.parse(override.stdout), forwarded);
+  });
+}
+
+test('staging HMAC replacement instruction matches the parser encoding and length', () => {
+  const example = readFileSync(join(root, 'deploy/staging/.env.staging.example'), 'utf8');
+  const value = example.split('\n').find(line => line.startsWith('DELETED_IDENTITY_HMAC_KEYS=')).split('=').slice(1).join('=');
+  assert.deepEqual(Object.values(JSON.parse(value)), ['replace-with-distinct-unpadded-standard-base64-for-exactly-32-bytes']);
+});
+
 test('deployment records all refs and completes migration, GRANT, negative role tests before rollout', t => {
   const f = deployment(t);
   const result = invoke('deploy-staging.sh', f.env);
@@ -173,6 +213,13 @@ const fs = require('node:fs'); const args = process.argv.slice(2);
 fs.appendFileSync(process.env.TRACE, JSON.stringify(['skopeo', ...args]) + '\\n');
 if (args[0] === 'inspect') {
  if (process.env.REGISTRY_DIAGNOSTIC) { console.error(process.env.REGISTRY_DIAGNOSTIC); process.exit(1); }
+ if (process.env.MODE.startsWith('skopeo-1.24.1-') && !args.at(-1).includes('@')) {
+   const reference = args.at(-1).slice('docker://'.length);
+   const split = reference.lastIndexOf(':');
+   const message = 'Error parsing image name "docker://' + reference + '": reading manifest ' + reference.slice(split + 1) + ' in ' + reference.slice(0, split) + ': ' + (process.env.MODE.endsWith('manifest') ? 'manifest unknown' : 'name unknown');
+   console.error('time="2026-09-24T13:30:54+09:00" level=fatal msg=' + JSON.stringify(message));
+   process.exit(1);
+ }
  if (process.env.MODE === 'auth') { console.error('unauthorized'); process.exit(1); }
  if (process.env.MODE === 'auth-name-in-path') { console.error('reading manifest at ghcr.io/name_unknown/image: unauthorized'); process.exit(1); }
  if (process.env.MODE === 'transport') { console.error('dial tcp: lookup registry: no such host'); process.exit(1); }
@@ -211,7 +258,7 @@ if (process.env.MODE === 'scan-fail') process.exit(2);
   return { dir, evidence, env, manifestDigest, run: () => invoke('image-release.mjs', env, ['publish', evidence]), trace: () => existsSync(env.TRACE) ? readFileSync(env.TRACE,'utf8').trim().split('\n').map(JSON.parse) : [] };
 }
 
-for (const mode of ['matching', 'absent', 'new-repository', 'structured-name', 'structured-manifest', 'structured-reordered']) {
+for (const mode of ['matching', 'absent', 'new-repository', 'structured-name', 'structured-manifest', 'structured-reordered', 'skopeo-1.24.1-manifest', 'skopeo-1.24.1-name']) {
   test(`registry ${mode}: publish all five immutable refs, with exact digest scan evidence`, t => {
     const f = registryFixture(t, mode);
     const result = f.run();
@@ -227,6 +274,29 @@ for (const mode of ['matching', 'absent', 'new-repository', 'structured-name', '
       assert.equal(receipt.target, target);
       for (const key of ['sbom', 'syft', 'grype']) assert.ok(existsSync(receipt[key]));
     }
+  });
+}
+
+// Full wrapper observed from the flake-locked Skopeo 1.24.1 against a
+// disposable local OCI fixture (canonical MANIFEST_UNKNOWN/NAME_UNKNOWN).
+const wrappedAbsence = 'time="2026-09-24T13:30:54+09:00" level=fatal msg=' + JSON.stringify(
+  `Error parsing image name "docker://ghcr.io/owner/repo/api:${sha}": reading manifest ${sha} in ghcr.io/owner/repo/api: manifest unknown`,
+);
+for (const [label, diagnostic] of [
+  ['different reference', wrappedAbsence.replaceAll('/api:', '/worker:')],
+  ['different manifest', wrappedAbsence.replace(`reading manifest ${sha}`, `reading manifest ${'b'.repeat(40)}`)],
+  ['auth suffix', wrappedAbsence.replace('manifest unknown', 'manifest unknown: unauthorized')],
+  ['network suffix', wrappedAbsence.replace('manifest unknown', 'manifest unknown: HTTP 503 Service Unavailable')],
+  ['second error', wrappedAbsence + '\nunauthorized'],
+  ['wrong severity', wrappedAbsence.replace('level=fatal', 'level=warning')],
+  ['unknown wrapper', wrappedAbsence.replace('Error parsing image name', 'unverified error wrapper')],
+]) {
+  test(`registry wrapped ${label} fails closed without a copy`, t => {
+    const f = registryFixture(t);
+    f.env.REGISTRY_DIAGNOSTIC = diagnostic;
+    assert.notEqual(f.run().status, 0);
+    assert.equal(f.trace().filter(a => a[1] === 'copy').length, 0);
+    assert.equal(existsSync(f.env.GITHUB_OUTPUT), false);
   });
 }
 

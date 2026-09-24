@@ -100,7 +100,7 @@ UI 문구와 API contract는 “향후 수집 중단”인지 “기존 활동 �
 
 ## 6. 주기 purge
 
-현재 `/jandibat-maintenance` CockroachDB process는 `MAINTENANCE_DATABASE_URL`의 전용 role로 다음 동작을 제공합니다.
+현재 `/bin/maintenance` CockroachDB process는 `MAINTENANCE_DATABASE_URL`의 전용 role로 다음 동작을 제공합니다.
 
 - 시작 직후와 `RETENTION_INTERVAL`(기본 `24h`)마다 실행.
 - 한 실행의 UTC `now`를 고정하고 dataset별 retention 기간을 빼 동일 cutoff를 모든 batch에 사용.
@@ -111,7 +111,7 @@ UI 문구와 API contract는 “향후 수집 중단”인지 “기존 활동 �
 - Revoked provider tombstone은 30일이 지나고 연결된 revoke queue가 없을 때 삭제합니다. Subject/account 삭제가 먼저 일어나면 미완료 encrypted revoke queue의 nullable connection FK는 `ON DELETE SET NULL`로 끊기지만 token job은 보존되며, worker가 provider revoke를 완료한 뒤 삭제합니다. 따라서 subject/account 삭제도 외부 revoke retry 때문에 실패하지 않습니다.
 - SQL은 고정 table/column registry와 parameterized cutoff/limit만 사용하며 row의 민감값을 출력하지 않음.
 
-Operations layer는 dry-run count, `maintenance_checkpoints` 기반 resume, legal-hold 제외를 구현합니다. 주기 background loop는 기존 bounded run을 사용하고, `/jandibat-maintenance retention`과 `scripts/purge-expired-data.sh`가 같은 영속 operator 경로를 호출합니다.
+Operations layer는 dry-run count, `maintenance_checkpoints` 기반 resume, legal-hold 제외를 구현합니다. 주기 background loop는 기존 bounded run을 사용하고, `/bin/maintenance retention`과 `scripts/purge-expired-data.sh`가 같은 영속 operator 경로를 호출합니다.
 
 실행 인터페이스:
 
@@ -123,7 +123,7 @@ MAINTENANCE_DATABASE_URL="$STAGING_MAINTENANCE_DATABASE_URL" \
   scripts/purge-expired-data.sh --as-of '2026-08-12T00:00:00Z' --execute --scope staging-retention --resume
 ```
 
-Wrapper는 `MAINTENANCE_BIN`(기본 `/jandibat-maintenance`)에 검증된 argument만 전달합니다. 명령은 구현됐지만 staging 결과가 남기 전까지 운영 완료 증거는 아니며, adapter unit test를 실제 operator 실행으로 가장해 기록하지 않습니다.
+Wrapper는 `MAINTENANCE_BIN`(기본 `/bin/maintenance`)에 검증된 argument만 전달합니다. 명령은 구현됐지만 staging 결과가 남기 전까지 운영 완료 증거는 아니며, adapter unit test를 실제 operator 실행으로 가장해 기록하지 않습니다.
 
 ## 7. Backup에서의 삭제
 

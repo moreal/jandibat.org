@@ -21,7 +21,7 @@
 | `SESSION_SIGNING_KEY` | production 시작/secret 분리 검사에만 사용. Session은 opaque 난수 token의 SHA-256 digest로 검증 | 이 값의 교체는 session rotation이 아님. 기존 session도 무효화하지 않음 |
 | Provider connection access/refresh token | 각 write마다 random 256-bit DEK로 AES-GCM 암호화하고 active RSA public key로 감싼 authenticated `JDBK` v3 envelope로 저장. API는 encrypt-only, worker/maintenance는 matching private key로 read | dual-read 회전 가능 |
 | Legacy provider ciphertext | Optional symmetric map/single key로 raw/v1/v2 read | maintenance process가 active v3 envelope로 전환할 때까지 worker/maintenance에만 유지 |
-| `operations.ReencryptionWorker` | 시작 직후와 기본 1시간마다 cursor scan, CAS replace, corrupt row 격리; 별도 `RunOperator`는 persistent checkpoint/resume | background와 `/jandibat-maintenance reencrypt` operator CLI 연결됨 |
+| `operations.ReencryptionWorker` | 시작 직후와 기본 1시간마다 cursor scan, CAS replace, corrupt row 격리; 별도 `RunOperator`는 persistent checkpoint/resume | background와 `/bin/maintenance reencrypt` operator CLI 연결됨 |
 | Custom provider ingestion key | 32-byte 난수의 base64url 평문을 한 번 반환하고 SHA-256 digest만 저장 | owner rotate endpoint로 즉시 교체 가능. credential cipher와 무관 |
 | Backup external connection credential | CockroachDB external connection이 소유 | DB 권한과 storage credential overlap이 있으면 별도 회전 가능 |
 
@@ -105,7 +105,7 @@ Rollback은 active write ID를 구 key로 복원하되, 새 public/private pair�
 
 ### 단계 C — 기존 row 재암호화
 
-독립 maintenance process가 시작 직후 실행되고 이후 `REENCRYPTION_INTERVAL`마다 반복됩니다. 수동 실행은 `scripts/rotate-credentials.sh --dry-run --scope <ticket>`로 inventory를 확인한 뒤 승인 후 `--execute --resume`을 사용합니다. Wrapper는 `MAINTENANCE_BIN`(기본 `/jandibat-maintenance`)의 `reencrypt` command를 호출합니다. 기본 주기는 1시간, run timeout은 15분, page 크기는 500입니다. 다음 read-only SQL로 수렴 상태를 확인합니다.
+독립 maintenance process가 시작 직후 실행되고 이후 `REENCRYPTION_INTERVAL`마다 반복됩니다. 수동 실행은 `scripts/rotate-credentials.sh --dry-run --scope <ticket>`로 inventory를 확인한 뒤 승인 후 `--execute --resume`을 사용합니다. Wrapper는 `MAINTENANCE_BIN`(기본 `/bin/maintenance`)의 `reencrypt` command를 호출합니다. 기본 주기는 1시간, run timeout은 15분, page 크기는 500입니다. 다음 read-only SQL로 수렴 상태를 확인합니다.
 
 ```sql
 SELECT secret_kind, key_id, count(*) AS row_count

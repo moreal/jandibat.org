@@ -9,4 +9,4 @@ while [ "$#" -gt 0 ]; do
 	esac
 done
 [ -n "$request_id" ] || { echo "usage: $0 --request-id ID" >&2; exit 2; }
-exec "${MAINTENANCE_BIN:-/jandibat-maintenance}" verify-deletion --request-id "$request_id"
+exec "${MAINTENANCE_BIN:-/bin/maintenance}" verify-deletion --request-id "$request_id"

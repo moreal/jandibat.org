@@ -84,6 +84,10 @@ jobs:
         run: nix develop --command make migration-atomicity-test
       - name: Configure and verify least-privilege runtime roles
         run: nix develop --command make db-runtime-roles-test
+      - name: Verify production secret startup and live worker OAuth rejection
+        env:
+          TASK3_WORKER_OAUTH_TEST_DSN: postgresql://jandibat_worker@127.0.0.1:26257/jandibat?sslmode=disable
+        run: nix develop --command make image-runtime-contract-test
       - name: Verify Scythe queries against the migrated Cockroach schema
         env:
           SCYTHE_DATABASE_URL: postgresql://root@127.0.0.1:26257/jandibat?sslmode=disable

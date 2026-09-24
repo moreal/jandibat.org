@@ -1,6 +1,7 @@
 package cockroach
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -17,6 +18,27 @@ func TestNewRejectsNilDatabase(t *testing.T) {
 	store, err := New(nil)
 	if !errors.Is(err, ErrNilDB) || store != nil {
 		t.Fatalf("New(nil) = (%v, %v), want (nil, ErrNilDB)", store, err)
+	}
+}
+
+func TestMagicLinkDeliveryAttemptLimitsAreCheckedBeforeDatabase(t *testing.T) {
+	store := &Store{}
+	now := time.Now()
+	for _, attempts := range []int{0, 6} {
+		if _, err := store.ClaimMagicLinkDeliveries(context.Background(), now, time.Minute, 1, attempts); !errors.Is(err, coreauth.ErrInvalidInput) {
+			t.Fatalf("ClaimMagicLinkDeliveries(maxAttempts=%d) error = %v", attempts, err)
+		}
+		if _, err := store.RetryMagicLinkDelivery(context.Background(), "id", "claim", now, now.Add(time.Minute), attempts); !errors.Is(err, coreauth.ErrInvalidInput) {
+			t.Fatalf("RetryMagicLinkDelivery(maxAttempts=%d) error = %v", attempts, err)
+		}
+	}
+	for _, attempts := range []int{1, 5} {
+		if _, err := store.ClaimMagicLinkDeliveries(context.Background(), now, time.Minute, 1, attempts); !errors.Is(err, ErrNilDB) {
+			t.Fatalf("ClaimMagicLinkDeliveries(maxAttempts=%d) error = %v, want nil database", attempts, err)
+		}
+		if _, err := store.RetryMagicLinkDelivery(context.Background(), "id", "claim", now, now.Add(time.Minute), attempts); !errors.Is(err, ErrNilDB) {
+			t.Fatalf("RetryMagicLinkDelivery(maxAttempts=%d) error = %v, want nil database", attempts, err)
+		}
 	}
 }
 

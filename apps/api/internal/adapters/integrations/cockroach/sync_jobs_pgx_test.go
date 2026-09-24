@@ -3,9 +3,12 @@ package cockroach
 import (
 	"context"
 	"errors"
+	"math"
+	"strconv"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/moreal/jandibat.org/apps/api/internal/integrations"
 )
 
@@ -37,4 +40,20 @@ func TestSyncJobOperationsRequirePGXPool(t *testing.T) {
 	_, err = store.ListClaimableSyncJobs(context.Background(), now, 1)
 	check("ListClaimableSyncJobs", err)
 	check("CompleteClaimedSyncJob", store.CompleteClaimedSyncJob(context.Background(), job, "11111111-1111-4111-8111-111111111111"))
+}
+
+func TestSaveSyncJobRejectsAttemptOutsideInt32BeforeDatabase(t *testing.T) {
+	store := &Store{pool: &pgxpool.Pool{}}
+	job := integrations.SyncJob{ID: "018f0000-0000-7000-8000-000000000003", ConnectionID: "018f0000-0000-7000-8000-000000000001"}
+	job.Attempt = -1
+	if err := store.SaveSyncJob(context.Background(), job); !errors.Is(err, integrations.ErrInvalidSyncClaim) {
+		t.Fatalf("SaveSyncJob(attempt=%d) error = %v", job.Attempt, err)
+	}
+	if strconv.IntSize == 64 {
+		overflow := int64(math.MaxInt32) + 1
+		job.Attempt = int(overflow)
+		if err := store.SaveSyncJob(context.Background(), job); !errors.Is(err, integrations.ErrInvalidSyncClaim) {
+			t.Fatalf("SaveSyncJob(attempt=%d) error = %v", job.Attempt, err)
+		}
+	}
 }

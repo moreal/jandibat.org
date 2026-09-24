@@ -389,10 +389,11 @@ func parseWrappedKeyEnvelope(value []byte, keyIDLength int, version byte) (parse
 	identifierOffset := keyEnvelopeV2HeaderSize
 	wrappedOffset := identifierOffset + keyIDLength
 	wrappedLength64 := uint64(binary.BigEndian.Uint32(value[7:11]))
-	if wrappedLength64 == 0 || wrappedLength64 > uint64(len(value)-wrappedOffset) {
+	remainingLength := uint64(len(value) - wrappedOffset) // #nosec G115 -- wrappedOffset is between header length and len(value), so the nonnegative difference fits uint64.
+	if wrappedLength64 == 0 || wrappedLength64 > remainingLength {
 		return invalid("empty or truncated wrapped data encryption key")
 	}
-	wrappedLength := int(wrappedLength64)
+	wrappedLength := int(wrappedLength64) // #nosec G115 -- decoded uint32 length was checked against the remaining slice length, which fits int.
 	nonceOffset := wrappedOffset + wrappedLength
 	// AES-GCM uses a 12-byte nonce and a 16-byte authentication tag.
 	if len(value)-nonceOffset < 12+16 {

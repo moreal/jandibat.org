@@ -3,9 +3,12 @@ package cockroach
 import (
 	"context"
 	"errors"
+	"math"
+	"strconv"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/moreal/jandibat.org/apps/api/internal/integrations"
 )
 
@@ -33,4 +36,29 @@ func TestConnectionOperationsRequirePGXPool(t *testing.T) {
 	check("ListConnectionsPage", err)
 	check("UpdateConnectionAfterSync", store.UpdateConnectionAfterSync(context.Background(), record, id))
 	check("PurgeConnectionData", store.PurgeConnectionData(context.Background(), id))
+}
+
+func TestSaveConnectionRejectsCountersOutsideInt32BeforeDatabase(t *testing.T) {
+	if strconv.IntSize != 64 {
+		t.Skip("int cannot exceed int32 on this platform")
+	}
+	store := &Store{pool: &pgxpool.Pool{}}
+	overflow := int64(math.MaxInt32) + 1
+	underflow := int64(math.MinInt32) - 1
+	for _, counter := range []struct {
+		name              string
+		attempt, failures int
+	}{
+		{"attempt above", int(overflow), 0},
+		{"attempt below", int(underflow), 0},
+		{"failures above", 0, int(overflow)},
+		{"failures below", 0, int(underflow)},
+	} {
+		t.Run(counter.name, func(t *testing.T) {
+			record := integrations.ConnectionRecord{Connection: integrations.ProviderConnection{ID: "018f0000-0000-7000-8000-000000000001", LastSyncAttempt: counter.attempt, ConsecutiveFailures: counter.failures}}
+			if err := store.SaveConnection(context.Background(), record); !errors.Is(err, integrations.ErrInvalidConnectionStatus) {
+				t.Fatalf("SaveConnection() error = %v", err)
+			}
+		})
+	}
 }

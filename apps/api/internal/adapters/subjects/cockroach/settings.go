@@ -20,11 +20,11 @@ func (store *Store) GetSubjectSettings(ctx context.Context, subjectID string) (s
 }
 
 func (store *Store) SaveSubjectSettings(ctx context.Context, settings subjects.SubjectSettings) error {
-	if settings.SubjectID == "" || settings.UpdatedAt.IsZero() {
+	if settings.SubjectID == "" || settings.UpdatedAt.IsZero() || settings.SyncIntervalMinutes < 15 || settings.SyncIntervalMinutes > 10080 {
 		return subjects.ErrInvalidInput
 	}
 	return persistenceError(store.inTx(ctx, func(txctx context.Context, tx pgx.Tx) error {
-		count, err := generated.UpdateSubjectPreferences(txctx, tx, settings.SubjectID, string(settings.DefaultTheme), string(settings.WeekStart), settings.SyncEnabled, int32(settings.SyncIntervalMinutes), string(settings.FailurePolicy), settings.UpdatedAt)
+		count, err := generated.UpdateSubjectPreferences(txctx, tx, settings.SubjectID, string(settings.DefaultTheme), string(settings.WeekStart), settings.SyncEnabled, int32(settings.SyncIntervalMinutes), string(settings.FailurePolicy), settings.UpdatedAt) // #nosec G115 -- entry validation limits the interval to 15..10080 before the transaction.
 		if err != nil {
 			return persistenceError(err)
 		}

@@ -81,10 +81,10 @@ func (store *Store) ClaimMagicLinkDeliveries(ctx context.Context, now time.Time,
 		if err := generated.RecoverConsumedDelivery(txctx, tx, now); err != nil {
 			return persistenceError(err)
 		}
-		if err := generated.DeadExpiredDelivery(txctx, tx, now, int32(maxAttempts)); err != nil {
+		if err := generated.DeadExpiredDelivery(txctx, tx, now, int32(maxAttempts)); err != nil { // #nosec G115 -- maxAttempts is checked to be 1..5 before this transaction.
 			return persistenceError(err)
 		}
-		if err := generated.ClaimDeliveries(txctx, tx, now, now.Add(lease), claimID, int32(maxAttempts), int64(limit)); err != nil {
+		if err := generated.ClaimDeliveries(txctx, tx, now, now.Add(lease), claimID, int32(maxAttempts), int64(limit)); err != nil { // #nosec G115 -- maxAttempts is checked to be 1..5 before this transaction.
 			return persistenceError(err)
 		}
 		rows, err := generated.ListClaimedDeliveries(txctx, tx, claimID)
@@ -180,7 +180,7 @@ func (store *Store) RetryMagicLinkDelivery(ctx context.Context, id, claimToken s
 	}
 	var status coreauth.MagicLinkDeliveryStatus
 	err = appdb.InTx(ctx, store.pool, appdb.RetryOptions{}, func(txctx context.Context, tx pgx.Tx) error {
-		row, err := generated.RetryDelivery(txctx, tx, deliveryID, claimID, now, next, int32(maxAttempts))
+		row, err := generated.RetryDelivery(txctx, tx, deliveryID, claimID, now, next, int32(maxAttempts)) // #nosec G115 -- maxAttempts is checked to be 1..5 before this transaction.
 		if err != nil {
 			return persistenceError(err)
 		}

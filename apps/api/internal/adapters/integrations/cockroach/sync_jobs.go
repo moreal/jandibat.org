@@ -58,7 +58,7 @@ func (s *Store) SaveSyncJob(ctx context.Context, job integrations.SyncJob) error
 		}
 		count, err := generated.UpsertSyncJob(txctx, tx, id, connectionID,
 			databaseSyncJobStatus(job.Status), dateOrEmpty(job.From), dateOrEmpty(job.To),
-			int32(job.Attempt), int32(maxSyncAttempts(job.Attempt)), syncJobAvailableAt(job),
+			int32(job.Attempt), int32(maxSyncAttempts(job.Attempt)), syncJobAvailableAt(job), // #nosec G115 -- both attempts are nonnegative and at most MaxInt32 at the entry guard.
 			optionalTimeText(job.StartedAt), optionalTimeText(job.FinishedAt),
 			job.IdempotencyKeyHash, job.RequestHash, optionalTimeText(job.IdempotencyExpires),
 			string(payload), job.CreatedAt, job.UpdatedAt)

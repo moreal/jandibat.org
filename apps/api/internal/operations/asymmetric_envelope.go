@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -199,7 +200,7 @@ func marshalWrappedKeyEnvelope(version byte, keyID string, wrappedDEK, plaintext
 	// #nosec G115 -- lengths are explicitly bounded above.
 	result[5], result[6] = byte(len(keyID)>>8), byte(len(keyID))
 	wrappedLength := uint32(len(wrappedDEK)) // #nosec G115 -- bounded above.
-	result[7], result[8], result[9], result[10] = byte(wrappedLength>>24), byte(wrappedLength>>16), byte(wrappedLength>>8), byte(wrappedLength)
+	binary.BigEndian.PutUint32(result[7:11], wrappedLength)
 	copy(result[keyEnvelopeV2HeaderSize:], keyID)
 	copy(result[keyEnvelopeV2HeaderSize+len(keyID):], wrappedDEK)
 	nonceOffset := prefixLength

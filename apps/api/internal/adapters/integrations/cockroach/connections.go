@@ -60,8 +60,8 @@ func (s *Store) SaveConnection(ctx context.Context, record integrations.Connecti
 			connection.TokenExpiresAt, connection.LastSyncedAt, &connection.LastError,
 			connection.CreatedAt, connection.UpdatedAt, connection.ProviderID,
 			string(connection.Status), optionalTimeText(connection.LastSyncAttemptAt),
-			optionalTimeText(connection.NextSyncAttemptAt), int32(connection.LastSyncAttempt),
-			int32(connection.ConsecutiveFailures), connection.ExternalAccountLogin)
+			optionalTimeText(connection.NextSyncAttemptAt), int32(connection.LastSyncAttempt), // #nosec G115 -- entry guard checks MinInt32..MaxInt32.
+			int32(connection.ConsecutiveFailures), connection.ExternalAccountLogin) // #nosec G115 -- entry guard checks MinInt32..MaxInt32.
 		if err != nil {
 			return persistenceError(err, integrations.ErrConflict)
 		}

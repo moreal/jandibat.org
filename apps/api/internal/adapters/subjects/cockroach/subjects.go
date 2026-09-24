@@ -15,7 +15,7 @@ func (store *Store) CreateSubject(ctx context.Context, subject subjects.Subject,
 }
 
 func (store *Store) ClaimOrCreateSubject(ctx context.Context, subject subjects.Subject, settings subjects.SubjectSettings) (subjects.Subject, error) {
-	if subject.ID == "" || subject.OwnerUserID == "" || subject.Handle == "" || settings.SubjectID != subject.ID || settings.Timezone != subject.Timezone || settings.IsPublic != subject.IsPublic || subject.CreatedAt.IsZero() || settings.UpdatedAt.IsZero() {
+	if subject.ID == "" || subject.OwnerUserID == "" || subject.Handle == "" || settings.SubjectID != subject.ID || settings.Timezone != subject.Timezone || settings.IsPublic != subject.IsPublic || subject.CreatedAt.IsZero() || settings.UpdatedAt.IsZero() || settings.SyncIntervalMinutes < 15 || settings.SyncIntervalMinutes > 10080 {
 		return subjects.Subject{}, subjects.ErrInvalidInput
 	}
 	var created subjects.Subject
@@ -49,7 +49,7 @@ func (store *Store) ClaimOrCreateSubject(ctx context.Context, subject subjects.S
 			}
 			created = subject
 		}
-		_, err = generated.UpsertSubjectSettings(txctx, tx, settings.SubjectID, string(settings.DefaultTheme), string(settings.WeekStart), settings.SyncEnabled, int32(settings.SyncIntervalMinutes), string(settings.FailurePolicy), settings.UpdatedAt)
+		_, err = generated.UpsertSubjectSettings(txctx, tx, settings.SubjectID, string(settings.DefaultTheme), string(settings.WeekStart), settings.SyncEnabled, int32(settings.SyncIntervalMinutes), string(settings.FailurePolicy), settings.UpdatedAt) // #nosec G115 -- entry validation limits the interval to 15..10080 before the transaction.
 		return persistenceError(err)
 	})
 	return created, err

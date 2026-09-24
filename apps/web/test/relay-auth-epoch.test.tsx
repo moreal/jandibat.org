@@ -60,6 +60,50 @@ function seedPrivateSubject(environment: Environment): Promise<void> {
   });
 }
 
+function installGraphQLSession(
+  account: () => string | undefined,
+  changeAccount?: (value: string | undefined) => void,
+  failSignOut = false,
+) {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).endsWith("/config.json")) return Response.json({ apiBaseUrl: "" });
+    const name = (JSON.parse(String(init?.body)) as { operationName: string }).operationName;
+    if (name === "RelayCompatQuery") return Response.json({ data: {
+      subject: { __typename: "Subject", id: subjectID, displayName: "Account A private" },
+    } });
+    if (name === "AuthSubjectsQuery") return Response.json({ data: { viewer: account() ? {
+      subjects: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } },
+    } : null } });
+    if (name === "AuthSessionsQuery") return Response.json({ data: { viewer: account() ? {
+      sessions: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } },
+    } : null } });
+    if (name === "AuthSignOutMutation") {
+      if (failSignOut) return Response.json({ errors: [{ message: "offline" }] }, { status: 503 });
+      changeAccount?.(undefined);
+      return Response.json({ data: { signOut: { errors: [], session: {
+        __typename: "Session", id: "session-A", revokedAt: "2026-09-24T01:00:00Z",
+      } } } });
+    }
+    if (name === "AuthBeginPasskeySignInMutation") return Response.json({ data: {
+      beginPasskeySignIn: { errors: [], options: { ceremonyID: "ceremony-1", publicKeyJSON: "{}",
+        expiresAt: "2099-09-25T00:00:00Z" } },
+    } });
+    if (name === "AuthFinishPasskeySignInMutation") {
+      changeAccount?.("B");
+      return Response.json({ data: { finishPasskeySignIn: { errors: [], session: {
+        __typename: "Session", id: "session-B", expiresAt: "2099-09-25T00:00:00Z",
+      } } } });
+    }
+    const currentAccount = account();
+    return Response.json({ data: { viewer: currentAccount ? {
+      user: { id: currentAccount, primaryEmail: `${currentAccount}@example.test`,
+        status: "active", emailVerifiedAt: "2026-09-24T00:00:00Z" },
+      currentSession: { __typename: "Session", id: `session-${currentAccount}`,
+        createdAt: "2026-09-24T00:00:00Z", expiresAt: "2099-09-25T00:00:00Z", revokedAt: null },
+    } : null } });
+  }));
+}
+
 afterEach(() => {
   cleanup();
   boundary.environment = undefined;
@@ -69,29 +113,8 @@ afterEach(() => {
 });
 
 it("replaces a private Relay store after sign-out and again when another account signs in", async () => {
-  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
-    const url = String(input);
-    if (url.endsWith("/config.json")) return Response.json({ apiBaseUrl: "" });
-    return Response.json({ data: {
-      subject: { __typename: "Subject", id: subjectID, displayName: "Account A private" },
-    } });
-  }));
   let currentAccount: string | undefined = "A";
-  vi.spyOn(api, "getCurrentSession").mockImplementation(async () => {
-    if (!currentAccount) throw new ApiError("unauthorized", 401);
-    return auth(currentAccount);
-  });
-  const listSubjects = vi.spyOn(api, "listSubjects").mockResolvedValue({
-    subjects: [], pageInfo: { hasNextPage: false },
-  });
-  vi.spyOn(api, "signOut").mockImplementation(async () => { currentAccount = undefined; });
-  vi.spyOn(api, "beginPasskeyAuthentication").mockResolvedValue({
-    ceremonyId: "test", expiresAt: "2026-09-25T00:00:00Z", publicKey: {},
-  });
-  vi.spyOn(api, "finishPasskeyAuthentication").mockImplementation(async () => {
-    currentAccount = "B";
-    return auth("B");
-  });
+  installGraphQLSession(() => currentAccount, (value) => { currentAccount = value; });
 
   const view = render(() => <App />);
   await waitFor(() => expect(view.getByRole("button", { name: "로그아웃" })).toBeTruthy());
@@ -111,33 +134,22 @@ it("replaces a private Relay store after sign-out and again when another account
   await waitFor(() => expect(boundary.environment).not.toBe(signedOutEnvironment));
   await waitFor(() => expect(view.getByTestId("toast").textContent).toBe("Passkey로 로그인했습니다."));
   expect(boundary.environment!.getStore().getSource().get(subjectID)).toBeUndefined();
-  expect(listSubjects).toHaveBeenCalledTimes(2);
 });
 
 it("does not replace the Relay store when sign-out fails", async () => {
-  vi.stubGlobal("fetch", vi.fn(async () => Response.json({ apiBaseUrl: "" })));
-  vi.spyOn(api, "getCurrentSession").mockResolvedValue(auth("A"));
-  vi.spyOn(api, "listSubjects").mockResolvedValue({ subjects: [], pageInfo: { hasNextPage: false } });
-  const signOut = vi.spyOn(api, "signOut").mockRejectedValue(new Error("offline"));
+  installGraphQLSession(() => "A", undefined, true);
 
   const view = render(() => <App />);
   await waitFor(() => expect(view.getByRole("button", { name: "로그아웃" })).toBeTruthy());
   const environment = boundary.environment;
   fireEvent.click(view.getByRole("button", { name: "로그아웃" }));
-  await waitFor(() => expect(signOut).toHaveBeenCalledOnce());
   await waitFor(() => expect(view.getByRole("button", { name: "로그아웃" }).hasAttribute("disabled")).toBe(false));
   expect(boundary.environment).toBe(environment);
 });
 
 it("drops the private store after an anonymous auth epoch signal from another tab", async () => {
-  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input).endsWith("/config.json")
-    ? Response.json({ apiBaseUrl: "" })
-    : Response.json({ data: {
-      subject: { __typename: "Subject", id: subjectID, displayName: "Account A private" },
-    } })));
   let currentAccount = "A";
-  vi.spyOn(api, "getCurrentSession").mockImplementation(async () => auth(currentAccount));
-  vi.spyOn(api, "listSubjects").mockResolvedValue({ subjects: [], pageInfo: { hasNextPage: false } });
+  installGraphQLSession(() => currentAccount);
 
   const view = render(() => <App />);
   await waitFor(() => expect(view.getByText("A@example.test")).toBeTruthy());
@@ -157,9 +169,8 @@ it("drops the private store after an anonymous auth epoch signal from another ta
 it("does not rotate the store when a magic-link exchange fails", async () => {
   const token = "a".repeat(32);
   history.replaceState(null, "", `/#auth?token=${token}`);
-  vi.stubGlobal("fetch", vi.fn(async () => Response.json({ apiBaseUrl: "" })));
+  installGraphQLSession(() => undefined);
   vi.spyOn(api, "consumeMagicLink").mockRejectedValue(new ApiError("invalid link", 401));
-  vi.spyOn(api, "getCurrentSession").mockRejectedValue(new ApiError("unauthorized", 401));
 
   const view = render(() => <App />);
   await waitFor(() => expect(view.getByText("invalid link")).toBeTruthy());
@@ -172,17 +183,9 @@ it("does not rotate the store when a magic-link exchange fails", async () => {
 it("discards an existing private store immediately after a magic-link exchange succeeds", async () => {
   const token = "b".repeat(32);
   history.replaceState(null, "", `/#auth?token=${token}`);
-  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input).endsWith("/config.json")
-    ? Response.json({ apiBaseUrl: "" })
-    : Response.json({ data: {
-      subject: { __typename: "Subject", id: subjectID, displayName: "Account A private" },
-    } })));
+  installGraphQLSession(() => "B");
   let completeExchange!: (result: AuthResultDto) => void;
   vi.spyOn(api, "consumeMagicLink").mockReturnValue(new Promise((resolve) => { completeExchange = resolve; }));
-  vi.spyOn(api, "getCurrentSession").mockResolvedValue(auth("B"));
-  const listSubjects = vi.spyOn(api, "listSubjects").mockResolvedValue({
-    subjects: [], pageInfo: { hasNextPage: false },
-  });
 
   const view = render(() => <App />);
   await waitFor(() => expect(completeExchange).toBeTypeOf("function"));
@@ -197,6 +200,5 @@ it("discards an existing private store immediately after a magic-link exchange s
   expect(boundary.environment).not.toBe(oldEnvironment);
   expect(boundary.environment!.getStore().getSource().get(subjectID)).toBeUndefined();
   expect(location.href).not.toContain(token);
-  expect(listSubjects).toHaveBeenCalledOnce();
   history.replaceState(null, "", "/");
 });

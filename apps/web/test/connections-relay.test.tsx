@@ -1,4 +1,4 @@
-import type { AuthResultDto, SubjectDto } from "@jandibat/contracts";
+import type { SubjectDto } from "@jandibat/contracts";
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, expect, it, vi } from "vitest";
 import { Environment, Network, Observable, RecordSource, Store } from "relay-runtime";
@@ -13,10 +13,6 @@ const connectionID = "UHJvdmlkZXJDb25uZWN0aW9uOjE=";
 const owner: SubjectDto = {
   id: subjectID, handle: "garden", displayName: "Garden", timezone: "UTC", isPublic: true,
   createdAt: "2026-09-24T00:00:00Z", updatedAt: "2026-09-24T00:00:00Z",
-};
-const session: AuthResultDto = {
-  user: { id: "user-1", primaryEmail: "owner@example.test", status: "active", createdAt: "2026-09-24T00:00:00Z", updatedAt: "2026-09-24T00:00:00Z" },
-  session: { id: "session-1", userId: "user-1", current: true, createdAt: "2026-09-24T00:00:00Z", expiresAt: "2026-09-25T00:00:00Z" },
 };
 
 afterEach(() => {
@@ -38,14 +34,29 @@ function mount(
   respond: (name: string, variables: Record<string, unknown>) => ResponseFixture | Promise<ResponseFixture>,
   ownedSubjects: SubjectDto[] = [owner],
 ) {
-  vi.spyOn(api, "getCurrentSession").mockResolvedValue(session);
-  vi.spyOn(api, "listSubjects").mockResolvedValue({ subjects: ownedSubjects, pageInfo: { hasNextPage: false } });
+  vi.spyOn(api, "getCurrentSession").mockRejectedValue(new Error("REST session called"));
+  vi.spyOn(api, "listSubjects").mockRejectedValue(new Error("REST subjects called"));
   // A route using the old REST domain client must fail this test.
   vi.spyOn(api, "listProviderCatalog").mockRejectedValue(new Error("REST provider catalog called"));
   vi.spyOn(api, "listConnections").mockRejectedValue(new Error("REST connections called"));
   const operations: Array<{ name: string; variables: Record<string, unknown> }> = [];
   const environment = new Environment({
     network: Network.create((operation, variables) => Observable.create((sink) => {
+      if (operation.name === "AuthViewerQuery") {
+        sink.next({ data: { viewer: { user: { id: "user-1", primaryEmail: "owner@example.test",
+          status: "active", emailVerifiedAt: null }, currentSession: { __typename: "Session",
+          id: "U2Vzc2lvbjox", createdAt: "2026-09-24T00:00:00Z", expiresAt: "2099-09-25T00:00:00Z",
+          revokedAt: null } } } });
+        sink.complete();
+        return;
+      }
+      if (operation.name === "AuthSubjectsQuery") {
+        sink.next({ data: { viewer: { subjects: { edges: ownedSubjects.map((subject) => ({ node: {
+          __typename: "Subject", ...subject,
+        } })), pageInfo: { hasNextPage: false, endCursor: null } } } } });
+        sink.complete();
+        return;
+      }
       operations.push({ name: operation.name, variables });
       const deliver = (result: ResponseFixture) => {
         if (result instanceof Error) sink.error(result);
@@ -58,7 +69,7 @@ function mount(
     store: new Store(new RecordSource()),
   });
   const view = render(() => (
-    <AuthEpochContext value={{ environment: () => environment, authenticated: () => false, signedOut: () => false, takeNotice: () => undefined }}>
+    <AuthEpochContext value={{ environment: () => environment, beginAuthenticatedSession: () => undefined, authenticated: () => false, signedOut: () => false, takeNotice: () => undefined }}>
       <RelayProvider environment={environment}>
         <AppStateProvider><ToastProbe /><ConnectionsPage /></AppStateProvider>
       </RelayProvider>

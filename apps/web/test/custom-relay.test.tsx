@@ -1,4 +1,4 @@
-import type { AuthResultDto, SubjectDto } from "@jandibat/contracts";
+import type { SubjectDto } from "@jandibat/contracts";
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, expect, it, vi } from "vitest";
 import { Environment, Network, Observable, RecordSource, Store } from "relay-runtime";
@@ -13,10 +13,6 @@ const subjectID = "U3ViamVjdDox";
 const owner: SubjectDto = {
   id: subjectID, handle: "garden", displayName: "Garden", timezone: "UTC", isPublic: true,
   createdAt: "2026-09-24T00:00:00Z", updatedAt: "2026-09-24T00:00:00Z",
-};
-const session: AuthResultDto = {
-  user: { id: "user-1", primaryEmail: "owner@example.test", status: "active", createdAt: "2026-09-24T00:00:00Z", updatedAt: "2026-09-24T00:00:00Z" },
-  session: { id: "session-1", userId: "user-1", current: true, createdAt: "2026-09-24T00:00:00Z", expiresAt: "2026-09-25T00:00:00Z" },
 };
 const providerID = "Q3VzdG9tUHJvdmlkZXI6MQ==";
 const ingestProviderID = "00000000-0000-0000-0000-000000000001";
@@ -33,8 +29,8 @@ function page(edges: unknown[] = [{ cursor: "cursor-1", node: provider }], hasNe
 
 function mount(respond: (name: string, variables: Record<string, unknown>) => { data: Record<string, unknown> } | Error | null,
   subjects: SubjectDto[] = [owner]) {
-  vi.spyOn(api, "getCurrentSession").mockResolvedValue(session);
-  vi.spyOn(api, "listSubjects").mockResolvedValue({ subjects, pageInfo: { hasNextPage: false } });
+  vi.spyOn(api, "getCurrentSession").mockRejectedValue(new Error("REST session called"));
+  vi.spyOn(api, "listSubjects").mockRejectedValue(new Error("REST subjects called"));
   for (const method of ["listCustomProviders", "createCustomProvider", "updateCustomProvider",
     "rotateCustomProviderKey", "deleteCustomProvider"] as const) {
     vi.spyOn(api, method).mockImplementation(() => { throw new Error(`REST ${method} called`); });
@@ -42,6 +38,21 @@ function mount(respond: (name: string, variables: Record<string, unknown>) => { 
   const operations: Array<{ name: string; variables: Record<string, unknown> }> = [];
   const environment = new Environment({
     network: Network.create((operation, variables) => Observable.create((sink) => {
+      if (operation.name === "AuthViewerQuery") {
+        sink.next({ data: { viewer: { user: { id: "user-1", primaryEmail: "owner@example.test",
+          status: "active", emailVerifiedAt: null }, currentSession: { __typename: "Session",
+          id: "U2Vzc2lvbjox", createdAt: "2026-09-24T00:00:00Z", expiresAt: "2099-09-25T00:00:00Z",
+          revokedAt: null } } } });
+        sink.complete();
+        return;
+      }
+      if (operation.name === "AuthSubjectsQuery") {
+        sink.next({ data: { viewer: { subjects: { edges: subjects.map((subject) => ({ node: {
+          __typename: "Subject", ...subject,
+        } })), pageInfo: { hasNextPage: false, endCursor: null } } } } });
+        sink.complete();
+        return;
+      }
       operations.push({ name: operation.name, variables });
       const result = respond(operation.name, variables);
       if (result === null) return;
@@ -51,7 +62,7 @@ function mount(respond: (name: string, variables: Record<string, unknown>) => { 
     store: new Store(new RecordSource()),
   });
   const [epochEnvironment, setEpochEnvironment] = createSignal(environment);
-  const view = render(() => <AuthEpochContext value={{ environment: epochEnvironment, authenticated: () => false,
+  const view = render(() => <AuthEpochContext value={{ environment: epochEnvironment, beginAuthenticatedSession: () => undefined, authenticated: () => false,
     signedOut: () => false, takeNotice: () => undefined }}>
     <RelayProvider environment={environment}><AppStateProvider><CustomPage /></AppStateProvider></RelayProvider>
   </AuthEpochContext>);

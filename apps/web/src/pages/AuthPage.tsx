@@ -1,7 +1,7 @@
-import type { AuthResultDto } from "@jandibat/contracts";
 import { Match, Show, Switch, createSignal, onSettled } from "solid-js";
-import { api, ApiError } from "../api/client";
+import { api, ApiError, defaultApiBaseUrl } from "../api/client";
 import { useAppState } from "../app/state";
+import { readCurrentViewer, readOwnedSessions, readOwnedSubjects, SignedOutError, type OwnedSession } from "../auth/owner-viewer";
 import {
   magicLinkLocationHasToken,
   magicLinkSafeLocation,
@@ -9,15 +9,36 @@ import {
 } from "../auth/magic-link";
 import { createPasskey, getPasskey, passkeyAvailable } from "../auth/passkey";
 import { useAuthEpoch, type AuthNotice } from "../relay/auth-epoch";
+import { createRelayEphemeralMutation, createRelayMutation } from "../relay";
 import { ErrorCallout, Icon, errorMessage, formatTime } from "../components/common";
 import { legacyCallbackUrl, takePendingMagicLinkToken } from "../routing/legacy";
-import { OwnerSubjectCreator, OwnerSubjectSelect } from "../subjects/OwnerGate";
+import { OwnerSubjectCreator, OwnerSubjectSelect, OwnerSubjectsContext, useOwnerSubjects } from "../subjects/OwnerGate";
+import type { SubjectDto } from "@jandibat/contracts";
 import { preferredOwnedSubject } from "../subjects/onboarding";
+import type { AuthViewerQuery } from "./__generated__/AuthViewerQuery.graphql";
+import type { AuthRequestMagicLinkMutation } from "./__generated__/AuthRequestMagicLinkMutation.graphql";
+import requestMagicLinkMutation from "./__generated__/AuthRequestMagicLinkMutation.graphql";
+import type { AuthBeginPasskeySignInMutation } from "./__generated__/AuthBeginPasskeySignInMutation.graphql";
+import type { AuthFinishPasskeySignInMutation } from "./__generated__/AuthFinishPasskeySignInMutation.graphql";
+import beginPasskeySignInMutation from "./__generated__/AuthBeginPasskeySignInMutation.graphql";
+import finishPasskeySignInMutation from "./__generated__/AuthFinishPasskeySignInMutation.graphql";
+import type { AuthSignOutMutation } from "./__generated__/AuthSignOutMutation.graphql";
+import signOutMutation from "./__generated__/AuthSignOutMutation.graphql";
+import type { AuthRevokeSessionMutation } from "./__generated__/AuthRevokeSessionMutation.graphql";
+import revokeSessionMutation from "./__generated__/AuthRevokeSessionMutation.graphql";
+import type { AuthBeginPasskeyRegistrationMutation } from "./__generated__/AuthBeginPasskeyRegistrationMutation.graphql";
+import type { AuthFinishPasskeyRegistrationMutation } from "./__generated__/AuthFinishPasskeyRegistrationMutation.graphql";
+import beginPasskeyRegistrationMutation from "./__generated__/AuthBeginPasskeyRegistrationMutation.graphql";
+import finishPasskeyRegistrationMutation from "./__generated__/AuthFinishPasskeyRegistrationMutation.graphql";
+import type { AuthRequestSubjectDeletionMutation } from "./__generated__/AuthRequestSubjectDeletionMutation.graphql";
+import requestSubjectDeletionMutation from "./__generated__/AuthRequestSubjectDeletionMutation.graphql";
+
+type CurrentViewer = NonNullable<AuthViewerQuery["response"]["viewer"]>;
 
 type AuthState =
   | { kind: "loading" }
   | { kind: "signed-out" }
-  | { kind: "signed-in"; auth: AuthResultDto }
+  | { kind: "signed-in"; auth: CurrentViewer }
   | { kind: "error"; error: unknown };
 
 const authNoticeMessages: Record<AuthNotice, string> = {
@@ -59,6 +80,9 @@ function AuthStory(props: { authenticated: boolean }) {
 
 function MagicLinkForm() {
   const app = useAppState();
+  const requestMagicLink = createRelayEphemeralMutation<AuthRequestMagicLinkMutation>(
+    defaultApiBaseUrl(), requestMagicLinkMutation,
+  );
   const [busy, setBusy] = createSignal(false);
   const [failure, setFailure] = createSignal<string>();
   const [sentTo, setSentTo] = createSignal<string>();
@@ -71,10 +95,12 @@ function MagicLinkForm() {
     setFailure(undefined);
     setBusy(true);
     try {
-      await api.requestMagicLink({
-        email,
-        redirectUri: legacyCallbackUrl("auth"),
-      });
+      const result = await requestMagicLink({ input: {
+        email, redirectURI: legacyCallbackUrl("auth"),
+      } });
+      if (result.requestMagicLink.errors.length || !result.requestMagicLink.accepted) {
+        throw new Error(result.requestMagicLink.errors[0]?.message ?? "로그인 링크를 보내지 못했습니다.");
+      }
       setSentTo(email);
     } catch (error) {
       const message = errorMessage(error);
@@ -157,36 +183,96 @@ function SignedOutCard(props: { onPasskeySignIn: () => Promise<void>; busy: bool
   );
 }
 
-function SignedInCard(props: { auth: AuthResultDto; onSignedOut: () => void }) {
+function SignedInCard(props: { auth: CurrentViewer; onSignedOut: () => void }) {
   const app = useAppState();
+  const owner = useOwnerSubjects();
   const authEpoch = useAuthEpoch();
+  const signOutMutationCommit = createRelayMutation<AuthSignOutMutation>(signOutMutation);
+  const revokeSession = createRelayMutation<AuthRevokeSessionMutation>(revokeSessionMutation);
+  const requestSubjectDeletion = createRelayMutation<AuthRequestSubjectDeletionMutation>(requestSubjectDeletionMutation);
+  const beginPasskeyRegistration = createRelayEphemeralMutation<AuthBeginPasskeyRegistrationMutation>(
+    defaultApiBaseUrl(), beginPasskeyRegistrationMutation,
+  );
+  const finishPasskeyRegistration = createRelayEphemeralMutation<AuthFinishPasskeyRegistrationMutation>(
+    defaultApiBaseUrl(), finishPasskeyRegistrationMutation,
+  );
+  const [sessions, setSessions] = createSignal<OwnedSession[]>([]);
+  const [revokingSession, setRevokingSession] = createSignal<string>();
   const [busy, setBusy] = createSignal<"passkey" | "delete" | "signout">();
   const [deletionRequested, setDeletionRequested] = createSignal(false);
   const unavailable = !passkeyAvailable();
+  let active = true;
+
+  onSettled(() => {
+    const controller = new AbortController();
+    void readOwnedSessions(authEpoch.environment(), controller.signal).then(
+      (value) => setSessions(value.filter((session) => !session.revokedAt && session.id !== props.auth.currentSession.id)),
+      (error: unknown) => {
+        if (!controller.signal.aborted) app.showToast(errorMessage(error), "error");
+      },
+    );
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  });
+
+  const revokeOtherSession = async (id: string) => {
+    setRevokingSession(id);
+    try {
+      const result = await revokeSession({ input: { id } });
+      if (result.revokeSession.errors.length || !result.revokeSession.session?.revokedAt) {
+        throw new Error(result.revokeSession.errors[0]?.message ?? "세션을 해지하지 못했습니다.");
+      }
+      setSessions((current) => current.filter((session) => session.id !== id));
+      app.showToast("다른 세션을 해지했습니다.");
+    } catch (error) {
+      app.showToast(errorMessage(error), "error");
+    } finally {
+      setRevokingSession(undefined);
+    }
+  };
 
   const registerPasskey = async () => {
     setBusy("passkey");
     try {
-      const options = await api.beginPasskeyRegistration("이 기기");
-      const credential = await createPasskey(options.publicKey);
-      await api.finishPasskeyRegistration(options.ceremonyId, credential, "이 기기");
+      const begin = await beginPasskeyRegistration({});
+      if (!active) return;
+      if (begin.beginPasskeyRegistration.errors.length || !begin.beginPasskeyRegistration.options) {
+        throw new Error(begin.beginPasskeyRegistration.errors[0]?.message ?? "Passkey 등록을 시작하지 못했습니다.");
+      }
+      const options = begin.beginPasskeyRegistration.options;
+      const credential = await createPasskey(JSON.parse(options.publicKeyJSON));
+      if (!active) return;
+      const finish = await finishPasskeyRegistration({ input: {
+        ceremonyID: options.ceremonyID,
+        credentialJSON: JSON.stringify(credential),
+        label: "이 기기",
+      } });
+      if (!active) return;
+      if (finish.finishPasskeyRegistration.errors.length || !finish.finishPasskeyRegistration.credential) {
+        throw new Error(finish.finishPasskeyRegistration.errors[0]?.message ?? "Passkey 등록을 완료하지 못했습니다.");
+      }
       app.showToast("이 기기에 Passkey를 등록했습니다.");
     } catch (error) {
-      app.showToast(errorMessage(error), "error");
+      if (active) app.showToast(errorMessage(error), "error");
     } finally {
-      setBusy(undefined);
+      if (active) setBusy(undefined);
     }
   };
 
   const requestDeletion = async () => {
-    const subject = app.currentSubject();
+    const subject = owner.subjects().find((candidate) => candidate.handle === app.currentSubject());
     if (
       !subject ||
-      !confirm(`@${subject} 잔디밭과 소유 데이터를 삭제 요청할까요? 요청은 비동기로 처리되며 완료 후 복구할 수 없습니다.`)
+      !confirm(`@${subject.handle} 잔디밭과 소유 데이터를 삭제 요청할까요? 요청은 비동기로 처리되며 완료 후 복구할 수 없습니다.`)
     ) return;
     setBusy("delete");
     try {
-      await api.requestSubjectDeletion(subject);
+      const result = await requestSubjectDeletion({ input: { subjectID: subject.id } });
+      if (result.requestSubjectDeletion.errors.length || !result.requestSubjectDeletion.request) {
+        throw new Error(result.requestSubjectDeletion.errors[0]?.message ?? "삭제 요청을 접수하지 못했습니다.");
+      }
       setDeletionRequested(true);
       app.showToast("잔디밭 삭제 요청을 접수했습니다.");
     } catch (error) {
@@ -199,8 +285,11 @@ function SignedInCard(props: { auth: AuthResultDto; onSignedOut: () => void }) {
   const signOut = async () => {
     setBusy("signout");
     try {
-      await api.signOut();
-      app.setOwnedSubjects([]);
+      const result = await signOutMutationCommit({});
+      if (result.signOut.errors.length || !result.signOut.session) {
+        throw new Error(result.signOut.errors[0]?.message ?? "로그아웃하지 못했습니다.");
+      }
+      owner.setSubjects([]);
       app.clearOwnerSubject();
       if (authEpoch.signedOut("signed-out")) return;
       app.showToast(authNoticeMessages["signed-out"]);
@@ -215,13 +304,13 @@ function SignedInCard(props: { auth: AuthResultDto; onSignedOut: () => void }) {
     <div class="auth-card account-card">
       <p class="eyebrow">Your account</p>
       <h2>{props.auth.user.primaryEmail}</h2>
-      <p>이 세션은 <span>{formatTime(props.auth.session.expiresAt)}</span>까지 유효합니다.</p>
+      <p>이 세션은 <span>{formatTime(props.auth.currentSession.expiresAt)}</span>까지 유효합니다.</p>
       <dl class="account-meta">
         <div><dt>이메일 상태</dt><dd>{props.auth.user.emailVerifiedAt ? "확인됨" : "확인 대기"}</dd></div>
         <div><dt>계정 상태</dt><dd>{props.auth.user.status}</dd></div>
       </dl>
       <Show
-        when={app.ownedSubjects().length > 0}
+        when={owner.subjects().length > 0}
         fallback={<OwnerSubjectCreator />}
       >
         <OwnerSubjectSelect />
@@ -252,6 +341,16 @@ function SignedInCard(props: { auth: AuthResultDto; onSignedOut: () => void }) {
       <button class="text-button wide" type="button" disabled={Boolean(busy())} onClick={signOut}>
         {busy() === "signout" ? "로그아웃 중…" : "로그아웃"}
       </button>
+      <Show when={sessions().length > 0}>
+        <div class="account-sessions">
+          <h3>다른 로그인 세션</h3>
+          <ul>{sessions().map((session) => <li>
+            <span>{formatTime(session.createdAt)}</span>
+            <button class="text-button" type="button" disabled={Boolean(revokingSession())}
+              onClick={() => void revokeOtherSession(session.id)}>다른 세션 해지</button>
+          </li>)}</ul>
+        </div>
+      </Show>
     </div>
   );
 }
@@ -259,6 +358,13 @@ function SignedInCard(props: { auth: AuthResultDto; onSignedOut: () => void }) {
 export function AuthPage() {
   const app = useAppState();
   const authEpoch = useAuthEpoch();
+  const [subjects, setSubjects] = createSignal<readonly SubjectDto[]>([]);
+  const beginPasskeySignIn = createRelayEphemeralMutation<AuthBeginPasskeySignInMutation>(
+    defaultApiBaseUrl(), beginPasskeySignInMutation,
+  );
+  const finishPasskeySignIn = createRelayEphemeralMutation<AuthFinishPasskeySignInMutation>(
+    defaultApiBaseUrl(), finishPasskeySignInMutation,
+  );
   const [auth, setAuth] = createSignal<AuthState>({ kind: "loading" });
   const [passkeyBusy, setPasskeyBusy] = createSignal(false);
   let attempt = 0;
@@ -272,22 +378,26 @@ export function AuthPage() {
       history.replaceState(null, "", magicLinkSafeLocation(location.href));
     }
     try {
-      const result = token
-        ? await api.consumeMagicLink(token)
-        : await api.getCurrentSession();
-      if (currentAttempt !== attempt && !token) return;
-      if (authEpoch.authenticated(result.user.id, Boolean(token), token ? "magic" : undefined)) return;
-      const subjects = await api.listSubjects();
+      if (token) {
+        const result = await api.consumeMagicLink(token);
+        if (currentAttempt !== attempt) return;
+        authEpoch.authenticated(result.user.id, true, "magic");
+        return;
+      }
+      const result = await readCurrentViewer(authEpoch.environment());
       if (currentAttempt !== attempt) return;
-      app.setOwnedSubjects(subjects.subjects);
-      const selected = preferredOwnedSubject(subjects.subjects, app.currentSubject());
+      if (authEpoch.authenticated(result.user.id)) return;
+      const subjects = await readOwnedSubjects(authEpoch.environment());
+      if (currentAttempt !== attempt) return;
+      setSubjects(subjects);
+      const selected = preferredOwnedSubject(subjects, app.currentSubject());
       if (selected) app.selectOwnerSubject(selected);
       else app.clearOwnerSubject();
       setAuth({ kind: "signed-in", auth: result });
       showPendingAuthNotice(authEpoch.takeNotice(), (message) => app.showToast(message));
     } catch (error) {
       if (currentAttempt !== attempt) return;
-      if (error instanceof ApiError && error.status === 401 && !token) {
+      if ((error instanceof SignedOutError || error instanceof ApiError && error.status === 401) && !token) {
         if (authEpoch.signedOut()) return;
         setAuth({ kind: "signed-out" });
         showPendingAuthNotice(authEpoch.takeNotice(), (message) => app.showToast(message));
@@ -300,10 +410,22 @@ export function AuthPage() {
   const passkeySignIn = async () => {
     setPasskeyBusy(true);
     try {
-      const options = await api.beginPasskeyAuthentication();
-      const credential = await getPasskey(options.publicKey);
-      const result = await api.finishPasskeyAuthentication(options.ceremonyId, credential);
-      authEpoch.authenticated(result.user.id, true, "passkey");
+      const begin = await beginPasskeySignIn({});
+      if (!active) return;
+      if (begin.beginPasskeySignIn.errors.length || !begin.beginPasskeySignIn.options) {
+        throw new Error(begin.beginPasskeySignIn.errors[0]?.message ?? "Passkey 로그인을 시작하지 못했습니다.");
+      }
+      const options = begin.beginPasskeySignIn.options;
+      const credential = await getPasskey(JSON.parse(options.publicKeyJSON));
+      if (!active) return;
+      const finish = await finishPasskeySignIn({ input: {
+        ceremonyID: options.ceremonyID, credentialJSON: JSON.stringify(credential),
+      } });
+      if (!active) return;
+      if (finish.finishPasskeySignIn.errors.length || !finish.finishPasskeySignIn.session) {
+        throw new Error(finish.finishPasskeySignIn.errors[0]?.message ?? "Passkey 로그인을 완료하지 못했습니다.");
+      }
+      authEpoch.beginAuthenticatedSession("passkey");
     } catch (error) {
       if (active) app.showToast(errorMessage(error), "error");
     } finally {
@@ -319,7 +441,7 @@ export function AuthPage() {
     };
   });
 
-  return (
+  return <OwnerSubjectsContext value={{ subjects, setSubjects }}>
     <Switch>
       <Match when={auth().kind === "loading"}>
         <section class="page section-shell narrow">
@@ -360,5 +482,5 @@ export function AuthPage() {
         </section>
       </Match>
     </Switch>
-  );
+  </OwnerSubjectsContext>;
 }

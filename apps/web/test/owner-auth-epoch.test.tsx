@@ -1,9 +1,7 @@
-import type { AuthResultDto, SubjectDto } from "@jandibat/contracts";
 import { cleanup, render, waitFor } from "@solidjs/testing-library";
 import { Show, createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { Environment, fetchQuery } from "relay-runtime";
-import { api, ApiError } from "../src/api/client";
 import { AppStateProvider } from "../src/app/state";
 import { AuthEpochContext, createAuthEpoch } from "../src/relay/auth-epoch";
 import { RelayProvider } from "../src/relay";
@@ -11,37 +9,6 @@ import { OwnerGate } from "../src/subjects/OwnerGate";
 import query from "./__generated__/RelayCompatQuery.graphql";
 
 const subjectID = "U3ViamVjdDox";
-
-function auth(userID: string): AuthResultDto {
-  return {
-    user: {
-      id: userID,
-      primaryEmail: `${userID}@example.test`,
-      status: "active",
-      createdAt: "2026-09-24T00:00:00Z",
-      updatedAt: "2026-09-24T00:00:00Z",
-    },
-    session: {
-      id: `session-${userID}`,
-      userId: userID,
-      current: true,
-      createdAt: "2026-09-24T00:00:00Z",
-      expiresAt: "2026-09-25T00:00:00Z",
-    },
-  };
-}
-
-function subject(handle: string): SubjectDto {
-  return {
-    id: subjectID,
-    handle,
-    displayName: handle,
-    timezone: "UTC",
-    isPublic: false,
-    createdAt: "2026-09-24T00:00:00Z",
-    updatedAt: "2026-09-24T00:00:00Z",
-  };
-}
 
 afterEach(() => {
   cleanup();
@@ -51,17 +18,25 @@ afterEach(() => {
 });
 
 it("OwnerGate revalidation drops account A's private Relay store for B and on 401", async () => {
-  vi.stubGlobal("fetch", vi.fn(async () => Response.json({ data: {
-    subject: { __typename: "Subject", id: subjectID, displayName: "Account A private" },
-  } })));
   let currentAccount: string | undefined = "A";
-  vi.spyOn(api, "getCurrentSession").mockImplementation(async () => {
-    if (!currentAccount) throw new ApiError("unauthorized", 401);
-    return auth(currentAccount);
-  });
-  vi.spyOn(api, "listSubjects").mockImplementation(async () => ({
-    subjects: [subject(currentAccount === "B" ? "garden-b" : "garden-a")],
-    pageInfo: { hasNextPage: false },
+  vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const name = (JSON.parse(String(init?.body)) as { operationName: string }).operationName;
+    if (name === "RelayCompatQuery") return Response.json({ data: {
+      subject: { __typename: "Subject", id: subjectID, displayName: "Account A private" },
+    } });
+    if (name === "AuthViewerQuery") return Response.json({ data: { viewer: currentAccount ? {
+      user: { id: currentAccount, primaryEmail: `${currentAccount}@example.test`,
+        status: "active", emailVerifiedAt: null },
+      currentSession: { __typename: "Session", id: `session-${currentAccount}`,
+        createdAt: "2026-09-24T00:00:00Z", expiresAt: "2099-09-25T00:00:00Z", revokedAt: null },
+    } : null } });
+    return Response.json({ data: { viewer: currentAccount ? { subjects: {
+      edges: [{ node: { __typename: "Subject", id: currentAccount === "B" ? "U3ViamVjdDoy" : subjectID,
+        handle: currentAccount === "B" ? "garden-b" : "garden-a",
+        displayName: null, timezone: "UTC", isPublic: false,
+        createdAt: "2026-09-24T00:00:00Z", updatedAt: "2026-09-24T00:00:00Z" } }],
+      pageInfo: { hasNextPage: false, endCursor: "end" },
+    } } : null } });
   }));
 
   let setVisible!: (value: boolean) => void;

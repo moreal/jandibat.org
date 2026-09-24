@@ -7,7 +7,24 @@ import {
 } from "relay-runtime";
 import type { GraphQLResponse } from "relay-runtime";
 
-class GraphQLNetworkError extends Error {}
+export class GraphQLNetworkError extends Error {
+  readonly code?: "UNAUTHENTICATED";
+
+  constructor(message: string, code?: "UNAUTHENTICATED") {
+    super(message);
+    this.code = code;
+  }
+}
+
+function unauthenticatedCode(payload: unknown): "UNAUTHENTICATED" | undefined {
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload) || !("errors" in payload) ||
+    !Array.isArray(payload.errors) || payload.errors.length !== 1) return undefined;
+  const error: unknown = payload.errors[0];
+  if (typeof error !== "object" || error === null || Array.isArray(error) || !("extensions" in error)) return undefined;
+  const extensions: unknown = error.extensions;
+  return typeof extensions === "object" && extensions !== null && !Array.isArray(extensions) &&
+    "code" in extensions && extensions.code === "UNAUTHENTICATED" ? "UNAUTHENTICATED" : undefined;
+}
 
 /** A fresh normalized store is scoped to the application bootstrap/session. */
 export function createRelayEnvironment(apiBaseUrl: string): Environment {
@@ -41,7 +58,7 @@ export function createRelayEnvironment(apiBaseUrl: string): Environment {
         if (typeof payload !== "object" || payload === null || Array.isArray(payload) ||
           ("errors" in payload && Array.isArray(payload.errors) && payload.errors.length > 0) ||
           !("data" in payload)) {
-          throw new GraphQLNetworkError("GraphQL request failed.");
+          throw new GraphQLNetworkError("GraphQL request failed.", unauthenticatedCode(payload));
         }
         sink.next(payload as GraphQLResponse);
         sink.complete();

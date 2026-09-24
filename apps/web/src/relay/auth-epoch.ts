@@ -6,6 +6,7 @@ const AUTH_EPOCH_STORAGE_KEY = "jandibat:auth-epoch";
 
 export type AuthEpoch = {
   environment: Accessor<Environment>;
+  beginAuthenticatedSession(notice: AuthNotice): void;
   authenticated(userID: string, explicitSignIn?: boolean, notice?: AuthNotice): boolean;
   signedOut(notice?: AuthNotice): boolean;
   takeNotice(): AuthNotice | undefined;
@@ -19,6 +20,7 @@ export const AuthEpochContext = createContext<AuthEpoch>();
 export function createAuthEpoch(apiBaseUrl: string): AuthEpoch {
   const [environment, setEnvironment] = createSignal(createRelayEnvironment(apiBaseUrl));
   let accountID: string | null | undefined;
+  let awaitingIdentity = false;
   let pendingNotice: AuthNotice | undefined;
 
   const rotate = (broadcast: boolean) => {
@@ -35,6 +37,7 @@ export function createAuthEpoch(apiBaseUrl: string): AuthEpoch {
   const onStorage = (event: StorageEvent) => {
     if (event.key !== AUTH_EPOCH_STORAGE_KEY || !event.newValue) return;
     accountID = undefined;
+    awaitingIdentity = false;
     pendingNotice = undefined;
     rotate(false);
   };
@@ -43,7 +46,19 @@ export function createAuthEpoch(apiBaseUrl: string): AuthEpoch {
 
   return {
     environment,
+    beginAuthenticatedSession(notice) {
+      accountID = undefined;
+      awaitingIdentity = true;
+      pendingNotice = notice;
+      rotate(true);
+    },
     authenticated(userID, explicitSignIn = false, notice) {
+      if (awaitingIdentity && !explicitSignIn) {
+        awaitingIdentity = false;
+        accountID = userID;
+        return false;
+      }
+      awaitingIdentity = false;
       const changed = explicitSignIn || accountID !== userID;
       accountID = userID;
       if (changed) {
@@ -53,6 +68,7 @@ export function createAuthEpoch(apiBaseUrl: string): AuthEpoch {
       return changed;
     },
     signedOut(notice) {
+      awaitingIdentity = false;
       const changed = accountID !== null;
       accountID = null;
       if (changed) {

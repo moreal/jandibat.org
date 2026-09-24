@@ -2,19 +2,26 @@ import type { SubjectDto } from "@jandibat/contracts";
 import {
   Match,
   Switch,
+  createContext,
   createSignal,
   onSettled,
+  useContext,
+  type Accessor,
   type Element,
+  type Setter,
 } from "solid-js";
-import { api, ApiError } from "../api/client";
+import { readCurrentViewer, readOwnedSubjects, SignedOutError } from "../auth/owner-viewer";
 import { useAppState } from "../app/state";
 import { useAuthEpoch } from "../relay/auth-epoch";
+import { createRelayMutation } from "../relay";
 import { ErrorCallout, Icon, PageIntro, errorMessage } from "../components/common";
 import {
   createSubjectInput,
   preferredOwnedSubject,
   SubjectInputError,
 } from "./onboarding";
+import type { AuthCreateSubjectMutation } from "../pages/__generated__/AuthCreateSubjectMutation.graphql";
+import createSubjectMutation from "../pages/__generated__/AuthCreateSubjectMutation.graphql";
 
 type OwnerStatus =
   | { kind: "loading" }
@@ -24,17 +31,31 @@ type OwnerStatus =
   | { kind: "select" }
   | { kind: "error"; error: unknown };
 
+export type OwnerSubjects = {
+  subjects: Accessor<readonly SubjectDto[]>;
+  setSubjects: Setter<readonly SubjectDto[]>;
+};
+
+export const OwnerSubjectsContext = createContext<OwnerSubjects>();
+
+export function useOwnerSubjects(): OwnerSubjects {
+  const owner = useContext(OwnerSubjectsContext);
+  if (!owner) throw new Error("Owner subjects require a route-scoped Relay viewer.");
+  return owner;
+}
+
 function deviceTimezone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 }
 
 export function OwnerSubjectSelect(props: { onSelected?: (handle: string) => void }) {
   const app = useAppState();
+  const owner = useOwnerSubjects();
 
   const select = (event: SubmitEvent) => {
     event.preventDefault();
     const handle = String(new FormData(event.currentTarget as HTMLFormElement).get("subject") ?? "");
-    const subject = app.ownedSubjects().find((candidate) => candidate.handle === handle);
+    const subject = owner.subjects().find((candidate) => candidate.handle === handle);
     if (!subject) return;
     app.selectOwnerSubject(subject);
     props.onSelected?.(subject.handle);
@@ -45,7 +66,7 @@ export function OwnerSubjectSelect(props: { onSelected?: (handle: string) => voi
       <label for="owner-subject-select"><strong>관리할 잔디밭</strong></label>
       <select id="owner-subject-select" name="subject" required>
         <option value="" disabled selected={!app.currentSubject()}>선택해 주세요</option>
-        {app.ownedSubjects().map((subject) => (
+        {owner.subjects().map((subject) => (
           <option value={subject.handle} selected={subject.handle === app.currentSubject()}>
             {subject.displayName || `@${subject.handle}`}
           </option>
@@ -58,6 +79,8 @@ export function OwnerSubjectSelect(props: { onSelected?: (handle: string) => voi
 
 export function OwnerSubjectCreator(props: { onCreated?: (subject: SubjectDto) => void }) {
   const app = useAppState();
+  const owner = useOwnerSubjects();
+  const createSubject = createRelayMutation<AuthCreateSubjectMutation>(createSubjectMutation);
   const [busy, setBusy] = createSignal(false);
   const [failure, setFailure] = createSignal<{
     message: string;
@@ -89,8 +112,15 @@ export function OwnerSubjectCreator(props: { onCreated?: (subject: SubjectDto) =
 
     setBusy(true);
     try {
-      const created = await api.createSubject(input);
-      app.setOwnedSubjects((subjects) => [...subjects, created]);
+      const result = await createSubject({ input });
+      if (result.createSubject.errors.length || !result.createSubject.subject) {
+        throw new Error(result.createSubject.errors[0]?.message ?? "잔디밭을 만들지 못했습니다.");
+      }
+      const created: SubjectDto = {
+        ...result.createSubject.subject,
+        displayName: result.createSubject.subject.displayName ?? undefined,
+      };
+      owner.setSubjects((subjects) => [...subjects, created]);
       app.selectOwnerSubject(created);
       app.showToast(`@${created.handle} 잔디밭을 만들었습니다.`);
       props.onCreated?.(created);
@@ -157,6 +187,7 @@ function OwnerWorkspaceIntro() {
 export function OwnerGate(props: { children: (subject: string) => Element }) {
   const app = useAppState();
   const authEpoch = useAuthEpoch();
+  const [subjects, setSubjects] = createSignal<readonly SubjectDto[]>([]);
   const [status, setStatus] = createSignal<OwnerStatus>({ kind: "loading" });
   let controller: AbortController | undefined;
 
@@ -166,25 +197,25 @@ export function OwnerGate(props: { children: (subject: string) => Element }) {
     controller = requestController;
     setStatus({ kind: "loading" });
     try {
-      const session = await api.getCurrentSession(requestController.signal);
+      const viewer = await readCurrentViewer(authEpoch.environment(), requestController.signal);
       if (requestController.signal.aborted) return;
-      if (authEpoch.authenticated(session.user.id)) return;
-      const response = await api.listSubjects(requestController.signal);
+      if (authEpoch.authenticated(viewer.user.id)) return;
+      const subjects = await readOwnedSubjects(authEpoch.environment(), requestController.signal);
       if (requestController.signal.aborted) return;
-      app.setOwnedSubjects(response.subjects);
-      const selected = preferredOwnedSubject(response.subjects, app.currentSubject());
+      setSubjects(subjects);
+      const selected = preferredOwnedSubject(subjects, app.currentSubject());
       if (selected) {
         app.selectOwnerSubject(selected);
         setStatus({ kind: "ready" });
         return;
       }
       app.clearOwnerSubject();
-      setStatus({ kind: response.subjects.length === 0 ? "create" : "select" });
+      setStatus({ kind: subjects.length === 0 ? "create" : "select" });
     } catch (error) {
       if (requestController.signal.aborted || error instanceof DOMException && error.name === "AbortError") return;
-      if (error instanceof ApiError && error.status === 401) {
+      if (error instanceof SignedOutError) {
         if (authEpoch.signedOut()) return;
-        app.setOwnedSubjects([]);
+        setSubjects([]);
         app.clearOwnerSubject();
         setStatus({ kind: "signed-out" });
         return;
@@ -198,7 +229,7 @@ export function OwnerGate(props: { children: (subject: string) => Element }) {
     return () => controller?.abort();
   });
 
-  return (
+  return <OwnerSubjectsContext value={{ subjects, setSubjects }}>
     <Switch>
       <Match when={status().kind === "loading"}>
         <section class="page section-shell narrow">
@@ -243,5 +274,5 @@ export function OwnerGate(props: { children: (subject: string) => Element }) {
         </section>
       </Match>
     </Switch>
-  );
+  </OwnerSubjectsContext>;
 }

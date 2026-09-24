@@ -369,6 +369,33 @@ test('relocated evidence rejects absolute paths and altered artifact bytes', t =
   assert.notEqual(invoke('image-release.mjs', f.env, ['validate', moved]).status, 0);
 });
 
+for (const [label, kind, corrupt] of [
+  ['Syft image ID', 'syft', report => { report.source.metadata.imageID = 'sha256:' + 'f'.repeat(64); return JSON.stringify(report); }],
+  ['Grype manifest digest', 'grype', report => { report.source.target.manifestDigest = 'sha256:' + 'f'.repeat(64); return JSON.stringify(report); }],
+  ['High finding', 'grype', report => { report.matches = [{ vulnerability: { severity: 'High' } }]; return JSON.stringify(report); }],
+  ['SPDX format', 'spdx', report => { report.spdxVersion = 'invalid'; return JSON.stringify(report); }],
+  ['non-JSON Grype output', 'grype', () => 'not JSON'],
+]) {
+  test(`relocated evidence rejects rehashed ${label}`, t => {
+    const f = registryFixture(t);
+    assert.equal(f.run().status, 0);
+    const moved = join(f.dir, 'relocated');
+    cpSync(f.evidence, moved, { recursive: true });
+    const aggregatePath = join(moved, 'release.json');
+    const aggregate = JSON.parse(readFileSync(aggregatePath));
+    const image = aggregate.images[0];
+    const receiptPath = join(moved, image.scanReceipt);
+    const receipt = JSON.parse(readFileSync(receiptPath));
+    const artifactPath = join(moved, receipt.artifacts[kind].file);
+    writeFileSync(artifactPath, corrupt(JSON.parse(readFileSync(artifactPath))));
+    receipt.artifacts[kind].sha256 = fileSha(artifactPath);
+    writeFileSync(receiptPath, JSON.stringify(receipt));
+    image.scanReceiptSha256 = fileSha(receiptPath);
+    writeFileSync(aggregatePath, JSON.stringify(aggregate));
+    assert.notEqual(invoke('image-release.mjs', f.env, ['validate', moved]).status, 0);
+  });
+}
+
 // Full wrapper observed from the flake-locked Skopeo 1.24.1 against a
 // disposable local OCI fixture (canonical MANIFEST_UNKNOWN/NAME_UNKNOWN).
 const wrappedAbsence = 'time="2026-09-24T13:30:54+09:00" level=fatal msg=' + JSON.stringify(

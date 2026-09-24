@@ -17,14 +17,7 @@ function command(program, args, allowFailure = false) {
 }
 function save(path, value) { writeFileSync(path, JSON.stringify(value, null, 2) + '\n'); }
 
-function scan(name, target, imageId, manifestDigest, evidence) {
-  const identity = manifestDigest || imageId;
-  const prefix = join(evidence, `${name}-${identity.replace(':', '-')}`);
-  const paths = { spdx: prefix + '.spdx.json', syft: prefix + '.syft.json', grype: prefix + '.grype.json' };
-  command('syft', [target, '-o', `spdx-json=${paths.spdx}`, '-o', `syft-json=${paths.syft}`]);
-  const result = command('grype', [target, '--fail-on', 'high', '-o', 'json'], true);
-  writeFileSync(paths.grype, result.stdout || '');
-  assert.equal(result.status, 0, `high/critical scan failed for ${target}: ${result.stderr}`);
+function verifyScanArtifacts(paths, imageId, manifestDigest, target) {
   assert.match(json(paths.spdx).spdxVersion, /^SPDX-/);
   const syftSource = json(paths.syft).source?.metadata;
   const report = json(paths.grype);
@@ -34,6 +27,17 @@ function scan(name, target, imageId, manifestDigest, evidence) {
   }
   assert.ok(Array.isArray(report.matches), 'Grype must include match results');
   assert.ok(!report.matches.some(m => /^(high|critical)$/i.test(m.vulnerability?.severity)), 'high/critical finding');
+}
+
+function scan(name, target, imageId, manifestDigest, evidence) {
+  const identity = manifestDigest || imageId;
+  const prefix = join(evidence, `${name}-${identity.replace(':', '-')}`);
+  const paths = { spdx: prefix + '.spdx.json', syft: prefix + '.syft.json', grype: prefix + '.grype.json' };
+  command('syft', [target, '-o', `spdx-json=${paths.spdx}`, '-o', `syft-json=${paths.syft}`]);
+  const result = command('grype', [target, '--fail-on', 'high', '-o', 'json'], true);
+  writeFileSync(paths.grype, result.stdout || '');
+  assert.equal(result.status, 0, `high/critical scan failed for ${target}: ${result.stderr}`);
+  verifyScanArtifacts(paths, imageId, manifestDigest, target);
   const receipt = { name, target, imageId, manifestDigest: manifestDigest ?? null,
     artifacts: Object.fromEntries(Object.entries(paths).map(([key, path]) => [key, { file: basename(path), sha256: fileHash(path) }])) };
   save(prefix + '.release.json', receipt);
@@ -66,13 +70,16 @@ function validate(evidence) {
     assert.equal(receipt.imageId, image.imageId);
     assert.equal(receipt.manifestDigest, image.manifestDigest);
     assert.deepEqual(Object.keys(receipt.artifacts).sort(), ['grype', 'spdx', 'syft']);
+    const paths = {};
     for (const [kind, artifact] of Object.entries(receipt.artifacts)) {
       assert.deepEqual(Object.keys(artifact).sort(), ['file', 'sha256']);
       assert.equal(artifact.file, basename(artifact.file));
       assert.match(artifact.file, new RegExp(`^${image.name}-${image.manifestDigest.replace(':', '-') }\\.${kind}\\.json$`));
       assert.match(artifact.sha256, /^[0-9a-f]{64}$/);
-      assert.equal(fileHash(join(evidence, artifact.file)), artifact.sha256);
+      paths[kind] = join(evidence, artifact.file);
+      assert.equal(fileHash(paths[kind]), artifact.sha256);
     }
+    verifyScanArtifacts(paths, image.imageId, image.manifestDigest, receipt.target);
   }
 }
 

@@ -15,7 +15,8 @@ fi
 sql() {
 	url=$1
 	statement=$2
-	"$sql_bin" sql --url="$url" --set=errexit=true --execute="$statement"
+	shift 2
+	COCKROACH_URL="$url" "$sql_bin" sql "$@" --set=errexit=true --execute="$statement"
 }
 
 expect_denied() {
@@ -149,7 +150,7 @@ expect_denied "worker audit read" "$WORKER_DATABASE_URL" "SELECT count(*) FROM a
 expect_denied "maintenance mutation audit outbox insert" "$MAINTENANCE_DATABASE_URL" "INSERT INTO mutation_audit_outbox (audit_event_id, request_id, occurred_at, actor_type, action, target_type, outcome) VALUES (gen_random_uuid(), 'forbidden', now(), 'system', 'forbidden', 'database', 'succeeded')"
 expect_denied "maintenance mutation audit outbox update" "$MAINTENANCE_DATABASE_URL" "UPDATE mutation_audit_outbox SET updated_at = updated_at WHERE false"
 
-schema_grants=$("$sql_bin" sql --url="$MIGRATION_DATABASE_URL" --format=tsv --set=errexit=true --execute="SHOW GRANTS ON SCHEMA public")
+schema_grants=$(sql "$MIGRATION_DATABASE_URL" "SHOW GRANTS ON SCHEMA public" --format=tsv)
 if printf '%s\n' "$schema_grants" | awk -F '\t' 'NR > 1 && ($3 == "jandibat_api" || $3 == "jandibat_worker" || $3 == "jandibat_maintenance" || $3 == "public") && ($4 == "CREATE" || $4 == "ALL") { found = 1 } END { exit !found }'; then
 	echo "runtime or public role unexpectedly has schema CREATE privilege" >&2
 	exit 1

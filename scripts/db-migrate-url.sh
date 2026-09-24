@@ -42,7 +42,7 @@ if ! command -v "$sql_bin" >/dev/null 2>&1; then
 fi
 
 sql() {
-	"$sql_bin" sql --url="$database_url" --set=errexit=true "$@"
+	COCKROACH_URL="$database_url" "$sql_bin" sql --set=errexit=true "$@"
 }
 
 transaction_file=

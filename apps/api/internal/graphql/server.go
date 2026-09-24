@@ -391,6 +391,9 @@ func NewHTTPHandler(resolver *Resolver, options HTTPOptions) http.Handler {
 // This is intentionally a closed mapping: even a resolver-supplied gqlerror
 // with an approved code cannot forward an arbitrary message or extension.
 func presentGraphQLError(_ context.Context, err error) *gqlerror.Error {
+	if errors.Is(err, errNodeAuthentication) {
+		return &gqlerror.Error{Message: "Authentication required.", Extensions: map[string]any{"code": "UNAUTHENTICATED"}}
+	}
 	var candidate *gqlerror.Error
 	if errors.As(err, &candidate) {
 		if code, ok := candidate.Extensions["code"].(string); ok {

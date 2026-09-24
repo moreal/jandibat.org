@@ -3,6 +3,7 @@ package graphql
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -168,6 +169,36 @@ func TestGraphQLHTTPPresenterPreservesOnlyFixedSafeErrors(t *testing.T) {
 		if code, _ := got.Extensions["code"].(string); code != tc.code {
 			t.Fatalf("code %q, want %q", code, tc.code)
 		}
+	}
+}
+
+func TestGraphQLHTTPPresenterClassifiesOnlyAuthenticationSentinel(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		input    error
+		wantCode string
+	}{
+		{"authentication", fmt.Errorf("private-cookie-detail: %w", errNodeAuthentication), "UNAUTHENTICATED"},
+		{"unrelated error", errors.New("private-cookie-detail"), ""},
+		{"forged code", &gqlerror.Error{Message: "private-cookie-detail", Extensions: map[string]any{"code": "UNAUTHENTICATED", "private": "private-cookie-detail"}}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := presentGraphQLError(context.Background(), tc.input)
+			if code, _ := got.Extensions["code"].(string); code != tc.wantCode || strings.Contains(got.Message, "private-cookie-detail") || strings.Contains(fmt.Sprint(got.Extensions), "private-cookie-detail") {
+				t.Fatalf("presented error = %#v, want safe code %q", got, tc.wantCode)
+			}
+		})
+	}
+}
+
+func TestGraphQLHTTPFailedCookieCanBeClassifiedWithoutLeakingDetails(t *testing.T) {
+	handler := NewHTTPHandler(&Resolver{}, HTTPOptions{})
+	request := graphRequest(http.MethodPost, "application/json", `{"query":"query ViewerSession { viewer { currentSession { id } } }"}`)
+	request = request.WithContext(ContextWithFailedAuthentication(request.Context()))
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, request)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"code":"UNAUTHENTICATED"`) || strings.Contains(w.Body.String(), "authentication failed") {
+		t.Fatalf("failed-cookie response = status %d body %s", w.Code, w.Body.String())
 	}
 }
 

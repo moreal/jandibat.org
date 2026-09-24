@@ -1,9 +1,9 @@
 /**
- * Application-facing aliases for the OpenAPI schemas used by the web app.
+ * Application-facing view models shared by the web app and its tests.
  *
- * Keep these structural types aligned with `openapi/jandibat.yaml`. The web
- * client also performs compile-time compatibility checks against the generated
- * OpenAPI types so a contract change cannot silently drift from these exports.
+ * GraphQL SDL owns domain fields; these types are UI projections, not another
+ * wire contract. Only the remaining HTTP edge DTOs are checked against the
+ * generated OpenAPI types in the web edge client.
  */
 export type DateDto = string;
 export type DateTimeDto = string;
@@ -38,7 +38,7 @@ export interface ActivityEntryDto {
 export interface ActivityDayDto {
   date: DateDto;
   count: number;
-  /** The OpenAPI contract constrains this number to the inclusive range 0..4. */
+  /** Heatmap display intensity is in the inclusive range 0..4. */
   level: number;
   entries: ActivityEntryDto[];
 }
@@ -63,7 +63,7 @@ export interface ActivityTimelineResponseDto {
   days: ActivityDayDto[];
 }
 
-/** Backward-compatible name retained for consumers of the initial scaffold. */
+/** UI alias retained while heatmap consumers adopt the GraphQL projection. */
 export type ActivityHeatmapResponseDto = ActivityTimelineResponseDto;
 
 export interface ProviderCatalogItemDto {

@@ -520,6 +520,119 @@ func TestPasskeyLoginAuditsVerifierCloneWarningWithoutIssuingSession(t *testing.
 	}
 }
 
+type passkeyFailureRepository struct {
+	Repository
+	consumeErr    error
+	credentialErr error
+}
+
+func (repository passkeyFailureRepository) ConsumeCeremony(ctx context.Context, id string, kind CeremonyKind, now time.Time) (PasskeyCeremony, error) {
+	if repository.consumeErr != nil {
+		return PasskeyCeremony{}, repository.consumeErr
+	}
+	return repository.Repository.ConsumeCeremony(ctx, id, kind, now)
+}
+
+func (repository passkeyFailureRepository) GetCredentialByCredentialID(ctx context.Context, id []byte) (PasskeyCredential, error) {
+	if repository.credentialErr != nil {
+		return PasskeyCredential{}, repository.credentialErr
+	}
+	return repository.Repository.GetCredentialByCredentialID(ctx, id)
+}
+
+func TestPasskeyLoginDistinguishesExpectedDenialsFromRepositoryOutages(t *testing.T) {
+	privateError := errors.New("private database outage")
+	tests := []struct {
+		name           string
+		consumeErr     error
+		credentialErr  error
+		wantDenial     error
+		wantUnderlying error
+	}{
+		{"missing ceremony", ErrNotFound, nil, ErrInvalidCeremony, nil},
+		{"consumed ceremony", ErrConsumed, nil, ErrInvalidCeremony, nil},
+		{"expired ceremony", ErrExpired, nil, ErrInvalidCeremony, nil},
+		{"ceremony conflict", ErrConflict, nil, nil, ErrConflict},
+		{"ceremony outage", privateError, nil, nil, privateError},
+		{"missing credential", nil, ErrNotFound, ErrPasskeyVerification, nil},
+		{"credential outage", nil, privateError, nil, privateError},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newFixture(t, true)
+			fixture.service.repository = passkeyFailureRepository{Repository: fixture.store, consumeErr: test.consumeErr, credentialErr: test.credentialErr}
+			options, err := fixture.service.BeginPasskeyLogin(context.Background(), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = fixture.service.CompletePasskeyLogin(context.Background(), options.CeremonyID, []byte("credential-one"), json.RawMessage(`{}`), SessionMetadata{})
+			if (test.wantDenial != nil && !errors.Is(err, test.wantDenial)) || (test.wantUnderlying != nil && !errors.Is(err, test.wantUnderlying)) {
+				t.Fatalf("error = %v, want denial %v / cause %v", err, test.wantDenial, test.wantUnderlying)
+			}
+			if test.wantDenial == nil && (errors.Is(err, ErrInvalidCeremony) || errors.Is(err, ErrPasskeyVerification)) {
+				t.Fatalf("operational error became security denial: %v", err)
+			}
+		})
+	}
+}
+
+func TestPasskeyLoginDistinguishesVerifierOutageFromInvalidAssertion(t *testing.T) {
+	privateError := errors.New("private verifier outage")
+	for _, test := range []struct {
+		name       string
+		verifyErr  error
+		wantDenial bool
+	}{
+		{"invalid assertion", ErrPasskeyVerification, true},
+		{"verifier outage", privateError, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newFixture(t, true)
+			fixture.saveUser(t, "user-1", "person@example.com")
+			if err := fixture.store.SaveCredential(context.Background(), PasskeyCredential{ID: "pk-1", UserID: "user-1", CredentialID: []byte("credential-one"), PublicKey: []byte("public-key"), VerifierCredential: json.RawMessage(`{"id":"credential-one"}`)}); err != nil {
+				t.Fatal(err)
+			}
+			fixture.verifier.authenticationErr = test.verifyErr
+			options, err := fixture.service.BeginPasskeyLogin(context.Background(), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = fixture.service.CompletePasskeyLogin(context.Background(), options.CeremonyID, []byte("credential-one"), json.RawMessage(`{}`), SessionMetadata{})
+			if errors.Is(err, ErrPasskeyVerification) != test.wantDenial {
+				t.Fatalf("verification denial=%t, want %t; err=%v", errors.Is(err, ErrPasskeyVerification), test.wantDenial, err)
+			}
+			if !test.wantDenial && !errors.Is(err, privateError) {
+				t.Fatalf("outage cause lost: %v", err)
+			}
+		})
+	}
+}
+
+type failingPasskeySecurityRecorder struct{ err error }
+
+func (recorder failingPasskeySecurityRecorder) RecordSecurityEvent(context.Context, SecurityEvent) error {
+	return recorder.err
+}
+
+func TestPasskeyCloneSecurityEventOutageDoesNotMasqueradeAsDenial(t *testing.T) {
+	fixture := newFixture(t, true)
+	fixture.saveUser(t, "user-1", "person@example.com")
+	if err := fixture.store.SaveCredential(context.Background(), PasskeyCredential{ID: "pk-1", UserID: "user-1", CredentialID: []byte("credential-one"), PublicKey: []byte("public-key"), SignCount: 8, VerifierCredential: json.RawMessage(`{"id":"credential-one"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	fixture.verifier.authenticationResult = AuthenticationVerification{SignCount: 8, VerifierCredential: json.RawMessage(`{"id":"credential-one","signCount":8}`)}
+	privateError := errors.New("private security-event outage")
+	fixture.service.securityEvents = failingPasskeySecurityRecorder{err: privateError}
+	options, err := fixture.service.BeginPasskeyLogin(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = fixture.service.CompletePasskeyLogin(context.Background(), options.CeremonyID, []byte("credential-one"), json.RawMessage(`{}`), SessionMetadata{})
+	if !errors.Is(err, privateError) || errors.Is(err, ErrInvalidSignCount) || errors.Is(err, ErrMagicLinkReauthenticationRequired) {
+		t.Fatalf("security-event outage classified as denial: %v", err)
+	}
+}
+
 func TestUserBoundPasskeyLoginRejectsAnotherUsersCredential(t *testing.T) {
 	t.Parallel()
 	fixture := newFixture(t, true)

@@ -59,10 +59,10 @@ func subjectMutationError(err error, field string) ([]*model.MutationError, erro
 	}
 }
 
-func decodeSubjectMutationID(globalID string) (string, []*model.MutationError) {
+func decodeSubjectMutationID(globalID, field string) (string, []*model.MutationError) {
 	rawID, err := relayid.DecodeAs(relayid.Subject, globalID)
 	if err != nil {
-		return "", authMutationError("BAD_USER_INPUT", "Invalid subject ID.", "id")
+		return "", authMutationError("BAD_USER_INPUT", "Invalid subject ID.", field)
 	}
 	return rawID, nil
 }
@@ -136,6 +136,7 @@ func resolveUpdateUserSettings(ctx context.Context, input model.UpdateUserSettin
 	if err != nil {
 		return nil, errNodeLookup
 	}
+	PublishMutationAuditTarget(ctx, "account", actor)
 	return &model.UpdateUserSettingsPayload{Errors: []*model.MutationError{}, Settings: projected}, nil
 }
 
@@ -161,6 +162,7 @@ func resolveCreateSubject(ctx context.Context, input model.CreateSubjectInput) (
 	if err != nil {
 		return nil, errNodeLookup
 	}
+	PublishMutationAuditTarget(ctx, "subject", subject.ID)
 	return &model.CreateSubjectPayload{Errors: []*model.MutationError{}, Subject: projected}, nil
 }
 
@@ -169,7 +171,7 @@ func resolveUpdateSubject(ctx context.Context, input model.UpdateSubjectInput) (
 	if err != nil {
 		return nil, err
 	}
-	rawID, idErrors := decodeSubjectMutationID(input.ID)
+	rawID, idErrors := decodeSubjectMutationID(input.ID, "id")
 	if idErrors != nil {
 		return &model.UpdateSubjectPayload{Errors: idErrors}, nil
 	}
@@ -196,6 +198,7 @@ func resolveUpdateSubject(ctx context.Context, input model.UpdateSubjectInput) (
 	if err != nil {
 		return nil, errNodeLookup
 	}
+	PublishMutationAuditTarget(ctx, "subject", subject.ID)
 	return &model.UpdateSubjectPayload{Errors: []*model.MutationError{}, Subject: projected}, nil
 }
 
@@ -204,7 +207,7 @@ func resolveUpdateSubjectSettings(ctx context.Context, input model.UpdateSubject
 	if err != nil {
 		return nil, err
 	}
-	rawID, idErrors := decodeSubjectMutationID(input.SubjectID)
+	rawID, idErrors := decodeSubjectMutationID(input.SubjectID, "id")
 	if idErrors != nil {
 		return &model.UpdateSubjectSettingsPayload{Errors: idErrors}, nil
 	}
@@ -263,6 +266,7 @@ func resolveUpdateSubjectSettings(ctx context.Context, input model.UpdateSubject
 	if err != nil {
 		return nil, errNodeLookup
 	}
+	PublishMutationAuditTarget(ctx, "subject", subject.ID)
 	return &model.UpdateSubjectSettingsPayload{Errors: []*model.MutationError{}, Settings: projectedSettings, Subject: projectedSubject}, nil
 }
 
@@ -271,7 +275,7 @@ func resolveRequestSubjectDeletion(ctx context.Context, input model.RequestSubje
 	if err != nil {
 		return nil, err
 	}
-	rawID, idErrors := decodeSubjectMutationID(input.SubjectID)
+	rawID, idErrors := decodeSubjectMutationID(input.SubjectID, "subjectID")
 	if idErrors != nil {
 		return &model.RequestSubjectDeletionPayload{Errors: idErrors}, nil
 	}
@@ -295,6 +299,12 @@ func resolveRequestSubjectDeletion(ctx context.Context, input model.RequestSubje
 	}
 	request, err := services.Deletions.Request(ctx, requestID, operations.DeletionTargetSubject, subject.ID)
 	if err != nil {
+		if errors.Is(err, operations.ErrLegalHoldActive) {
+			return &model.RequestSubjectDeletionPayload{Errors: authMutationError("LEGAL_HOLD_ACTIVE", "An active legal hold prevents deletion.", "subjectID")}, nil
+		}
+		if errors.Is(err, operations.ErrInvalidDeletionRequest) {
+			return &model.RequestSubjectDeletionPayload{Errors: authMutationError("DELETION_REQUEST_CONFLICT", "Deletion request conflicts with an existing request.", "subjectID")}, nil
+		}
 		validation, publicErr := subjectMutationError(err, "subjectID")
 		if publicErr != nil {
 			return nil, publicErr
@@ -302,8 +312,9 @@ func resolveRequestSubjectDeletion(ctx context.Context, input model.RequestSubje
 		return &model.RequestSubjectDeletionPayload{Errors: validation}, nil
 	}
 	if request.RequestID == "" || request.TargetType != operations.DeletionTargetSubject || request.TargetID != subject.ID || request.Status != operations.DeletionRequested {
-		return nil, errNodeLookup
+		return &model.RequestSubjectDeletionPayload{Errors: authMutationError("DELETION_REQUEST_CONFLICT", "Deletion request conflicts with an existing request.", "subjectID")}, nil
 	}
+	PublishMutationAuditTarget(ctx, "subject", subject.ID)
 	return &model.RequestSubjectDeletionPayload{Errors: []*model.MutationError{}, Request: &model.DeletionRequestResult{
 		RequestID: request.RequestID, Status: string(request.Status),
 	}}, nil

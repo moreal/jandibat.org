@@ -42,24 +42,33 @@ the same exact API origin, so arbitrary HTTPS image hosts are not allowed.
 `VITE_API_BASE_URL` remains available for non-container build-time deployments,
 while `JANDIBAT_API_BASE_URL` takes precedence at runtime.
 
-## OpenAPI workflow
+## API contracts
 
-Regenerate API typings whenever `openapi/jandibat.yaml` changes:
+GraphQL SDL under `../../graphql/schema/` defines the domain API. Route
+operations and fragments generate types and artifacts under
+`src/pages/__generated__/`; the Solid 2 UI reads domain server state through
+the project Relay adapter in `src/relay/` and its normalized store. The
+`solid-relay` workspace fork is pinned to an exact upstream revision; see
+`../../packages/solid-relay/UPSTREAM.md`. Local view models from
+`@jandibat/contracts` (for example, heatmap display data and owner-subject
+presentation) are projections of GraphQL results, not a second wire contract.
+
+OpenAPI at `../../openapi/jandibat.yaml` describes only HTTP edge endpoints:
+health, SVG rendering, magic-link consumption, provider OAuth callback, and
+custom activity ingestion. `src/api/client.ts` uses its generated types only
+for the two browser-initiated HTTP edge calls. Embed SVG URLs are built
+separately; domain queries and mutations must not be added to that REST client.
+
+After changing either contract, run generation and drift checks inside the
+Nix development shell:
 
 ```bash
-openapi-typescript ../../openapi/jandibat.yaml -o src/generated/api.ts
+nix develop -c make graphql-generate openapi-types
+nix develop -c make graphql-check openapi-check typecheck-web
 ```
 
-You can run the workspace script from the repo root:
-
-```bash
-yarn workspace @jandibat/web openapi:types
-```
-
-`src/api/client.ts` is the only module that knows endpoint paths. UI code uses
-the DTOs exported by `@jandibat/contracts`, and the client contains compile-time
-assertions that keep those DTOs structurally identical to generated OpenAPI
-schemas.
+For a static, non-Relay GraphQL consumer, see
+[`../../docs/GRAPHQL_STATIC_CONSUMER_GUIDE.ko.md`](../../docs/GRAPHQL_STATIC_CONSUMER_GUIDE.ko.md).
 
 ## Verification
 

@@ -16,6 +16,7 @@ import (
 	"github.com/moreal/jandibat.org/apps/api/internal/graphql/generated"
 	"github.com/moreal/jandibat.org/apps/api/internal/graphql/model"
 	"github.com/moreal/jandibat.org/apps/api/internal/graphql/relayid"
+	"github.com/moreal/jandibat.org/apps/api/internal/operations"
 )
 
 const passkeySessionID = "2ac25589-cdea-4e5f-b70f-99e92609df30"
@@ -290,6 +291,74 @@ func TestPasskeyCloneSuspicionReturnsSafeReauthenticationPayload(t *testing.T) {
 	payload, err := (&mutationResolver{}).resolveFinishPasskeySignIn(ctx, model.FinishPasskeySignInInput{CeremonyID: "ceremony-1", CredentialJSON: validPasskeyJSON})
 	if err != nil || payload == nil || payload.Session != nil || len(payload.Errors) != 1 || payload.Errors[0].Code != "REAUTHENTICATION_REQUIRED" {
 		t.Fatalf("clone warning = (%+v, %v)", payload, err)
+	}
+}
+
+func TestPasskeySignInCommitsOnlyDeliberatePostConsumptionFailures(t *testing.T) {
+	tests := []struct {
+		name       string
+		failure    error
+		wantCommit bool
+	}{
+		{"invalid ceremony", auth.ErrInvalidCeremony, true},
+		{"verification failure", auth.ErrPasskeyVerification, true},
+		{"suspected clone", errors.Join(auth.ErrInvalidSignCount, auth.ErrMagicLinkReauthenticationRequired), true},
+		{"disabled user", auth.ErrUserDisabled, true},
+		{"invalid input", auth.ErrInvalidInput, false},
+		{"persistence failure", errors.New("private database failure"), false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			port := passkeySignInPort()
+			port.loginErr = test.failure
+			ctx, marker := operations.WithMutationFailureCommitMarker(context.Background())
+			ctx = trustedPasskeyContext(ctx, port, &passkeyCookieSink{}, &passkeyFailureReporter{})
+			payload, err := (&mutationResolver{}).resolveFinishPasskeySignIn(ctx, model.FinishPasskeySignInInput{CeremonyID: "ceremony-1", CredentialJSON: validPasskeyJSON})
+			if port.finishedSignIn != 1 || marker.Marked() != test.wantCommit || (payload != nil && payload.Session != nil) {
+				t.Fatalf("failure outcome: service calls=%d commit=%t payload=%+v err=%v", port.finishedSignIn, marker.Marked(), payload, err)
+			}
+		})
+	}
+}
+
+func TestPasskeySignInPublishesNewAuditActorOnlyAfterTrustedCookieSucceeds(t *testing.T) {
+	port := passkeySignInPort()
+	sink := &passkeyCookieSink{}
+	ctx := trustedPasskeyContext(context.Background(), port, sink, &passkeyFailureReporter{})
+	var published []string
+	var publishedBeforeCookie bool
+	ctx = ContextWithPostAuthAuditActorPublisher(ctx, func(userID string) {
+		published = append(published, userID)
+		publishedBeforeCookie = sink.token == ""
+	})
+	var targets []operations.AuditTarget
+	ctx = ContextWithMutationAuditTargetPublisher(ctx, func(target operations.AuditTarget) {
+		targets = append(targets, target)
+	})
+	input := model.FinishPasskeySignInInput{CeremonyID: "ceremony-1", CredentialJSON: validPasskeyJSON}
+	if payload, err := (&mutationResolver{}).resolveFinishPasskeySignIn(ctx, input); err != nil || payload == nil || payload.Session == nil {
+		t.Fatalf("successful sign-in: payload=%+v err=%v", payload, err)
+	}
+	if len(published) != 1 || published[0] != "owner" || publishedBeforeCookie {
+		t.Fatalf("post-auth audit actor = %v, before cookie=%t", published, publishedBeforeCookie)
+	}
+	if len(targets) != 1 || targets[0] != (operations.AuditTarget{Type: "session", ID: passkeySessionID}) {
+		t.Fatalf("post-auth audit target = %+v", targets)
+	}
+	port.loginErr = auth.ErrPasskeyVerification
+	if _, err := (&mutationResolver{}).resolveFinishPasskeySignIn(ctx, input); err != nil {
+		t.Fatalf("typed verification error = %v", err)
+	}
+	if len(published) != 1 || len(targets) != 1 {
+		t.Fatalf("failed sign-in published audit identity: actors=%v targets=%+v", published, targets)
+	}
+	port.loginErr = nil
+	sink.setErr = errors.New("private cookie failure")
+	if _, err := (&mutationResolver{}).resolveFinishPasskeySignIn(ctx, input); !errors.Is(err, errNodeLookup) {
+		t.Fatalf("cookie failure error = %v", err)
+	}
+	if len(published) != 1 || len(targets) != 1 {
+		t.Fatalf("cookie failure published audit identity: actors=%v targets=%+v", published, targets)
 	}
 }
 

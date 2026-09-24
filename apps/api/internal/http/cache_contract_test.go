@@ -15,19 +15,10 @@ func TestSensitiveAndErrorResponsesArePrivateByDefault(t *testing.T) {
 		method string
 		path   string
 	}{
-		{name: "session", method: http.MethodGet, path: "/v1/auth/session"},
-		{name: "session list", method: http.MethodGet, path: "/v1/auth/sessions"},
-		{name: "me", method: http.MethodGet, path: "/v1/me"},
-		{name: "settings", method: http.MethodGet, path: "/v1/me/settings"},
-		{name: "connections", method: http.MethodGet, path: "/v1/subjects/alice/provider-connections"},
-		{name: "connection sync", method: http.MethodPost, path: "/v1/subjects/alice/provider-connections/connection-1/sync"},
-		{name: "sync job", method: http.MethodGet, path: "/v1/sync-jobs/job-1"},
-		{name: "custom provider secret creation", method: http.MethodPost, path: "/v1/subjects/alice/custom-providers"},
-		{name: "custom provider secret rotation", method: http.MethodPost, path: "/v1/subjects/alice/custom-providers/provider-1/rotate-key"},
 		{name: "custom ingest", method: http.MethodPost, path: "/v1/custom-providers/provider-1/activities:ingest"},
-		{name: "oauth state creation", method: http.MethodPost, path: "/v1/subjects/alice/provider-connections"},
 		{name: "oauth callback error", method: http.MethodGet, path: "/v1/integrations/github/callback?state=secret&code=secret"},
-		{name: "validation error", method: http.MethodGet, path: "/v1/activities/alice?from=not-a-date"},
+		{name: "magic link consume error", method: http.MethodPost, path: "/v1/auth/magic-link/consume"},
+		{name: "svg validation error", method: http.MethodGet, path: "/v1/render/alice.svg?from=not-a-date"},
 	}
 
 	router := apihttp.NewRouter()

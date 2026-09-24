@@ -20,7 +20,7 @@ type Equal<Left, Right> =
 
 /** Only the remaining HTTP edge DTOs are checked against generated OpenAPI. */
 export type OpenApiContractAssertions = [
-  Assert<Equal<Schema<"AuthResult">, AuthResultDto>>,
+  Assert<Equal<Schema<"MagicLinkConsumeResponse">, AuthResultDto>>,
   Assert<Equal<Schema<"CustomActivityIngestRequest">, CustomActivityIngestDto>>,
   Assert<Equal<Schema<"CustomActivityIngestResponse">, CustomActivityIngestResponseDto>>,
   Assert<Equal<Schema<"Problem">, ProblemDto>>,

@@ -136,6 +136,7 @@ func resolveCreateCustomProvider(ctx context.Context, input model.CreateCustomPr
 	if provider.SubjectID != subjectID || !validCustomProviderMutationResult(provider) {
 		return nil, errNodeLookup
 	}
+	PublishMutationAuditTarget(ctx, "custom_provider", provider.ID)
 	return &model.CreateCustomProviderPayload{Errors: []*model.MutationError{}, Provider: projectCustomProvider(provider), IngestionKey: &key}, nil
 }
 
@@ -200,6 +201,7 @@ func resolveUpdateCustomProvider(ctx context.Context, input model.UpdateCustomPr
 	if provider.ID != raw || provider.SubjectID != previous.SubjectID || !validCustomProviderMutationResult(provider) {
 		return nil, errNodeLookup
 	}
+	PublishMutationAuditTarget(ctx, "custom_provider", provider.ID)
 	return &model.UpdateCustomProviderPayload{Errors: []*model.MutationError{}, Provider: projectCustomProvider(provider)}, nil
 }
 
@@ -212,7 +214,7 @@ func resolveRotateCustomProviderKey(ctx context.Context, input model.RotateCusto
 	if invalid != nil {
 		return &model.RotateCustomProviderKeyPayload{Errors: invalid}, nil
 	}
-	_, denied, err := ownedCustomProviderForMutation(ctx, actor, raw, services, nodes)
+	provider, denied, err := ownedCustomProviderForMutation(ctx, actor, raw, services, nodes)
 	if err != nil {
 		return nil, err
 	}
@@ -233,6 +235,7 @@ func resolveRotateCustomProviderKey(ctx context.Context, input model.RotateCusto
 	// A post-rotation read could fail after persistence and strand the caller
 	// without the only copy of the new key. createdAt is intentionally nullable
 	// until the domain service returns the commit timestamp atomically.
+	PublishMutationAuditTarget(ctx, "custom_provider", provider.ID)
 	return &model.RotateCustomProviderKeyPayload{Errors: []*model.MutationError{}, IngestionKey: &key}, nil
 }
 
@@ -245,7 +248,7 @@ func resolveDeleteCustomProvider(ctx context.Context, input model.DeleteCustomPr
 	if invalid != nil {
 		return &model.DeleteCustomProviderPayload{Errors: invalid}, nil
 	}
-	_, denied, err := ownedCustomProviderForMutation(ctx, actor, raw, services, nodes)
+	provider, denied, err := ownedCustomProviderForMutation(ctx, actor, raw, services, nodes)
 	if err != nil {
 		return nil, err
 	}
@@ -259,5 +262,6 @@ func resolveDeleteCustomProvider(ctx context.Context, input model.DeleteCustomPr
 		}
 		return &model.DeleteCustomProviderPayload{Errors: validation}, nil
 	}
+	PublishMutationAuditTarget(ctx, "custom_provider", provider.ID)
 	return &model.DeleteCustomProviderPayload{Errors: []*model.MutationError{}, DeletedProviderID: &input.ID}, nil
 }

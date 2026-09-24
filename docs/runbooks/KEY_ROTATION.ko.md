@@ -176,23 +176,38 @@ Row rollback은 구 key로 다시 대량 암호화하지 않고, 양쪽 key를 �
 
 이 key는 사용자 요청 기반이며 overlap을 제공하지 않습니다.
 
+`CUSTOM_PROVIDER_RELAY_ID`는 소유자에게 보이는 GraphQL `CustomProvider.id`입니다. HTTP ingest 경로에 사용하는 raw `ingestProviderID`와 혼동하지 않습니다. `ROTATION_COOKIE_JAR`는 저장소 밖 비밀 관리 도구가 만든 `0600` 권한의 격리 세션 cookie 파일이며, `ROTATION_ALLOWED_ORIGIN`은 서버 allowlist의 정확한 Web origin입니다. `ROTATION_SECRET_DIR`는 저장소 밖의 접근 제한된 임시/secret-manager staging 디렉터리여야 합니다. 세션 값 자체를 명령 인자·채팅·로그에 넣지 않습니다.
+
 ```sh
 umask 077
-curl --fail-with-body \
-  --request POST \
-  --url "$API_BASE_URL/v1/subjects/$SUBJECT/custom-providers/$CUSTOM_PROVIDER_ID/rotate-key" \
-  --header "Authorization: Bearer $SESSION_TOKEN" \
-  --output custom-provider-key-rotation.json
+: "${ROTATION_SECRET_DIR:?Set an external secret-manager staging directory}"
+repo_root=$(CDPATH= cd -- "$(git rev-parse --show-toplevel)" && pwd -P)
+rotation_dir=$(CDPATH= cd -- "$ROTATION_SECRET_DIR" && pwd -P)
+case "$rotation_dir/" in
+  "$repo_root/"*) echo 'Rotation response directory must be outside the repository' >&2; exit 1 ;;
+esac
+rotation_response=$(mktemp "$rotation_dir/custom-provider-key-rotation.XXXXXX")
+chmod 600 "$rotation_response"
+jq -n --arg id "$CUSTOM_PROVIDER_RELAY_ID" \
+  '{query:"mutation RotateCustomProviderKey($input:RotateCustomProviderKeyInput!){rotateCustomProviderKey(input:$input){errors{code field message} ingestionKey createdAt}}",operationName:"RotateCustomProviderKey",variables:{input:{id:$id}}}' \
+  | curl --fail --silent --show-error --request POST \
+      --url "$API_BASE_URL/graphql" \
+      --header 'Content-Type: application/json' \
+      --header "Origin: $ROTATION_ALLOWED_ORIGIN" \
+      --cookie "$ROTATION_COOKIE_JAR" \
+      --data-binary @- --output "$rotation_response"
+jq -e '(.errors == null) and (.data.rotateCustomProviderKey.errors == []) and (.data.rotateCustomProviderKey.ingestionKey | type == "string" and length > 0)' \
+  "$rotation_response" >/dev/null
 ```
 
-출력 파일은 owner에게 새 key를 전달하는 임시 보안 경계입니다. 접근 mode와 보관 위치를 확인하고 secret manager 반입 뒤 조직의 secure deletion 정책에 따라 처리합니다.
+`$rotation_response` 파일은 owner에게 새 key를 전달하는 임시 보안 경계입니다. 명령을 저장소 밖에서 실행하더라도 경로 검사와 `0600` mode를 유지합니다. Secret manager 반입 뒤 조직의 secure deletion 정책에 따라 처리하며 Git diff, CI artifact, terminal stdout에 포함하지 않습니다.
 
 1. 소유자 재인증과 subject ownership을 확인.
-2. rotate endpoint를 한 번 호출하고 응답 key를 안전한 password/secret manager로 즉시 전달. 현재 client-address 기준 제한은 시간당 5회입니다.
+2. GraphQL `rotateCustomProviderKey` mutation을 한 번 호출하고 응답 key를 안전한 password/secret manager로 즉시 전달. HTTP 200이어도 `errors` 또는 typed `errors`가 있으면 실패입니다. 현재 client-address 기준 제한은 시간당 5회입니다.
 3. 응답 body를 log, trace, CI artifact에 저장하지 않음.
 4. 구 key ingest가 `401`, 새 key ingest가 성공하는지 synthetic event ID로 확인.
 5. 응답의 `X-Request-ID`와 실행 시각을 기록하되 key 원문은 기록하지 않음.
-6. Production `audit_events`에서 action `post.v1.subjects.subject.custom-providers.customProviderId.rotate-key`, actor type `user`, target type `custom_provider`, target ID, outcome, request ID를 확인.
+6. Production `audit_events`에서 같은 request ID의 `http.mutation.intent`(generic `graphql` target)와 성공 outcome `post.graphql`을 조정합니다. 성공 outcome은 actor type `user`, target type `custom_provider`, target ID는 opaque Relay ID가 아닌 canonical raw provider UUID여야 합니다. 안전한 operation name `RotateCustomProviderKey`의 관측 이벤트와 연결하며 key 원문은 기록하지 않습니다.
 
 HTTP mutation은 handler 전에 Cockroach sink에 write-ahead audit intent를 append하며 실패하면 503으로 fail closed합니다. 성공 outcome은 state와 같은 transaction의 mutation audit outbox에 enqueue되고 commit된 뒤에만 buffered HTTP response가 공개됩니다. Outcome delivery는 worker가 append-only sink로 수행하며 verifier가 intent/outcome과 delivered outbox를 조정합니다. 둘 다 없거나 stale/dead outbox가 있으면 운영 성공으로 닫지 말고 incident로 조정합니다. 구 key가 계속 성공하면 보안 실패입니다. 새 key 전달에 실패했더라도 구 key를 되살리지 않고 다시 rotate합니다.
 

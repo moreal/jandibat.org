@@ -2,6 +2,7 @@ package apihttp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -546,6 +547,53 @@ func TestGraphQLMutationAuditUsesVerifiedSessionActor(t *testing.T) {
 	events, err := sink.Events(context.Background())
 	if err != nil || len(events) != 2 || events[1].Actor.ID != "user-1" || events[1].Actor.Type != operations.AuditActorUser {
 		t.Fatalf("events=%#v err=%v", events, err)
+	}
+}
+
+type graphQLPostAuthPasskeyPort struct{ graph.PasskeyMutationService }
+
+func (graphQLPostAuthPasskeyPort) CompletePasskeyLogin(context.Context, string, []byte, json.RawMessage, auth.SessionMetadata) (auth.SessionGrant, error) {
+	return auth.SessionGrant{Token: "test-session-token", SessionID: "00000000-0000-4000-8000-000000000091", UserID: "verified-passkey-owner", ExpiresAt: time.Now().Add(time.Hour)}, nil
+}
+
+func (graphQLPostAuthPasskeyPort) GetSessionByID(_ context.Context, userID, sessionID string) (auth.Session, error) {
+	if userID != "verified-passkey-owner" || sessionID != "00000000-0000-4000-8000-000000000091" {
+		return auth.Session{}, auth.ErrInvalidSession
+	}
+	return auth.Session{ID: sessionID, UserID: userID, CreatedAt: time.Now().Add(-time.Minute), ExpiresAt: time.Now().Add(time.Hour)}, nil
+}
+
+// The outer audit middleware starts before a discoverable passkey login has
+// an actor. A successful trusted cookie issuance must publish the verified
+// session owner to that same request's correlated audit outcome.
+func TestGraphQLPasskeySignInAuditUsesPostAuthVerifiedActor(t *testing.T) {
+	sink := operations.NewMemoryAuditSink()
+	recorder, err := operations.NewAuditRecorder(sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	router.Use(middleware.RequestID)
+	router.Use(func(next http.Handler) http.Handler { return graph.PreflightHTTP(next, graph.HTTPOptions{}) })
+	router.Use(auditRequests(recorder, []byte(auditTestSourceKey)))
+	graphDeps := GraphQLDependencies{Passkeys: graphQLPostAuthPasskeyPort{}, AuthFailureReporter: graphQLAuthFailureStub{}}
+	router.Method(http.MethodPost, "/graphql", graphQLTrustedContext(Dependencies{}, graphDeps, graph.NewHTTPHandler(&graph.Resolver{}, graph.HTTPOptions{})))
+	input := map[string]any{"ceremonyID": "ceremony-1", "credentialJSON": `{"id":"AQ","rawId":"AQ","type":"public-key","response":{},"clientExtensionResults":{}}`}
+	body, err := json.Marshal(map[string]any{"query": `mutation SignIn($input: FinishPasskeySignInInput!) { finishPasskeySignIn(input: $input) { errors { code } session { id } } }`, "operationName": "SignIn", "variables": map[string]any{"input": input}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(string(body)))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	successPayload := strings.Contains(response.Body.String(), `"errors":[]`) && strings.Contains(response.Body.String(), `"session"`)
+	if response.Code != http.StatusOK || !successPayload || response.Header().Get("Set-Cookie") == "" {
+		t.Fatalf("passkey sign-in status=%d cookieSet=%t successPayload=%t", response.Code, response.Header().Get("Set-Cookie") != "", successPayload)
+	}
+	events, err := sink.Events(context.Background())
+	if err != nil || len(events) != 2 || events[1].Actor != (operations.AuditActor{Type: operations.AuditActorUser, ID: "verified-passkey-owner"}) {
+		t.Fatalf("passkey sign-in audit events=%#v err=%v", events, err)
 	}
 }
 

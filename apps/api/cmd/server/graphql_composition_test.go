@@ -35,11 +35,33 @@ func TestGraphQLProcessCompositionMountsOnlyCompleteRuntime(t *testing.T) {
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"_contract":true`) {
 		t.Fatalf("GraphQL status=%d body=%s", response.Code, response.Body.String())
 	}
-	for _, path := range []string{"/healthz", "/v1/providers"} {
+	for _, path := range []string{"/livez", "/readyz", "/healthz"} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
 		if response.Code != http.StatusOK {
 			t.Fatalf("GET %s with GraphQL mounted = %d body=%s", path, response.Code, response.Body.String())
+		}
+	}
+	for _, edge := range []struct {
+		method, path string
+		want         int
+	}{
+		{http.MethodPost, "/v1/auth/magic-link/consume", http.StatusBadRequest},
+		{http.MethodGet, "/v1/integrations/github/callback", http.StatusBadRequest},
+		{http.MethodPost, "/v1/custom-providers/00000000-0000-0000-0000-000000000000/activities:ingest", http.StatusUnauthorized},
+		{http.MethodPost, "/v1/render/example.svg", http.StatusMethodNotAllowed},
+	} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(edge.method, edge.path, nil))
+		if response.Code != edge.want {
+			t.Errorf("%s %s with GraphQL mounted = %d body=%s, want %d", edge.method, edge.path, response.Code, response.Body.String(), edge.want)
+		}
+	}
+	for _, path := range []string{"/v1/providers", "/v1/subjects", "/v1/auth/session"} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		if response.Code != http.StatusNotFound {
+			t.Errorf("removed domain REST GET %s = %d body=%s, want 404", path, response.Code, response.Body.String())
 		}
 	}
 }
@@ -79,14 +101,17 @@ func TestGraphQLDevelopmentDeletionPortFailsClosed(t *testing.T) {
 	}
 }
 
-func TestDevelopmentHTTPDeletionPortIsTrulyAbsentWithoutDurableStore(t *testing.T) {
+func TestDevelopmentGraphQLDeletionPortFailsClosedWithoutDurableStore(t *testing.T) {
 	app, err := buildApplication(context.Background(), developmentConfig(t), zap.NewNop())
 	if err != nil {
 		t.Fatalf("build application: %v", err)
 	}
 	t.Cleanup(func() { _ = app.Close() })
-	if app.dependencies.SubjectDeletions != nil {
-		t.Fatal("development HTTP deletion port is a typed-nil interface")
+	if app.graphql.SubjectMutations.Deletions == nil {
+		t.Fatal("development GraphQL deletion port is absent")
+	}
+	if _, err := app.graphql.SubjectMutations.Deletions.Request(context.Background(), "request", operations.DeletionTargetSubject, "subject-id"); err == nil {
+		t.Fatal("development GraphQL deletion request appeared durable without a store")
 	}
 }
 

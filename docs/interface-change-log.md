@@ -3,6 +3,26 @@
 API 계약 변경 시 이 파일과 GraphQL SDL(도메인) 또는 `openapi/jandibat.yaml`(HTTP edge)을 같은 변경에 포함합니다.
 각 항목에는 날짜, 호환성, 영향받는 operation/schema, 백엔드·프론트엔드 후속 작업을 기록합니다.
 
+## 2026-09-24 — OpenAPI HTTP edge 한정 cutover
+
+호환성: breaking change입니다. REST 도메인 하위 호환성은 제공하지 않습니다.
+GraphQL SDL이 도메인 query/mutation의 유일한 계약이며, OpenAPI 2.0.0에는 아래
+다섯 HTTP edge 경로만 남습니다. `POST /graphql`의 도메인 operation은 OpenAPI에
+중복 정의하지 않습니다. 초기 subscription은 없습니다.
+
+- `GET /healthz`, `GET /v1/render/{subject}.svg`
+- `POST /v1/auth/magic-link/consume`, `GET /v1/integrations/{provider}/callback`
+- `POST /v1/custom-providers/{customProviderId}/activities:ingest`
+- Magic Link 소비의 wire 응답은 기존 `user`와 `session` 필드를 유지하지만, 재사용
+  도메인 스키마 대신 edge 전용 `MagicLinkConsumeResponse`로 기술합니다. cookie는
+  계속 HttpOnly 응답 헤더에만 전달합니다.
+- Backend: 이전 REST 도메인 handler 등록을 제거하고 이 다섯 edge 경로와 GraphQL
+  transport만 남기는 route contract를 확인합니다.
+- Frontend: Relay normalized store를 도메인 상태의 소스로 사용하고 OpenAPI 생성 타입은
+  edge 호출에만 사용합니다. 정적 소비자는 GraphQL SDL을 참조합니다.
+- Coordination: edge 경로·스키마 allowlist, gqlgen/Relay/OpenAPI 생성물 drift와
+  변경 로그 동시 변경을 검사합니다.
+
 ## 2026-09-24 — Viewer 현재 세션 투영
 
 호환성: GraphQL `Viewer.currentSession: Session!`을 추가하는 additive 변경입니다.

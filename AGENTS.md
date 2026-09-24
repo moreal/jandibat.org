@@ -6,8 +6,8 @@
 
 - 계약 우선(Contract-first): GraphQL SDL(`graphql/schema/**`)이 도메인 API 계약이고,
   `openapi/jandibat.yaml`은 HTTP edge endpoint 계약입니다.
-- 백엔드/프론트엔드는 각 계약을 기준으로 독립 구현합니다. 기존 REST 도메인 경로는
-  GraphQL·Relay 화면 전환이 끝날 때까지 임시로 유지하고 이후 OpenAPI에서 제거합니다.
+- 백엔드/프론트엔드는 각 계약을 기준으로 독립 구현합니다. 도메인 요청은
+  GraphQL·Relay를 사용하고, REST는 승인된 HTTP edge endpoint에만 사용합니다.
 - API 변경은 해당 GraphQL SDL 또는 OpenAPI 변경과 변경 로그를 같은 PR에 포함합니다.
 - 도메인 로직은 순수 함수로 유지하고, 부수 효과(I/O, 네트워크, DB)는 애플리케이션/어댑터 계층으로 분리합니다.
 

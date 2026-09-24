@@ -43,6 +43,11 @@ type graphQLAuditActorHolder struct {
 	actor atomic.Pointer[operations.AuditActor]
 }
 
+type graphQLMutationAuditTargetKey struct{}
+type graphQLMutationAuditTargetHolder struct {
+	target atomic.Pointer[operations.AuditTarget]
+}
+
 func withGraphQLAuditActorHolder(ctx context.Context) context.Context {
 	return context.WithValue(ctx, graphQLAuditActorKey{}, &graphQLAuditActorHolder{})
 }
@@ -61,6 +66,29 @@ func graphqlAuditActorFromContext(ctx context.Context) (operations.AuditActor, b
 		}
 	}
 	return operations.AuditActor{}, false
+}
+
+func withGraphQLMutationAuditTargetHolder(ctx context.Context) context.Context {
+	return context.WithValue(ctx, graphQLMutationAuditTargetKey{}, &graphQLMutationAuditTargetHolder{})
+}
+
+func publishGraphQLMutationAuditTarget(ctx context.Context, target operations.AuditTarget) {
+	if !graph.CanonicalMutationAuditTarget(target) {
+		return
+	}
+	if holder, ok := ctx.Value(graphQLMutationAuditTargetKey{}).(*graphQLMutationAuditTargetHolder); ok {
+		copy := target
+		holder.target.Store(&copy)
+	}
+}
+
+func graphQLMutationAuditTargetFromContext(ctx context.Context) (operations.AuditTarget, bool) {
+	if holder, ok := ctx.Value(graphQLMutationAuditTargetKey{}).(*graphQLMutationAuditTargetHolder); ok {
+		if target := holder.target.Load(); target != nil {
+			return *target, true
+		}
+	}
+	return operations.AuditTarget{}, false
 }
 
 func validateGraphQLDependencies(deps Dependencies, graphDeps GraphQLDependencies) error {
@@ -121,6 +149,15 @@ func graphQLSessionMetadata(r *stdhttp.Request) auth.SessionMetadata {
 func graphQLTrustedContext(deps Dependencies, graphDeps GraphQLDependencies, next stdhttp.Handler) stdhttp.Handler {
 	return stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 		ctx := r.Context()
+		// The outer audit middleware owns this request's actor holder. A
+		// discoverable sign-in has no incoming actor; only the resolver may
+		// publish the owner of a successfully issued session to it.
+		ctx = graph.ContextWithPostAuthAuditActorPublisher(ctx, func(userID string) {
+			publishGraphQLAuditActor(r.Context(), userID)
+		})
+		ctx = graph.ContextWithMutationAuditTargetPublisher(ctx, func(target operations.AuditTarget) {
+			publishGraphQLMutationAuditTarget(r.Context(), target)
+		})
 		ctx = graph.ContextWithNodeServices(ctx, graphDeps.NodeServices)
 		ctx = graph.ContextWithSubjectQueryServices(ctx, graphDeps.SubjectQueries)
 		ctx = graph.ContextWithSubjectMutationServices(ctx, graphDeps.SubjectMutations)

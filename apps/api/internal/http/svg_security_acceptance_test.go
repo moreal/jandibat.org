@@ -4,16 +4,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	appactivity "github.com/moreal/jandibat.org/apps/api/internal/application/activity"
-	"github.com/moreal/jandibat.org/apps/api/internal/auth"
 	domain "github.com/moreal/jandibat.org/apps/api/internal/domain/activity"
 	apihttp "github.com/moreal/jandibat.org/apps/api/internal/http"
 )
@@ -149,51 +146,6 @@ func TestSVGHTTPErrorSnapshots(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-type fixedPasskeyOptionsAuth struct {
-	fakeAuth
-	loginUserIDs []string
-}
-
-func (service *fixedPasskeyOptionsAuth) BeginPasskeyLogin(_ context.Context, userID string) (auth.PasskeyOptions, error) {
-	service.loginUserIDs = append(service.loginUserIDs, userID)
-	return auth.PasskeyOptions{
-		CeremonyID: "8da3b5d8-303f-4fb6-bbe4-19ff90381b43",
-		PublicKey:  json.RawMessage(`{"challenge":"opaque","rpId":"example.test"}`),
-		ExpiresAt:  time.Date(2026, 8, 12, 12, 5, 0, 0, time.UTC),
-	}, nil
-}
-
-func TestPasskeySignInEmailHintCannotEnumerateAccounts(t *testing.T) {
-	t.Parallel()
-	service := &fixedPasskeyOptionsAuth{}
-	router := apihttp.NewRouter(apihttp.Dependencies{Auth: service})
-	bodies := []string{`{}`, `{"email":"known@example.test"}`, `{"email":"unknown@example.test"}`}
-	var snapshot string
-	for _, body := range bodies {
-		request := httptest.NewRequest(http.MethodPost, "/v1/auth/passkey/sign-in/options", strings.NewReader(body))
-		request.Header.Set("Content-Type", "application/json")
-		request.Header.Set("X-Request-ID", "passkey-enumeration-snapshot")
-		response := httptest.NewRecorder()
-		router.ServeHTTP(response, request)
-		if response.Code != http.StatusOK {
-			t.Fatalf("body %s status = %d: %s", body, response.Code, response.Body.String())
-		}
-		if snapshot == "" {
-			snapshot = response.Body.String()
-		} else if response.Body.String() != snapshot {
-			t.Fatalf("email hint changed public options response:\nfirst: %s\nnext:  %s", snapshot, response.Body.String())
-		}
-	}
-	if len(service.loginUserIDs) != len(bodies) {
-		t.Fatalf("BeginPasskeyLogin calls = %v", service.loginUserIDs)
-	}
-	for _, userID := range service.loginUserIDs {
-		if userID != "" {
-			t.Fatalf("email hint was resolved to an enumerable user ID %q", userID)
-		}
 	}
 }
 

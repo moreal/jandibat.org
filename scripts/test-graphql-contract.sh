@@ -19,6 +19,10 @@ if ! grep -q 'GraphQL SDL.*도메인' AGENTS.md; then
   echo 'working agreement must make GraphQL SDL the domain contract' >&2
   exit 1
 fi
+if grep -q '임시로 유지' AGENTS.md; then
+  echo 'working agreement must not describe removed REST domain routes as transitional' >&2
+  exit 1
+fi
 if ! grep -q 'GraphQL SDL' docs/interface-change-log.md; then
   echo 'interface change log must record the split contract' >&2
   exit 1

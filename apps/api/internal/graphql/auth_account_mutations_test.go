@@ -11,6 +11,7 @@ import (
 	"github.com/99designs/gqlgen/client"
 	"github.com/moreal/jandibat.org/apps/api/internal/auth"
 	"github.com/moreal/jandibat.org/apps/api/internal/graphql/relayid"
+	"github.com/moreal/jandibat.org/apps/api/internal/operations"
 )
 
 const accountSessionID = "158f21a1-3fa1-4706-a2a6-c99a1caf40f0"
@@ -224,6 +225,43 @@ func TestGraphQLSignOutReturnsOnlyRevokedSessionMetadata(t *testing.T) {
 	}
 }
 
+func TestSignOutPublishesTrustedSessionAuditTargetAfterRevocation(t *testing.T) {
+	port := &accountAuthPort{session: accountSession()}
+	var published []operations.AuditTarget
+	ctx := ContextWithMutationAuditTargetPublisher(accountContext(port), func(target operations.AuditTarget) {
+		published = append(published, target)
+	})
+	ctx = ContextWithAuthTransport(ctx, &accountCookieSink{clearErr: errors.New("cookie write failed")})
+	if payload, err := resolveSignOut(ctx); payload != nil || err == nil {
+		t.Fatalf("cookie failure = (%+v, %v)", payload, err)
+	}
+	if len(published) != 1 || published[0] != (operations.AuditTarget{Type: "session", ID: accountSessionID}) {
+		t.Fatalf("revoked session audit target = %#v", published)
+	}
+}
+
+func TestSignOutDoesNotPublishSessionTargetBeforeOwnerValidationOrRevocation(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		port accountAuthPort
+	}{
+		{name: "foreign current session", port: accountAuthPort{session: auth.Session{ID: accountSessionID, UserID: "other"}}},
+		{name: "revoke failed", port: accountAuthPort{session: accountSession(), revokeErr: errors.New("revoke failed")}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var published []operations.AuditTarget
+			ctx := ContextWithMutationAuditTargetPublisher(accountContext(&test.port), func(target operations.AuditTarget) {
+				published = append(published, target)
+			})
+			ctx = ContextWithAuthTransport(ctx, &accountCookieSink{})
+			_, _ = resolveSignOut(ctx)
+			if len(published) != 0 {
+				t.Fatalf("session target published before successful revocation: %#v", published)
+			}
+		})
+	}
+}
+
 func TestRevokeSessionRequiresSessionRelayIDAndOwnerScopedMetadata(t *testing.T) {
 	port := &accountAuthPort{session: accountSession()}
 	ctx := accountContext(port)
@@ -304,6 +342,45 @@ func TestGraphQLRevokeSessionReturnsTypedIDErrorAndOwnerMetadata(t *testing.T) {
 	encoded, _ = json.Marshal(valid.Data)
 	if !strings.Contains(string(encoded), relayid.Encode(relayid.Session, accountSessionID)) || strings.Contains(string(encoded), "TokenHash") {
 		t.Fatalf("revoke payload = %s", encoded)
+	}
+}
+
+func TestRevokeSessionPublishesOnlyOwnerVerifiedRawSessionAuditTarget(t *testing.T) {
+	port := &accountAuthPort{session: accountSession()}
+	var published []operations.AuditTarget
+	ctx := ContextWithMutationAuditTargetPublisher(accountContext(port), func(target operations.AuditTarget) {
+		published = append(published, target)
+	})
+	ctx = ContextWithAuthTransport(ctx, &accountCookieSink{})
+	globalID := relayid.Encode(relayid.Session, accountSessionID)
+	if _, err := resolveRevokeSession(ctx, globalID); err != nil {
+		t.Fatalf("revoke owner session: %v", err)
+	}
+	if len(published) != 1 || published[0] != (operations.AuditTarget{Type: "session", ID: accountSessionID}) {
+		t.Fatalf("owner-verified raw audit target = %#v", published)
+	}
+}
+
+func TestRevokeSessionDoesNotPublishMissingForeignOrFailedTargets(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		port accountAuthPort
+	}{
+		{name: "missing", port: accountAuthPort{lookupErr: auth.ErrNotFound}},
+		{name: "foreign", port: accountAuthPort{session: auth.Session{ID: accountSessionID, UserID: "other"}}},
+		{name: "revoke failed", port: accountAuthPort{session: accountSession(), revokeErr: errors.New("revoke failed")}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var published []operations.AuditTarget
+			ctx := ContextWithMutationAuditTargetPublisher(accountContext(&test.port), func(target operations.AuditTarget) {
+				published = append(published, target)
+			})
+			ctx = ContextWithAuthTransport(ctx, &accountCookieSink{})
+			_, _ = resolveRevokeSession(ctx, relayid.Encode(relayid.Session, accountSessionID))
+			if len(published) != 0 {
+				t.Fatalf("unverified or unrevoked target published: %#v", published)
+			}
+		})
 	}
 }
 

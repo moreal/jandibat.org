@@ -2,6 +2,12 @@
 
 최종 갱신일: 2026-08-12
 
+> 역사적 구현 초안입니다. 아래 OpenAPI 단일 계약과 `GET /v1/activities/{subject}` 시퀀스는
+> 2026-09-22 플랫폼 현대화에서 대체됐으며 현재 실행 지침이 아닙니다. 현행 도메인 계약은
+> [`graphql/schema/`](../graphql/schema/)의 SDL, HTTP edge 계약은
+> [`openapi/jandibat.yaml`](../openapi/jandibat.yaml)을 참조하세요. 진행 상태는
+> [`MODERNIZATION_BACKLOG.ko.md`](MODERNIZATION_BACKLOG.ko.md)를 따릅니다.
+
 ## 1) 멀티에이전트 구현 순서도
 
 ```mermaid

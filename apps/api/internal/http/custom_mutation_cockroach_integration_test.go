@@ -20,7 +20,9 @@ import (
 	activitystore "github.com/moreal/jandibat.org/apps/api/internal/adapters/storage/cockroach"
 	subjectstore "github.com/moreal/jandibat.org/apps/api/internal/adapters/subjects/cockroach"
 	"github.com/moreal/jandibat.org/apps/api/internal/auth"
+	"github.com/moreal/jandibat.org/apps/api/internal/graphql/relayid"
 	apihttp "github.com/moreal/jandibat.org/apps/api/internal/http"
+	"github.com/moreal/jandibat.org/apps/api/internal/http/handlers"
 	"github.com/moreal/jandibat.org/apps/api/internal/integrations"
 	"github.com/moreal/jandibat.org/apps/api/internal/operations"
 	"github.com/moreal/jandibat.org/apps/api/internal/subjects"
@@ -120,39 +122,78 @@ func TestCockroachCustomAndConnectionHTTPMutationsShareAuditTransaction(t *testi
 	recorder, _ := operations.NewAuditRecorder(operationStore)
 	user := auth.User{ID: userID, PrimaryEmail: email, Status: auth.UserStatusActive, CreatedAt: now, UpdatedAt: now}
 	dependencies := apihttp.Dependencies{
-		Auth: fixedDeletionUserAuth{user: user}, SubjectAuthorizer: subjectService, SubjectResolver: subjectService,
-		CustomProviders: customService, Connections: connectionService, Sync: syncService,
+		Auth: fixedDeletionUserAuth{user: user}, Sessions: fixedDeletionSession{userID: userID},
+		SubjectAuthorizer: subjectService, SubjectResolver: subjectService,
+		CustomProviders: customService, Connections: connectionService,
 		Audit: recorder, AuditSourceKey: []byte("custom-atomic-audit-source"), MutationAudits: operationStore,
+		RateLimiter: handlers.DefaultRateLimiter(),
 	}
-	router := apihttp.NewRouter(dependencies)
+	graphDeps := cockroachGraphQLDependencies(subjectService, connectionService, customService, syncService, nil, fixedDeletionSession{userID: userID})
+	router, err := apihttp.NewRouterWithGraphQL(dependencies, graphDeps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	subjectGlobalID := relayid.Encode(relayid.Subject, subjectID)
+	createMutation := `mutation Create($input: CreateCustomProviderInput!) { createCustomProvider(input: $input) { errors { code } provider { id ingestProviderID environmentID } ingestionKey } }`
+	createProvider := func(handler http.Handler, ownerSubjectID, slug, name string) (string, string, string, string, int) {
+		t.Helper()
+		response := performGraphQLIntegrationRequest(t, handler, createMutation, map[string]any{"input": map[string]any{
+			"subjectID": ownerSubjectID, "slug": slug, "name": name, "allowedActions": []string{"read"},
+		}})
+		if response.Code != http.StatusOK {
+			return "", "", "", "", response.Code
+		}
+		var payload struct {
+			Data struct {
+				CreateCustomProvider struct {
+					Errors []struct {
+						Code string `json:"code"`
+					} `json:"errors"`
+					Provider struct {
+						ID               string `json:"id"`
+						IngestProviderID string `json:"ingestProviderID"`
+						EnvironmentID    string `json:"environmentID"`
+					} `json:"provider"`
+					IngestionKey string `json:"ingestionKey"`
+				} `json:"createCustomProvider"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+			t.Fatalf("decode custom provider mutation: %v", err)
+		}
+		result := payload.Data.CreateCustomProvider
+		if len(result.Errors) != 0 || result.Provider.ID == "" || result.Provider.IngestProviderID == "" || result.IngestionKey == "" {
+			t.Fatalf("create provider did not return an owner-scoped provider and one-time key: errors=%v hasID=%t hasIngestID=%t hasKey=%t", result.Errors, result.Provider.ID != "", result.Provider.IngestProviderID != "", result.IngestionKey != "")
+		}
+		decodedID, err := relayid.DecodeAs(relayid.CustomProvider, result.Provider.ID)
+		if err != nil || decodedID != result.Provider.IngestProviderID {
+			t.Fatalf("custom provider Relay and edge identity mismatch: %v", err)
+		}
+		return result.Provider.ID, result.Provider.IngestProviderID, result.Provider.EnvironmentID, result.IngestionKey, response.Code
+	}
 
-	create := performJSONRequest(t, router, http.MethodPost, "/v1/subjects/"+handle+"/custom-providers", `{"key":"custom_`+suffix+`","name":"Original","allowedActions":["read"]}`, nil)
-	if create.Code != http.StatusCreated {
-		t.Fatalf("create status=%d body=%s", create.Code, create.Body.String())
+	createdID, createdRawID, createdEnvironmentID, createdKey, createStatus := createProvider(router, subjectGlobalID, "custom_"+suffix, "Original")
+	if createStatus != http.StatusOK {
+		t.Fatalf("create status=%d", createStatus)
 	}
-	var created struct {
-		Provider struct {
-			ID            string `json:"id"`
-			EnvironmentID string `json:"environmentId"`
-		} `json:"provider"`
-		IngestionKey string `json:"ingestionKey"`
+	var canonicalCreateOutboxes int
+	if err := admin.QueryRowContext(ctx, `SELECT count(*) FROM mutation_audit_outbox WHERE action='post.graphql' AND target_type='custom_provider' AND target_id=$1 AND actor_id=$2 AND outcome='succeeded'`, createdRawID, userID).Scan(&canonicalCreateOutboxes); err != nil || canonicalCreateOutboxes != 1 {
+		t.Fatalf("custom provider create canonical audit target count=%d err=%v", canonicalCreateOutboxes, err)
 	}
-	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil || created.Provider.ID == "" || created.IngestionKey == "" {
-		t.Fatalf("created payload=%#v err=%v", created, err)
+	updateMutation := `mutation Update($input: UpdateCustomProviderInput!) { updateCustomProvider(input: $input) { errors { code } provider { id name } } }`
+	update := performGraphQLIntegrationRequest(t, router, updateMutation, map[string]any{"input": map[string]any{"id": createdID, "name": "Updated"}})
+	if update.Code != http.StatusOK || !strings.Contains(update.Body.String(), `"name":"Updated"`) {
+		t.Fatalf("update status=%d", update.Code)
 	}
-	updatePath := "/v1/subjects/" + handle + "/custom-providers/" + created.Provider.ID
-	update := performJSONRequest(t, router, http.MethodPatch, updatePath, `{"name":"Updated"}`, nil)
-	if update.Code != http.StatusOK {
-		t.Fatalf("update status=%d body=%s", update.Code, update.Body.String())
-	}
-	ingestPath := "/v1/custom-providers/" + created.Provider.ID + "/activities:ingest"
-	ingestHeaders := map[string]string{"X-Jandibat-Provider-Key": created.IngestionKey, "Idempotency-Key": "success-" + suffix}
+	ingestPath := "/v1/custom-providers/" + createdRawID + "/activities:ingest"
+	// The ingest key is an HTTP edge credential, not a Relay Node field.
+	ingestHeaders := map[string]string{"X-Jandibat-Provider-Key": createdKey, "Idempotency-Key": "success-" + suffix}
 	ingestBody := `{"schemaVersion":"1.0","events":[{"eventId":"success-` + suffix + `","date":"` + now.Format(time.DateOnly) + `","action":"read","metric":{"name":"count","value":3}}]}`
 	ingest := performJSONRequest(t, router, http.MethodPost, ingestPath, ingestBody, ingestHeaders)
 	if ingest.Code != http.StatusAccepted {
 		t.Fatalf("ingest status=%d body=%s", ingest.Code, ingest.Body.String())
 	}
-	var providers, environments, events, facts, successOutboxes, canonicalCreateOutboxes int
+	var providers, environments, events, facts, successOutboxes int
 	scanCount := func(destination *int, query string, args ...any) {
 		t.Helper()
 		if err := admin.QueryRowContext(ctx, query, args...).Scan(destination); err != nil {
@@ -160,118 +201,131 @@ func TestCockroachCustomAndConnectionHTTPMutationsShareAuditTransaction(t *testi
 		}
 	}
 	queryCounts := func() {
-		scanCount(&providers, `SELECT count(*) FROM custom_providers WHERE id=$1`, created.Provider.ID)
-		scanCount(&environments, `SELECT count(*) FROM environments WHERE id=$1`, created.Provider.EnvironmentID)
-		scanCount(&events, `SELECT count(*) FROM custom_activity_events WHERE custom_provider_id=$1`, created.Provider.ID)
-		scanCount(&facts, `SELECT count(*) FROM activity_facts WHERE custom_provider_id=$1`, created.Provider.ID)
-		scanCount(&successOutboxes, `SELECT count(*) FROM mutation_audit_outbox WHERE actor_id IN ($1,$2) AND outcome='succeeded'`, userID, created.Provider.ID)
-		scanCount(&canonicalCreateOutboxes, `SELECT count(*) FROM mutation_audit_outbox WHERE action='post.v1.subjects.subject.custom-providers' AND target_type='custom_provider' AND target_id=$1 AND outcome='succeeded'`, created.Provider.ID)
+		scanCount(&providers, `SELECT count(*) FROM custom_providers WHERE id=$1`, createdRawID)
+		scanCount(&environments, `SELECT count(*) FROM environments WHERE id=$1`, createdEnvironmentID)
+		scanCount(&events, `SELECT count(*) FROM custom_activity_events WHERE custom_provider_id=$1`, createdRawID)
+		scanCount(&facts, `SELECT count(*) FROM activity_facts WHERE custom_provider_id=$1`, createdRawID)
+		scanCount(&successOutboxes, `SELECT count(*) FROM mutation_audit_outbox WHERE actor_id IN ($1,$2) AND outcome='succeeded'`, userID, createdRawID)
 	}
 	queryCounts()
-	if providers != 1 || environments != 1 || events != 1 || facts != 1 || successOutboxes != 3 || canonicalCreateOutboxes != 1 {
-		t.Fatalf("success state providers=%d env=%d events=%d facts=%d outboxes=%d canonical-create=%d", providers, environments, events, facts, successOutboxes, canonicalCreateOutboxes)
+	if providers != 1 || environments != 1 || events != 1 || facts != 1 || successOutboxes != 3 {
+		t.Fatalf("success state providers=%d env=%d events=%d facts=%d outboxes=%d", providers, environments, events, facts, successOutboxes)
 	}
 
-	deleteCreate := performJSONRequest(t, router, http.MethodPost, "/v1/subjects/"+handle+"/custom-providers", `{"key":"delete_`+suffix+`","name":"Delete Me","allowedActions":["read"]}`, nil)
-	if deleteCreate.Code != http.StatusCreated {
-		t.Fatalf("delete fixture create status=%d body=%s", deleteCreate.Code, deleteCreate.Body.String())
+	deleteGlobalID, deleteRawID, deleteEnvironmentID, _, deleteCreateStatus := createProvider(router, subjectGlobalID, "delete_"+suffix, "Delete Me")
+	if deleteCreateStatus != http.StatusOK {
+		t.Fatalf("delete fixture create status=%d", deleteCreateStatus)
 	}
-	var deleteFixture struct {
-		Provider struct {
-			ID            string `json:"id"`
-			EnvironmentID string `json:"environmentId"`
-		} `json:"provider"`
-	}
-	if err := json.Unmarshal(deleteCreate.Body.Bytes(), &deleteFixture); err != nil || deleteFixture.Provider.ID == "" {
-		t.Fatalf("delete fixture payload=%#v err=%v", deleteFixture, err)
-	}
-	deleted := performJSONRequest(t, router, http.MethodDelete, "/v1/subjects/"+handle+"/custom-providers/"+deleteFixture.Provider.ID, "", nil)
-	if deleted.Code != http.StatusNoContent {
-		t.Fatalf("delete status=%d body=%s", deleted.Code, deleted.Body.String())
+	deleteMutation := `mutation Delete($input: DeleteCustomProviderInput!) { deleteCustomProvider(input: $input) { errors { code } deletedProviderID } }`
+	deleted := performGraphQLIntegrationRequest(t, router, deleteMutation, map[string]any{"input": map[string]any{"id": deleteGlobalID}})
+	if deleted.Code != http.StatusOK || !strings.Contains(deleted.Body.String(), `"deletedProviderID":"`+deleteGlobalID+`"`) {
+		t.Fatalf("delete status=%d", deleted.Code)
 	}
 	var deletedProviders, retainedEnvironments, deleteOutboxes int
-	scanCount(&deletedProviders, `SELECT count(*) FROM custom_providers WHERE id=$1`, deleteFixture.Provider.ID)
-	scanCount(&retainedEnvironments, `SELECT count(*) FROM environments WHERE id=$1 AND owner_subject_id=$2`, deleteFixture.Provider.EnvironmentID, subjectID)
-	scanCount(&deleteOutboxes, `SELECT count(*) FROM mutation_audit_outbox WHERE action='delete.v1.subjects.subject.custom-providers.customProviderId' AND target_id=$1 AND outcome='succeeded'`, deleteFixture.Provider.ID)
-	if deletedProviders != 0 || retainedEnvironments != 1 || deleteOutboxes != 1 {
+	scanCount(&deletedProviders, `SELECT count(*) FROM custom_providers WHERE id=$1`, deleteRawID)
+	scanCount(&retainedEnvironments, `SELECT count(*) FROM environments WHERE id=$1 AND owner_subject_id=$2`, deleteEnvironmentID, subjectID)
+	scanCount(&deleteOutboxes, `SELECT count(*) FROM mutation_audit_outbox WHERE action='post.graphql' AND actor_id=$1 AND outcome='succeeded'`, userID)
+	if deletedProviders != 0 || retainedEnvironments != 1 || deleteOutboxes != 4 {
 		t.Fatalf("delete state provider=%d retained environment=%d outboxes=%d", deletedProviders, retainedEnvironments, deleteOutboxes)
 	}
 	otherUser := auth.User{ID: otherUserID, PrimaryEmail: otherEmail, Status: auth.UserStatusActive, CreatedAt: now, UpdatedAt: now}
 	otherDependencies := dependencies
 	otherDependencies.Auth = fixedDeletionUserAuth{user: otherUser}
-	otherRouter := apihttp.NewRouter(otherDependencies)
-	otherCreate := performJSONRequest(t, otherRouter, http.MethodPost, "/v1/subjects/"+otherHandle+"/custom-providers", `{"key":"other_`+suffix+`","name":"Other","allowedActions":["read"]}`, nil)
-	if otherCreate.Code != http.StatusCreated {
-		t.Fatalf("other create status=%d body=%s", otherCreate.Code, otherCreate.Body.String())
+	otherDependencies.Sessions = fixedDeletionSession{userID: otherUserID}
+	otherGraphDeps := cockroachGraphQLDependencies(subjectService, connectionService, customService, syncService, nil, fixedDeletionSession{userID: otherUserID})
+	otherRouter, err := apihttp.NewRouterWithGraphQL(otherDependencies, otherGraphDeps)
+	if err != nil {
+		t.Fatal(err)
 	}
-	var otherFixture struct {
-		Provider struct {
-			ID string `json:"id"`
-		} `json:"provider"`
+	otherGlobalID, otherRawID, _, _, otherCreateStatus := createProvider(otherRouter, relayid.Encode(relayid.Subject, otherSubjectID), "other_"+suffix, "Other")
+	if otherCreateStatus != http.StatusOK {
+		t.Fatalf("other create status=%d", otherCreateStatus)
 	}
-	if err := json.Unmarshal(otherCreate.Body.Bytes(), &otherFixture); err != nil || otherFixture.Provider.ID == "" {
-		t.Fatalf("other fixture payload=%#v err=%v", otherFixture, err)
-	}
-	crossOwnerDelete := performJSONRequest(t, router, http.MethodDelete, "/v1/subjects/"+otherHandle+"/custom-providers/"+otherFixture.Provider.ID, "", nil)
-	if crossOwnerDelete.Code != http.StatusForbidden {
-		t.Fatalf("cross-owner delete status=%d body=%s", crossOwnerDelete.Code, crossOwnerDelete.Body.String())
+	crossOwnerDelete := performGraphQLIntegrationRequest(t, router, deleteMutation, map[string]any{"input": map[string]any{"id": otherGlobalID}})
+	if crossOwnerDelete.Code != http.StatusOK || !strings.Contains(crossOwnerDelete.Body.String(), `"code":"NOT_FOUND"`) {
+		t.Fatalf("cross-owner delete status=%d", crossOwnerDelete.Code)
 	}
 	var otherProviders int
-	scanCount(&otherProviders, `SELECT count(*) FROM custom_providers WHERE id=$1`, otherFixture.Provider.ID)
+	scanCount(&otherProviders, `SELECT count(*) FROM custom_providers WHERE id=$1`, otherRawID)
 	if otherProviders != 1 {
 		t.Fatalf("cross-owner delete changed provider count=%d", otherProviders)
 	}
 
-	publicConnection := performJSONRequest(t, router, http.MethodPost, "/v1/subjects/"+handle+"/provider-connections", `{"providerId":"github","authMethod":"none","includePrivate":false}`, nil)
-	if publicConnection.Code != http.StatusCreated {
-		t.Fatalf("public connection status=%d body=%s", publicConnection.Code, publicConnection.Body.String())
+	connectMutation := `mutation Connect($input: ConnectProviderInput!) { connectProvider(input: $input) { errors { code } connection { id providerID } } }`
+	publicConnection := performGraphQLIntegrationRequest(t, router, connectMutation, map[string]any{"input": map[string]any{
+		"subjectID": subjectGlobalID, "providerID": "github", "authMethod": "PUBLIC", "includePrivate": false,
+	}})
+	if publicConnection.Code != http.StatusOK {
+		t.Fatalf("public connection status=%d", publicConnection.Code)
 	}
 	var publicFixture struct {
-		Connection struct {
-			ID string `json:"id"`
-		} `json:"connection"`
+		Data struct {
+			ConnectProvider struct {
+				Connection struct {
+					ID string `json:"id"`
+				} `json:"connection"`
+			} `json:"connectProvider"`
+		} `json:"data"`
 	}
-	if err := json.Unmarshal(publicConnection.Body.Bytes(), &publicFixture); err != nil || publicFixture.Connection.ID == "" {
-		t.Fatalf("public connection payload=%#v err=%v", publicFixture, err)
+	if err := json.Unmarshal(publicConnection.Body.Bytes(), &publicFixture); err != nil || publicFixture.Data.ConnectProvider.Connection.ID == "" {
+		t.Fatalf("public connection payload missing id; decode error=%v", err)
 	}
-	syncPath := "/v1/subjects/" + handle + "/provider-connections/" + publicFixture.Connection.ID + "/sync"
-	syncHeaders := map[string]string{"Idempotency-Key": "manual-sync-" + suffix}
-	firstSync := performJSONRequest(t, router, http.MethodPost, syncPath, `{}`, syncHeaders)
-	secondSync := performJSONRequest(t, router, http.MethodPost, syncPath, `{}`, syncHeaders)
+	connectionGlobalID := publicFixture.Data.ConnectProvider.Connection.ID
+	connectionRawID, err := relayid.DecodeAs(relayid.ProviderConnection, connectionGlobalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	syncMutation := `mutation Sync($input: EnqueueManualSyncInput!) { enqueueManualSync(input: $input) { errors { code } job { id } } }`
+	syncVariables := map[string]any{"input": map[string]any{"connectionID": connectionGlobalID, "idempotencyKey": "manual-sync-" + suffix}}
+	firstSync := performGraphQLIntegrationRequest(t, router, syncMutation, syncVariables)
+	secondSync := performGraphQLIntegrationRequest(t, router, syncMutation, syncVariables)
 	var firstSyncBody, secondSyncBody struct {
-		ID string `json:"id"`
+		Data struct {
+			EnqueueManualSync struct {
+				Job struct {
+					ID string `json:"id"`
+				} `json:"job"`
+			} `json:"enqueueManualSync"`
+		} `json:"data"`
 	}
 	firstDecodeErr := json.Unmarshal(firstSync.Body.Bytes(), &firstSyncBody)
 	secondDecodeErr := json.Unmarshal(secondSync.Body.Bytes(), &secondSyncBody)
-	if firstSync.Code != http.StatusAccepted || secondSync.Code != http.StatusAccepted || firstDecodeErr != nil || secondDecodeErr != nil || firstSyncBody.ID == "" || firstSyncBody.ID != secondSyncBody.ID {
-		t.Fatalf("idempotent sync first=%d/%s second=%d/%s", firstSync.Code, firstSync.Body.String(), secondSync.Code, secondSync.Body.String())
+	firstJobID := firstSyncBody.Data.EnqueueManualSync.Job.ID
+	secondJobID := secondSyncBody.Data.EnqueueManualSync.Job.ID
+	if firstSync.Code != http.StatusOK || secondSync.Code != http.StatusOK || firstDecodeErr != nil || secondDecodeErr != nil || firstJobID == "" || firstJobID != secondJobID {
+		t.Fatalf("idempotent sync first=%d second=%d firstID=%q secondID=%q decode=(%v,%v)", firstSync.Code, secondSync.Code, firstJobID, secondJobID, firstDecodeErr, secondDecodeErr)
 	}
 	var syncJobs, syncOutboxes int
-	scanCount(&syncJobs, `SELECT count(*) FROM provider_sync_jobs WHERE provider_connection_id=$1`, publicFixture.Connection.ID)
-	scanCount(&syncOutboxes, `SELECT count(*) FROM mutation_audit_outbox WHERE action='post.v1.subjects.subject.provider-connections.connectionId.sync' AND target_id=$1 AND outcome='succeeded'`, publicFixture.Connection.ID)
-	if syncJobs != 1 || syncOutboxes != 2 {
+	scanCount(&syncJobs, `SELECT count(*) FROM provider_sync_jobs WHERE provider_connection_id=$1`, connectionRawID)
+	scanCount(&syncOutboxes, `SELECT count(*) FROM mutation_audit_outbox WHERE action='post.graphql' AND actor_id=$1 AND outcome='succeeded'`, userID)
+	if syncJobs != 1 || syncOutboxes != 7 {
 		t.Fatalf("idempotent sync jobs=%d succeeded outboxes=%d", syncJobs, syncOutboxes)
 	}
 
 	failedDependencies := dependencies
 	failedDependencies.MutationAudits = failingEnqueueCoordinator{next: operationStore}
-	failedRouter := apihttp.NewRouter(failedDependencies)
-	failedUpdate := performJSONRequest(t, failedRouter, http.MethodPatch, updatePath, `{"name":"Must Roll Back"}`, nil)
+	failedRouter, err := apihttp.NewRouterWithGraphQL(failedDependencies, graphDeps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failedUpdate := performGraphQLIntegrationRequest(t, failedRouter, updateMutation, map[string]any{"input": map[string]any{"id": createdID, "name": "Must Roll Back"}})
 	if failedUpdate.Code != http.StatusServiceUnavailable {
 		t.Fatalf("failed update status=%d body=%s", failedUpdate.Code, failedUpdate.Body.String())
 	}
 	var providerName, environmentName string
-	if err := admin.QueryRowContext(ctx, `SELECT name FROM custom_providers WHERE id=$1`, created.Provider.ID).Scan(&providerName); err != nil {
+	if err := admin.QueryRowContext(ctx, `SELECT name FROM custom_providers WHERE id=$1`, createdRawID).Scan(&providerName); err != nil {
 		t.Fatal(err)
 	}
-	if err := admin.QueryRowContext(ctx, `SELECT name FROM environments WHERE id=$1`, created.Provider.EnvironmentID).Scan(&environmentName); err != nil {
+	if err := admin.QueryRowContext(ctx, `SELECT name FROM environments WHERE id=$1`, createdEnvironmentID).Scan(&environmentName); err != nil {
 		t.Fatal(err)
 	}
 	if providerName != "Updated" || environmentName != "Updated" {
 		t.Fatalf("failed update escaped rollback provider=%q environment=%q", providerName, environmentName)
 	}
 
-	failedCreate := performJSONRequest(t, failedRouter, http.MethodPost, "/v1/subjects/"+handle+"/custom-providers", `{"key":"rollback_`+suffix+`","name":"Rollback","allowedActions":["read"]}`, nil)
+	failedCreate := performGraphQLIntegrationRequest(t, failedRouter, createMutation, map[string]any{"input": map[string]any{
+		"subjectID": subjectGlobalID, "slug": "rollback_" + suffix, "name": "Rollback", "allowedActions": []string{"read"},
+	}})
 	if failedCreate.Code != http.StatusServiceUnavailable {
 		t.Fatalf("failed create status=%d body=%s", failedCreate.Code, failedCreate.Body.String())
 	}
@@ -282,7 +336,7 @@ func TestCockroachCustomAndConnectionHTTPMutationsShareAuditTransaction(t *testi
 		t.Fatalf("failed create escaped rollback providers=%d environments=%d", rolledBackProviders, rolledBackEnvironments)
 	}
 
-	failedIngestHeaders := map[string]string{"X-Jandibat-Provider-Key": created.IngestionKey, "Idempotency-Key": "rollback-" + suffix}
+	failedIngestHeaders := map[string]string{"X-Jandibat-Provider-Key": createdKey, "Idempotency-Key": "rollback-" + suffix}
 	failedEventID := "rollback-" + suffix
 	failedIngestBody := `{"schemaVersion":"1.0","events":[{"eventId":"` + failedEventID + `","date":"` + now.Format(time.DateOnly) + `","action":"read","metric":{"name":"count","value":7}}]}`
 	failedIngest := performJSONRequest(t, failedRouter, http.MethodPost, ingestPath, failedIngestBody, failedIngestHeaders)
@@ -290,15 +344,16 @@ func TestCockroachCustomAndConnectionHTTPMutationsShareAuditTransaction(t *testi
 		t.Fatalf("failed ingest status=%d body=%s", failedIngest.Code, failedIngest.Body.String())
 	}
 	var failedEvents, failedFacts, failedReservations int
-	scanCount(&failedEvents, `SELECT count(*) FROM custom_activity_events WHERE custom_provider_id=$1 AND event_id=$2`, created.Provider.ID, failedEventID)
-	scanCount(&failedFacts, `SELECT count(*) FROM activity_facts WHERE custom_provider_id=$1 AND metadata->>'provider_event_id'=$2`, created.Provider.ID, failedEventID)
-	scanCount(&failedReservations, `SELECT count(*) FROM ingest_idempotency_keys WHERE custom_provider_id=$1 AND request_hash IS NOT NULL AND response_status=0`, created.Provider.ID)
+	scanCount(&failedEvents, `SELECT count(*) FROM custom_activity_events WHERE custom_provider_id=$1 AND event_id=$2`, createdRawID, failedEventID)
+	scanCount(&failedFacts, `SELECT count(*) FROM activity_facts WHERE custom_provider_id=$1 AND metadata->>'provider_event_id'=$2`, createdRawID, failedEventID)
+	scanCount(&failedReservations, `SELECT count(*) FROM ingest_idempotency_keys WHERE custom_provider_id=$1 AND request_hash IS NOT NULL AND response_status=0`, createdRawID)
 	if failedEvents != 0 || failedFacts != 0 || failedReservations != 0 {
 		t.Fatalf("failed ingest escaped rollback events=%d facts=%d reservations=%d", failedEvents, failedFacts, failedReservations)
 	}
 
-	connectionBody := `{"providerId":"gitlab","authMethod":"token","token":"unused-public-token","includePrivate":false}`
-	failedConnection := performJSONRequest(t, failedRouter, http.MethodPost, "/v1/subjects/"+handle+"/provider-connections", connectionBody, nil)
+	failedConnection := performGraphQLIntegrationRequest(t, failedRouter, connectMutation, map[string]any{"input": map[string]any{
+		"subjectID": subjectGlobalID, "providerID": "gitlab", "authMethod": "TOKEN", "token": "unused-public-token", "includePrivate": false,
+	}})
 	if failedConnection.Code != http.StatusServiceUnavailable {
 		t.Fatalf("failed connection status=%d body=%s", failedConnection.Code, failedConnection.Body.String())
 	}

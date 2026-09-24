@@ -133,9 +133,12 @@ RTO 측정은 incident/drill 선언 시각에 시작하고 다음 검증 종료 
 
 ```sh
 curl --fail --silent "$RESTORE_API_BASE_URL/healthz"
-curl --fail --silent \
-  "$RESTORE_API_BASE_URL/v1/activities/$RESTORE_FIXTURE_SUBJECT" \
-  | jq -e '.subject == env.RESTORE_FIXTURE_SUBJECT'
+jq -n --arg subject "$RESTORE_FIXTURE_SUBJECT" --arg day "$(date -u +%Y-%m-%d)" \
+  '{query:"query RestoreSnapshot($subject:String!,$range:DateRangeInput!,$timezone:TimeZone!){subject(handleOrID:$subject){handle activitySnapshot(range:$range,timezone:$timezone){revision generatedAt dataUpdatedAt}}}",operationName:"RestoreSnapshot",variables:{subject:$subject,range:{from:$day,to:$day},timezone:"UTC"}}' \
+  | curl --fail --silent --show-error --request POST \
+      --header 'Content-Type: application/json' --data-binary @- "$RESTORE_API_BASE_URL/graphql" \
+  | jq -e --arg subject "$RESTORE_FIXTURE_SUBJECT" \
+      '(.errors == null) and (.data.subject.handle == $subject) and (.data.subject.activitySnapshot.revision | type == "string" and length > 0)'
 curl --fail --silent \
   "$RESTORE_API_BASE_URL/v1/render/$RESTORE_FIXTURE_SUBJECT.svg" \
   | xmllint --noout -
@@ -148,7 +151,7 @@ curl --fail --silent \
 
 어느 하나라도 실패하면 restore drill은 실패입니다. 일부 smoke 성공을 전체 복구 성공으로 기록하지 않습니다.
 
-저장소의 `scripts/db-restore-verify.sh`는 이 절차를 fail-closed로 묶습니다. 최신 backup end를 기준으로 source를 `AS OF SYSTEM TIME` 조회해 모든 expected table의 exact row count를 복원본과 비교하고, migration checksum·constraint·index inventory와 deletion/mail/HMAC/audit invariant를 검사합니다. 0012 mutation audit outbox도 inventory와 row count에 포함되며 delivered row는 복원된 sink event 전 필드와 일치해야 합니다. 이어서 backup 이후 완료된 deletion manifest를 source에서 일시 export해 복원 DB에 바인딩된 maintenance binary로 replay/잔존 검증하고, 같은 복원 DB에 API를 기동해 fixture activity/SVG smoke와 audit reconciliation을 실행합니다. backup end→검증 시각 RPO와 drill 선언→검증 종료 RTO가 JSON에 기록됩니다.
+저장소의 `scripts/db-restore-verify.sh`는 이 절차를 fail-closed로 묶습니다. 최신 backup end를 기준으로 source를 `AS OF SYSTEM TIME` 조회해 모든 expected table의 exact row count를 복원본과 비교하고, migration checksum·constraint·index inventory와 deletion/mail/HMAC/audit invariant를 검사합니다. 영속 `custom_provider_secrets`와 `activity_snapshot_changes`도 존재 여부와 row count 대상이며 행의 비밀값은 출력하지 않습니다. 0012 mutation audit outbox도 inventory와 row count에 포함되며 delivered row는 복원된 sink event 전 필드와 일치해야 합니다. 이어서 backup 이후 완료된 deletion manifest를 source에서 일시 export해 복원 DB에 바인딩된 maintenance binary로 replay/잔존 검증하고, 같은 복원 DB에 API를 기동해 fixture `ActivitySnapshot` GraphQL POST/SVG smoke와 audit reconciliation을 실행합니다. GraphQL HTTP 200에 `errors`가 있거나 subject/revision이 없으면 실패합니다. backup end→검증 시각 RPO와 drill 선언→검증 종료 RTO가 JSON에 기록됩니다.
 
 Staging의 `restore-tools` image는 candidate API image에서 API/maintenance binary를 가져오고 pinned Cockroach client와 verifier를 함께 둡니다. 다음 값은 secret manager의 격리 drill credential/fixture로 실제 설정해야 하며 placeholder나 빈 값이면 `RESTORE_REQUIRE_FULL_DRILL=true` gate가 `NOT RUN`으로 non-zero 종료합니다.
 

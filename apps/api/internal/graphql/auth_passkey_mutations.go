@@ -13,6 +13,7 @@ import (
 	"github.com/moreal/jandibat.org/apps/api/internal/auth"
 	"github.com/moreal/jandibat.org/apps/api/internal/graphql/model"
 	"github.com/moreal/jandibat.org/apps/api/internal/graphql/scalar"
+	"github.com/moreal/jandibat.org/apps/api/internal/operations"
 )
 
 var errInvalidPasskeyCredential = errors.New("invalid passkey credential")
@@ -33,6 +34,7 @@ type PasskeyMutationService interface {
 
 type passkeyMutationServiceContextKey struct{}
 type passkeySessionMetadataContextKey struct{}
+type postAuthAuditActorPublisherContextKey struct{}
 
 // ContextWithPasskeyMutationService installs an application port at the
 // trusted GraphQL transport boundary, never from client-controlled input.
@@ -44,6 +46,13 @@ func ContextWithPasskeyMutationService(ctx context.Context, service PasskeyMutat
 // session issuance. GraphQL variables cannot set this value.
 func ContextWithPasskeySessionMetadata(ctx context.Context, metadata auth.SessionMetadata) context.Context {
 	return context.WithValue(ctx, passkeySessionMetadataContextKey{}, metadata)
+}
+
+// ContextWithPostAuthAuditActorPublisher installs a trusted transport callback
+// for attributing a successful anonymous sign-in's audit outcome. The callback
+// receives only the verified user ID, never the newly issued bearer token.
+func ContextWithPostAuthAuditActorPublisher(ctx context.Context, publish func(string)) context.Context {
+	return context.WithValue(ctx, postAuthAuditActorPublisherContextKey{}, publish)
 }
 
 func passkeyService(ctx context.Context) PasskeyMutationService {
@@ -193,6 +202,7 @@ func (r *mutationResolver) resolveFinishPasskeySignIn(ctx context.Context, input
 	metadata, _ := ctx.Value(passkeySessionMetadataContextKey{}).(auth.SessionMetadata)
 	grant, err := service.CompletePasskeyLogin(ctx, input.CeremonyID, credentialID, document, metadata)
 	if err != nil {
+		markPasskeySignInFailureCommit(ctx, err)
 		items, transportErr := passkeyDomainError(err)
 		return &model.FinishPasskeySignInPayload{Errors: items}, transportErr
 	}
@@ -217,7 +227,24 @@ func (r *mutationResolver) resolveFinishPasskeySignIn(ctx context.Context, input
 		compensateIssuedSession(ctx, service, reporter, grant.Token)
 		return nil, errNodeLookup
 	}
+	if publish, ok := ctx.Value(postAuthAuditActorPublisherContextKey{}).(func(string)); ok && publish != nil {
+		publish(session.UserID)
+	}
+	PublishMutationAuditTarget(ctx, "session", session.ID)
 	return &model.FinishPasskeySignInPayload{Errors: []*model.MutationError{}, Session: projectSession(session)}, nil
+}
+
+// A valid ceremony can already be consumed when authentication rejects it.
+// Preserve that replay guard and the correlated failed audit outcome in the
+// same transaction. Unrelated input and persistence errors keep rolling back.
+func markPasskeySignInFailureCommit(ctx context.Context, err error) {
+	if errors.Is(err, auth.ErrInvalidCeremony) ||
+		errors.Is(err, auth.ErrPasskeyVerification) ||
+		errors.Is(err, auth.ErrInvalidSignCount) ||
+		errors.Is(err, auth.ErrMagicLinkReauthenticationRequired) ||
+		errors.Is(err, auth.ErrUserDisabled) {
+		operations.MarkMutationFailureCommit(ctx)
+	}
 }
 
 func compensateIssuedSession(ctx context.Context, service PasskeyMutationService, reporter AuthMutationFailureReporter, token string) {

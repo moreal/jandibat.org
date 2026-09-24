@@ -1,5 +1,12 @@
 # 멀티에이전트 병렬 구현 가이드
 
+> 초기 OpenAPI 단일 계약 시절의 병렬 작업 가이드입니다. 아래 REST 도메인 티켓과 단일
+> OpenAPI 규칙은 현대화 작업에 적용하지 않습니다. 현재 도메인 계약은
+> [`graphql/schema/`](../graphql/schema/)의 SDL, HTTP edge 계약은
+> [`openapi/jandibat.yaml`](../openapi/jandibat.yaml)입니다. 현행 작업 분할과 완료 기준은
+> [`MODERNIZATION_BACKLOG.ko.md`](MODERNIZATION_BACKLOG.ko.md)와 저장소 `AGENTS.md`를
+> 따르세요.
+
 ## 목적
 
 백엔드(Go/chi)와 프론트엔드(Yarn)를 동시에 개발하면서 충돌을 줄이고 속도를 높입니다.

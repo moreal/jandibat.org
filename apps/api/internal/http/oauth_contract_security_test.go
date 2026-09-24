@@ -23,7 +23,7 @@ func (invalidRequestOAuthFlow) Complete(context.Context, adapteroauth.CallbackRe
 	return adapteroauth.CallbackResult{}, adapteroauth.ErrInvalidRequest
 }
 
-func TestOAuthBrowserEndpointsRejectBearerOnlyAuthentication(t *testing.T) {
+func TestOAuthCallbackRejectsBearerOnlyAuthentication(t *testing.T) {
 	connection := integrations.ProviderConnection{
 		ID: "11111111-1111-4111-8111-111111111111", SubjectID: "subject-1", ProviderID: "github",
 		AuthMethod: integrations.AuthOAuth2, Status: integrations.ConnectionPending,
@@ -36,21 +36,9 @@ func TestOAuthBrowserEndpointsRejectBearerOnlyAuthentication(t *testing.T) {
 		AllowedRedirects: []string{"https://app.example/settings/providers"},
 	})
 
-	request := httptest.NewRequest(http.MethodPost, "/v1/subjects/subject-1/provider-connections", strings.NewReader(`{"providerId":"github","authMethod":"oauth2"}`))
+	request := httptest.NewRequest(http.MethodGet, "/v1/integrations/github/callback?state=opaque&code=code", nil)
 	request.Header.Set("Authorization", "Bearer api-session")
-	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
-	router.ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusUnauthorized {
-		t.Fatalf("bearer-only OAuth create status = %d, want 401: %s", recorder.Code, recorder.Body.String())
-	}
-	if flow.begin.SessionBinding != "" {
-		t.Fatalf("bearer-only OAuth create reached flow with binding %q", flow.begin.SessionBinding)
-	}
-
-	request = httptest.NewRequest(http.MethodGet, "/v1/integrations/github/callback?state=opaque&code=code", nil)
-	request.Header.Set("Authorization", "Bearer api-session")
-	recorder = httptest.NewRecorder()
 	router.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("bearer-only OAuth callback status = %d, want 401: %s", recorder.Code, recorder.Body.String())
@@ -67,14 +55,11 @@ func TestOAuthInvalidRequestUsesRFC9457BadRequest(t *testing.T) {
 	}
 	connections := staticConnections{item: connection}
 	router := apihttp.NewRouter(apihttp.Dependencies{
-		Auth: fakeAuth{}, SubjectAuthorizer: allowOwner{}, Connections: connections,
-		OAuthFlows:     map[string]adapteroauth.Flow{"github": invalidRequestOAuthFlow{}},
-		AllowedOrigins: []string{"https://app.example"},
+		Auth: fakeAuth{}, SubjectAuthorizer: allowOwner{}, OAuthConnections: connections,
+		OAuthFlows: map[string]adapteroauth.Flow{"github": invalidRequestOAuthFlow{}},
 	})
-	request := httptest.NewRequest(http.MethodPost, "/v1/subjects/subject-1/provider-connections", strings.NewReader(`{"providerId":"github","authMethod":"oauth2"}`))
+	request := httptest.NewRequest(http.MethodGet, "/v1/integrations/github/callback?state="+strings.Repeat("s", 32)+"&code=code", nil)
 	request.AddCookie(&http.Cookie{Name: "jandibat_session", Value: "browser-session"})
-	request.Header.Set("Origin", "https://app.example")
-	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, request)
 
@@ -125,36 +110,6 @@ func TestOAuthCallbackRejectsContractQueryBoundsBeforeExchange(t *testing.T) {
 			router.ServeHTTP(response, request)
 			if response.Code != http.StatusBadRequest || flow.complete.State != "" {
 				t.Fatalf("response=%d flow=%#v body=%s", response.Code, flow.complete, response.Body.String())
-			}
-		})
-	}
-}
-
-func TestPasskeyCredentialEnvelopeRejectsNestedContractViolations(t *testing.T) {
-	router := apihttp.NewRouter(apihttp.Dependencies{Auth: fakeAuth{}})
-	validPrefix := `{"ceremonyId":"11111111-1111-4111-8111-111111111111","credential":`
-	properties := make([]string, 21)
-	for index := range properties {
-		properties[index] = `"p` + string(rune('a'+index)) + `":true`
-	}
-	for _, test := range []struct {
-		name       string
-		credential string
-	}{
-		{name: "unknown field", credential: `{"id":"AQ","rawId":"AQ","type":"public-key","response":{},"clientExtensionResults":{},"unknown":true}`},
-		{name: "id too long", credential: `{"id":"` + strings.Repeat("i", 2049) + `","rawId":"AQ","type":"public-key","response":{},"clientExtensionResults":{}}`},
-		{name: "raw id too long", credential: `{"id":"AQ","rawId":"` + strings.Repeat("A", 2049) + `","type":"public-key","response":{},"clientExtensionResults":{}}`},
-		{name: "invalid type", credential: `{"id":"AQ","rawId":"AQ","type":"password","response":{},"clientExtensionResults":{}}`},
-		{name: "response properties", credential: `{"id":"AQ","rawId":"AQ","type":"public-key","response":{` + strings.Join(properties, ",") + `},"clientExtensionResults":{}}`},
-		{name: "extension properties", credential: `{"id":"AQ","rawId":"AQ","type":"public-key","response":{},"clientExtensionResults":{` + strings.Join(properties, ",") + `}}`},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			request := httptest.NewRequest(http.MethodPost, "/v1/auth/passkey/sign-in/finish", strings.NewReader(validPrefix+test.credential+`}`))
-			request.Header.Set("Content-Type", "application/json")
-			response := httptest.NewRecorder()
-			router.ServeHTTP(response, request)
-			if response.Code != http.StatusBadRequest {
-				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 			}
 		})
 	}

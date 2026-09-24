@@ -36,9 +36,10 @@
 - [x] M2-06: `scythe generate`, offline drift check, live Cockroach verification을 CI에 추가한다.
 - [x] M2-07: 공식 Scythe 결함이 입증될 때만 Nix patch와 최소 재현 fixture를 추가한다.
 
-M2 구현·격리 DB 검증은 완료했다. Task 7의 upstream issue/PR 제출은 외부 저장소 쓰기
-승인 대기 중이며, 위 M2-07 체크는 로컬 patch와 최소 재현 검증만 뜻한다. 초기
-`0001_baseline.sql` 이후 예약 fencing을 위한 additive `0002`가 적용된다.
+M2 구현·격리 DB 검증은 완료했다. Scythe 최소 재현 이슈 3건은 `moreal/scythe` 포크에
+게시했으며 upstream PR은 아직 제출하지 않았다. 위 M2-07 체크는 로컬 patch와 최소 재현
+검증만 뜻한다. 초기 `0001_baseline.sql` 이후 예약 fencing용 additive `0002`와
+ActivitySnapshot 변경 시각용 `0003`이 적용된다.
 
 ## M3. GraphQL·Relay 계약
 
@@ -46,21 +47,21 @@ M2 구현·격리 DB 검증은 완료했다. Task 7의 upstream issue/PR 제출�
 - [x] M3-02: Relay global ID codec, `Node` query와 durable entity identity test를 구현한다.
 - [x] M3-03: ActivitySnapshot query와 `generatedAt`, `dataUpdatedAt`, `revision` 의미를 구현한다.
 - [x] M3-04: sessions/sync jobs에 cursor connection을 적용하고 bounded list는 배열로 유지한다.
-- [ ] M3-05: 기존 REST domain endpoint를 GraphQL query/mutation으로 옮긴다.
-- [ ] M3-06: OpenAPI를 health/SVG/callback/ingest endpoint로 축소하고 contract change log를
+- [x] M3-05: 기존 REST domain endpoint를 GraphQL query/mutation으로 옮긴다.
+- [x] M3-06: OpenAPI를 health/SVG/callback/ingest endpoint로 축소하고 contract change log를
   갱신한다.
-- [ ] M3-07: `solid-relay` compatibility spike를 통과시키고 고정 revision과 어댑터 경계를
+- [x] M3-07: `solid-relay` compatibility spike를 통과시키고 고정 revision과 어댑터 경계를
   확정한다.
-- [ ] M3-08: 공식 Solid 2 UI를 generated Relay artifact와 normalized store로 전환한다.
-- [ ] M3-09: 수동 `AppStateProvider` 서버 상태와 OpenAPI-generated domain DTO를 제거한다.
-- [ ] M3-10: 정적 GraphQL 소비자 활용 가이드와 TypeScript/curl 예제를 추가한다.
+- [x] M3-08: 공식 Solid 2 UI를 generated Relay artifact와 normalized store로 전환한다.
+- [x] M3-09: 수동 `AppStateProvider` 서버 상태와 OpenAPI-generated domain DTO를 제거한다.
+- [x] M3-10: 정적 GraphQL 소비자 활용 가이드와 TypeScript/curl 예제를 추가한다.
 
-M3-01~04와 GraphQL HTTP 경계는 생성물 drift, API/race·격리 Cockroach 통합 테스트,
-스키마·권한 검사를 통과했다. Subject와 provider connection·custom provider도
-owner-scoped keyset connection을 사용하며, 내장 provider catalog 3종만 bounded 배열이다.
-공식 UI 전환과 REST 도메인 경로 제거는 아직 남아 있으며 운영 Flux reconcile은 하지
-않았다. `dataUpdatedAt`은 조회 범위에 반영된 변경이
-한 번도 없을 때만 `null`이며, 기존 DB의 migration history와 데이터는 이전하지 않는다.
+M3 전체는 GraphQL/OpenAPI 생성물 drift, Nix API/race·web/typecheck/build/lint,
+격리 Cockroach HTTP 통합 테스트와 정적 소비자 예제를 통과했다. Subject와 provider
+connection·custom provider는 owner-scoped keyset connection을 사용하고, 내장 provider
+catalog 3종만 bounded 배열이다. 공개 OpenAPI는 HTTP edge 5개 경로만 정의하며 운영 Flux
+reconcile은 하지 않았다. `dataUpdatedAt`은 조회 범위에 반영된 변경이 한 번도 없을
+때만 `null`이고, 기존 DB의 migration history와 데이터는 이전하지 않는다.
 
 ## M4. 이미지와 런타임 계약
 

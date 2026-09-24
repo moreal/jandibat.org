@@ -74,7 +74,7 @@ func newRouter(deps Dependencies, graphDeps *GraphQLDependencies) stdhttp.Handle
 	// canceled only after auditRequests has enqueued the outcome and committed.
 	router.Use(timeoutProblems(30 * time.Second))
 	router.Use(securityHeaders)
-	router.Use(cors(deps.AllowedOrigins))
+	router.Use(cors(deps.AllowedOrigins, graphDeps != nil))
 	router.Use(csrf(deps.AllowedOrigins))
 	if graphDeps != nil {
 		router.Use(func(next stdhttp.Handler) stdhttp.Handler {
@@ -99,54 +99,16 @@ func newRouter(deps Dependencies, graphDeps *GraphQLDependencies) stdhttp.Handle
 	}
 
 	router.Get("/healthz", server.Healthz)
-	router.Handle("/metrics", loopbackMetrics(observability.Default().Handler()))
+	router.Method(stdhttp.MethodGet, "/metrics", loopbackMetrics(observability.Default().Handler()))
 	if graphDeps != nil {
 		graphqlHandler := graph.NewHTTPHandler(&graph.Resolver{}, graph.HTTPOptions{Development: graphDeps.Development})
 		router.Method(stdhttp.MethodPost, "/graphql", graphQLTrustedContext(deps, *graphDeps, graphqlHandler))
 	}
 	router.Route("/v1", func(r chi.Router) {
-		r.Get("/providers", server.ListProviders)
-		r.Get("/activities/{subject}", server.GetActivities)
 		r.Get("/render/{subject}.svg", server.RenderHeatmap)
 
-		r.Post("/auth/magic-link/request", server.RequestMagicLink)
 		r.Post("/auth/magic-link/consume", server.ConsumeMagicLink)
-		r.Post("/auth/passkey/register/options", server.BeginPasskeyRegistration)
-		r.Post("/auth/passkey/register/finish", server.FinishPasskeyRegistration)
-		r.Post("/auth/passkey/sign-in/options", server.BeginPasskeySignIn)
-		r.Post("/auth/passkey/sign-in/finish", server.FinishPasskeySignIn)
-		r.Get("/auth/session", server.GetCurrentSession)
-		r.Delete("/auth/session", server.SignOut)
-		r.Get("/auth/sessions", server.ListSessions)
-		r.Delete("/auth/sessions", server.RevokeOtherSessions)
-		r.Delete("/auth/sessions/{sessionId}", server.RevokeSession)
-
-		r.Get("/me", server.GetCurrentUser)
-		r.Get("/me/settings", server.SubjectOperation)
-		r.Patch("/me/settings", server.SubjectOperation)
-		r.Get("/subjects", server.SubjectOperation)
-		r.Post("/subjects", server.SubjectOperation)
-		r.Get("/subjects/{subject}", server.SubjectOperation)
-		r.Patch("/subjects/{subject}", server.SubjectOperation)
-		r.Delete("/subjects/{subject}", server.SubjectOperation)
-		r.Get("/subjects/{subject}/settings", server.SubjectOperation)
-		r.Patch("/subjects/{subject}/settings", server.SubjectOperation)
-
-		r.Get("/subjects/{subject}/provider-connections", server.ListConnections)
-		r.Post("/subjects/{subject}/provider-connections", server.CreateConnection)
-		r.Get("/subjects/{subject}/provider-connections/{connectionId}", server.GetConnection)
-		r.Patch("/subjects/{subject}/provider-connections/{connectionId}", server.UpdateConnection)
-		r.Delete("/subjects/{subject}/provider-connections/{connectionId}", server.DeleteConnection)
-		r.Post("/subjects/{subject}/provider-connections/{connectionId}/sync", server.SyncConnection)
 		r.Get("/integrations/{provider}/callback", server.ProviderOAuthCallback)
-		r.Get("/sync-jobs/{syncJobId}", server.GetSyncJob)
-
-		r.Get("/subjects/{subject}/custom-providers", server.ListCustomProviders)
-		r.Post("/subjects/{subject}/custom-providers", server.CreateCustomProvider)
-		r.Get("/subjects/{subject}/custom-providers/{customProviderId}", server.GetCustomProvider)
-		r.Patch("/subjects/{subject}/custom-providers/{customProviderId}", server.UpdateCustomProvider)
-		r.Delete("/subjects/{subject}/custom-providers/{customProviderId}", server.DeleteCustomProvider)
-		r.Post("/subjects/{subject}/custom-providers/{customProviderId}/rotate-key", server.RotateCustomProviderKey)
 		r.Post("/custom-providers/{customProviderId}/activities:ingest", server.IngestCustomActivities)
 	})
 
@@ -316,7 +278,7 @@ func auditRequests(recorder handlers.AuditRecorder, sourceKey []byte, dependenci
 			// The timeout middleware below derives a child request. Install one
 			// shared actor holder on the outer request so the authenticated handler
 			// can publish its stable user ID to this middleware's outcome record.
-			*r = *r.WithContext(withGraphQLAuditActorHolder(handlers.WithAuditActorHolder(r.Context())))
+			*r = *r.WithContext(withGraphQLMutationAuditTargetHolder(withGraphQLAuditActorHolder(handlers.WithAuditActorHolder(r.Context()))))
 			targetType, mutation := mutationRequestTargetForRequest(r)
 			if mutation {
 				auditRequestID, err := operations.NewAuditEventID()
@@ -538,26 +500,8 @@ type mutationRoutePattern struct {
 
 var mutationRoutePatterns = map[string][]mutationRoutePattern{
 	stdhttp.MethodPost: {
-		{"/v1/auth/magic-link/request", "authentication"}, {"/v1/auth/magic-link/consume", "authentication"},
-		{"/v1/auth/passkey/register/options", "authentication"}, {"/v1/auth/passkey/register/finish", "authentication"},
-		{"/v1/auth/passkey/sign-in/options", "authentication"}, {"/v1/auth/passkey/sign-in/finish", "authentication"},
-		{"/v1/subjects", "subject"}, {"/v1/subjects/{subject}/provider-connections", "provider_connection"},
-		{"/v1/subjects/{subject}/provider-connections/{connectionId}/sync", "provider_connection"},
-		{"/v1/subjects/{subject}/custom-providers", "custom_provider"},
-		{"/v1/subjects/{subject}/custom-providers/{customProviderId}/rotate-key", "custom_provider"},
+		{"/v1/auth/magic-link/consume", "authentication"},
 		{"/v1/custom-providers/{customProviderId}/activities:ingest", "custom_provider"},
-	},
-	stdhttp.MethodPatch: {
-		{"/v1/me/settings", "subject"}, {"/v1/subjects/{subject}", "subject"},
-		{"/v1/subjects/{subject}/settings", "subject"},
-		{"/v1/subjects/{subject}/provider-connections/{connectionId}", "provider_connection"},
-		{"/v1/subjects/{subject}/custom-providers/{customProviderId}", "custom_provider"},
-	},
-	stdhttp.MethodDelete: {
-		{"/v1/auth/session", "authentication"}, {"/v1/auth/sessions", "authentication"},
-		{"/v1/auth/sessions/{sessionId}", "authentication"}, {"/v1/subjects/{subject}", "subject"},
-		{"/v1/subjects/{subject}/provider-connections/{connectionId}", "provider_connection"},
-		{"/v1/subjects/{subject}/custom-providers/{customProviderId}", "custom_provider"},
 	},
 	stdhttp.MethodGet: {{"/v1/integrations/{provider}/callback", "provider_connection"}},
 }
@@ -692,7 +636,11 @@ func httpRequestAuditEvent(sourceKey []byte, r *stdhttp.Request, status int) (op
 		actor = operations.AuditActor{Type: operations.AuditActorAnonymous}
 	}
 	target := operations.AuditTarget{Type: auditTargetType(pattern)}
-	if canonical, ok := handlers.AuditTargetFromContext(r.Context()); ok && canonical.ID != "" {
+	if pattern == "/graphql" {
+		if canonical, ok := graphQLMutationAuditTargetFromContext(r.Context()); ok && canonical.Type != "" && canonical.ID != "" {
+			target = canonical
+		}
+	} else if canonical, ok := handlers.AuditTargetFromContext(r.Context()); ok && canonical.ID != "" {
 		target = canonical
 	} else {
 		params := chi.RouteContext(r.Context()).URLParams.Values
@@ -735,14 +683,10 @@ func auditTargetType(pattern string) string {
 	switch {
 	case strings.Contains(pattern, "/auth/"):
 		return "authentication"
-	case strings.Contains(pattern, "provider-connections"):
+	case strings.Contains(pattern, "/integrations/"):
 		return "provider_connection"
 	case strings.Contains(pattern, "custom-providers"):
 		return "custom_provider"
-	case strings.Contains(pattern, "/subjects"):
-		return "subject"
-	case strings.Contains(pattern, "sync-jobs"):
-		return "sync_job"
 	case pattern == "/graphql":
 		return "graphql"
 	default:
@@ -827,7 +771,7 @@ func validRequestID(value string) bool {
 	return true
 }
 
-func cors(allowed []string) func(stdhttp.Handler) stdhttp.Handler {
+func cors(allowed []string, graphqlEnabled bool) func(stdhttp.Handler) stdhttp.Handler {
 	set := make(map[string]struct{}, len(allowed))
 	for _, origin := range allowed {
 		set[strings.TrimSpace(origin)] = struct{}{}
@@ -835,12 +779,17 @@ func cors(allowed []string) func(stdhttp.Handler) stdhttp.Handler {
 	return func(next stdhttp.Handler) stdhttp.Handler {
 		return stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 			origin := r.Header.Get("Origin")
-			if _, ok := set[origin]; ok && origin != "" {
+			method := r.Method
+			if method == stdhttp.MethodOptions {
+				method = r.Header.Get("Access-Control-Request-Method")
+			}
+			if _, ok := set[origin]; ok && origin != "" && method == corsAllowedMethod(r.URL.Path, graphqlEnabled) {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				w.Header().Set("Access-Control-Allow-Credentials", "true")
 				w.Header().Set("Vary", "Origin")
 				if r.Method == stdhttp.MethodOptions {
-					w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS")
+					w.Header().Add("Vary", "Access-Control-Request-Method")
+					w.Header().Set("Access-Control-Allow-Methods", method)
 					w.Header().Set("Access-Control-Allow-Headers", "Authorization,Content-Type,Idempotency-Key,X-Jandibat-Provider-Key")
 					w.WriteHeader(stdhttp.StatusNoContent)
 					return
@@ -848,6 +797,23 @@ func cors(allowed []string) func(stdhttp.Handler) stdhttp.Handler {
 			}
 			next.ServeHTTP(w, r)
 		})
+	}
+}
+
+func corsAllowedMethod(path string, graphqlEnabled bool) string {
+	switch {
+	case path == "/healthz":
+		return stdhttp.MethodGet
+	case path == "/graphql" && graphqlEnabled:
+		return stdhttp.MethodPost
+	case strings.HasPrefix(path, "/v1/render/") && strings.HasSuffix(path, ".svg") && len(path) > len("/v1/render/.svg") && !strings.Contains(strings.TrimSuffix(strings.TrimPrefix(path, "/v1/render/"), ".svg"), "/"):
+		return stdhttp.MethodGet
+	case path == "/v1/auth/magic-link/consume", matchRoutePath("/v1/custom-providers/{customProviderId}/activities:ingest", path):
+		return stdhttp.MethodPost
+	case matchRoutePath("/v1/integrations/{provider}/callback", path):
+		return stdhttp.MethodGet
+	default:
+		return ""
 	}
 }
 

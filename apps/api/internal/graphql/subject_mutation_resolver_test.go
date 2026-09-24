@@ -98,6 +98,109 @@ func mutationContext(port *subjectMutationPort, deletion *subjectDeletionPort) c
 	return ContextWithSubjectMutationServices(ContextWithVerifiedViewer(context.Background(), "owner"), SubjectMutationServices{Subjects: port, Deletions: deletion})
 }
 
+const (
+	auditOwnerID   = "11111111-1111-4111-8111-111111111111"
+	auditSubjectID = "22222222-2222-4222-8222-222222222222"
+)
+
+func mutationAuditContext(port *subjectMutationPort, deletion *subjectDeletionPort, targets *[]operations.AuditTarget) context.Context {
+	ctx := ContextWithSubjectMutationServices(ContextWithVerifiedViewer(context.Background(), auditOwnerID), SubjectMutationServices{Subjects: port, Deletions: deletion})
+	return ContextWithMutationAuditTargetPublisher(ctx, func(target operations.AuditTarget) {
+		*targets = append(*targets, target)
+	})
+}
+
+func auditSubjectFixture() subjects.Subject {
+	subject := mutationSubjectFixture()
+	subject.ID = auditSubjectID
+	subject.OwnerUserID = auditOwnerID
+	return subject
+}
+
+func TestSubjectMutationsPublishOnlyCanonicalSuccessfulTargets(t *testing.T) {
+	now := time.Date(2026, 9, 24, 1, 2, 3, 0, time.UTC)
+	settings := subjects.UserSettings{Locale: "ko-KR", Timezone: "UTC", Theme: subjects.ThemeSystem, UpdatedAt: now}
+	subjectSettings := subjects.SubjectSettings{SubjectID: auditSubjectID, Timezone: "UTC", IsPublic: true,
+		DefaultTheme: subjects.ThemeSystem, WeekStart: subjects.WeekStartSunday, SyncEnabled: true,
+		SyncIntervalMinutes: 60, FailurePolicy: subjects.FailureKeepStale, UpdatedAt: now}
+	for _, test := range []struct {
+		name     string
+		want     operations.AuditTarget
+		run      func(context.Context) error
+		deletion *subjectDeletionPort
+	}{
+		{name: "user settings", want: operations.AuditTarget{Type: "account", ID: auditOwnerID}, run: func(ctx context.Context) error {
+			_, err := resolveUpdateUserSettings(ctx, model.UpdateUserSettingsInput{})
+			return err
+		}},
+		{name: "create", want: operations.AuditTarget{Type: "subject", ID: auditSubjectID}, run: func(ctx context.Context) error {
+			_, err := resolveCreateSubject(ctx, model.CreateSubjectInput{Handle: "visible", Timezone: "UTC"})
+			return err
+		}},
+		{name: "update", want: operations.AuditTarget{Type: "subject", ID: auditSubjectID}, run: func(ctx context.Context) error {
+			_, err := resolveUpdateSubject(ctx, model.UpdateSubjectInput{ID: relayid.Encode(relayid.Subject, auditSubjectID)})
+			return err
+		}},
+		{name: "settings", want: operations.AuditTarget{Type: "subject", ID: auditSubjectID}, run: func(ctx context.Context) error {
+			_, err := resolveUpdateSubjectSettings(ctx, model.UpdateSubjectSettingsInput{SubjectID: relayid.Encode(relayid.Subject, auditSubjectID)})
+			return err
+		}},
+		{name: "deletion", want: operations.AuditTarget{Type: "subject", ID: auditSubjectID}, deletion: &subjectDeletionPort{result: operations.DeletionRequest{TargetType: operations.DeletionTargetSubject, TargetID: auditSubjectID, Status: operations.DeletionRequested}}, run: func(ctx context.Context) error {
+			_, err := resolveRequestSubjectDeletion(ctx, model.RequestSubjectDeletionInput{SubjectID: relayid.Encode(relayid.Subject, auditSubjectID)})
+			return err
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			port := &subjectMutationPort{subject: auditSubjectFixture(), userSettings: settings, subjectSettings: subjectSettings}
+			var targets []operations.AuditTarget
+			if err := test.run(mutationAuditContext(port, test.deletion, &targets)); err != nil {
+				t.Fatalf("mutation error: %v", err)
+			}
+			if len(targets) != 1 || targets[0] != test.want {
+				t.Fatalf("canonical targets = %#v, want %#v", targets, test.want)
+			}
+		})
+	}
+}
+
+func TestSubjectMutationsDoNotPublishUnverifiedOrFailedTargets(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		port     *subjectMutationPort
+		deletion *subjectDeletionPort
+		run      func(context.Context) error
+	}{
+		{name: "invalid relay ID", port: &subjectMutationPort{subject: auditSubjectFixture()}, run: func(ctx context.Context) error {
+			_, err := resolveUpdateSubject(ctx, model.UpdateSubjectInput{ID: "invalid"})
+			return err
+		}},
+		{name: "foreign result", port: &subjectMutationPort{subject: mutationSubjectFixture()}, run: func(ctx context.Context) error {
+			_, err := resolveUpdateSubject(ctx, model.UpdateSubjectInput{ID: relayid.Encode(relayid.Subject, auditSubjectID)})
+			return err
+		}},
+		{name: "denied deletion", port: &subjectMutationPort{err: subjects.ErrForbidden}, deletion: &subjectDeletionPort{}, run: func(ctx context.Context) error {
+			_, err := resolveRequestSubjectDeletion(ctx, model.RequestSubjectDeletionInput{SubjectID: relayid.Encode(relayid.Subject, auditSubjectID)})
+			return err
+		}},
+		{name: "deletion collision", port: &subjectMutationPort{subject: auditSubjectFixture()}, deletion: &subjectDeletionPort{err: operations.ErrInvalidDeletionRequest}, run: func(ctx context.Context) error {
+			_, err := resolveRequestSubjectDeletion(ctx, model.RequestSubjectDeletionInput{SubjectID: relayid.Encode(relayid.Subject, auditSubjectID)})
+			return err
+		}},
+		{name: "legal hold", port: &subjectMutationPort{subject: auditSubjectFixture()}, deletion: &subjectDeletionPort{err: operations.ErrLegalHoldActive}, run: func(ctx context.Context) error {
+			_, err := resolveRequestSubjectDeletion(ctx, model.RequestSubjectDeletionInput{SubjectID: relayid.Encode(relayid.Subject, auditSubjectID)})
+			return err
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var targets []operations.AuditTarget
+			_ = test.run(mutationAuditContext(test.port, test.deletion, &targets))
+			if len(targets) != 0 {
+				t.Fatalf("failed mutation published target: %#v", targets)
+			}
+		})
+	}
+}
+
 func TestSubjectMutationsRequireVerifiedViewerBeforeAnyPortCall(t *testing.T) {
 	for _, ctx := range []context.Context{context.Background(), ContextWithFailedAuthentication(context.Background())} {
 		port := &subjectMutationPort{}
@@ -206,8 +309,54 @@ func TestUpdateSubjectClearDisplayNameIsExplicitAndExclusive(t *testing.T) {
 func TestSubjectMutationRejectsWrongKindBeforeServiceCall(t *testing.T) {
 	port := &subjectMutationPort{}
 	payload, err := resolveUpdateSubject(mutationContext(port, nil), model.UpdateSubjectInput{ID: relayid.Encode(relayid.Session, "session-1")})
-	if err != nil || payload == nil || len(payload.Errors) != 1 || payload.Errors[0].Code != "BAD_USER_INPUT" || len(port.calls) != 0 {
+	if err != nil || payload == nil || len(payload.Errors) != 1 || payload.Errors[0].Code != "BAD_USER_INPUT" || payload.Errors[0].Field == nil || *payload.Errors[0].Field != "id" || len(port.calls) != 0 {
 		t.Fatalf("wrong-kind result = (%+v, %v), calls=%v", payload, err, port.calls)
+	}
+}
+
+func TestRequestSubjectDeletionRejectsInvalidIDOnSubjectIDFieldBeforeServiceCall(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		id   string
+	}{
+		{name: "wrong kind", id: relayid.Encode(relayid.Session, "session-1")},
+		{name: "malformed", id: "not-a-relay-id"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			port := &subjectMutationPort{subject: mutationSubjectFixture()}
+			deletion := &subjectDeletionPort{}
+			payload, err := resolveRequestSubjectDeletion(mutationContext(port, deletion), model.RequestSubjectDeletionInput{SubjectID: test.id})
+			if err != nil || payload == nil || payload.Request != nil || len(payload.Errors) != 1 || payload.Errors[0].Code != "BAD_USER_INPUT" || payload.Errors[0].Field == nil || *payload.Errors[0].Field != "subjectID" {
+				t.Fatalf("invalid ID result = (%+v, %v)", payload, err)
+			}
+			if len(port.calls) != 0 || deletion.calls != 0 {
+				t.Fatalf("ports called for invalid ID: subject=%v, workflow=%d", port.calls, deletion.calls)
+			}
+		})
+	}
+}
+
+func TestRequestSubjectDeletionHidesDeniedAndMissingWithoutEnqueue(t *testing.T) {
+	globalID := relayid.Encode(relayid.Subject, "private-subject")
+	var responses []string
+	for _, serviceErr := range []error{subjects.ErrForbidden, subjects.ErrNotFound} {
+		port := &subjectMutationPort{err: serviceErr}
+		deletion := &subjectDeletionPort{}
+		payload, err := resolveRequestSubjectDeletion(mutationContext(port, deletion), model.RequestSubjectDeletionInput{SubjectID: globalID})
+		if err != nil || payload == nil || payload.Request != nil || len(payload.Errors) != 1 || payload.Errors[0].Code != "NOT_FOUND" || payload.Errors[0].Field == nil || *payload.Errors[0].Field != "subjectID" {
+			t.Fatalf("denied/missing result = (%+v, %v)", payload, err)
+		}
+		if deletion.calls != 0 || len(port.calls) != 1 || port.calls[0] != "authorize-delete" {
+			t.Fatalf("unexpected ports on denied/missing target: subject=%v, workflow=%d", port.calls, deletion.calls)
+		}
+		encoded, err := json.Marshal(payload)
+		if err != nil || strings.Contains(string(encoded), "private-subject") {
+			t.Fatalf("unsafe response = %s, %v", encoded, err)
+		}
+		responses = append(responses, string(encoded))
+	}
+	if responses[0] != responses[1] {
+		t.Fatalf("denied/missing responses differ: %s vs %s", responses[0], responses[1])
 	}
 }
 
@@ -265,7 +414,46 @@ func TestRequestSubjectDeletionAuthorizesBeforeEnqueueAndRevalidatesResult(t *te
 	}
 	deletion.result.TargetID = "other-subject"
 	payload, err = resolveRequestSubjectDeletion(ctx, model.RequestSubjectDeletionInput{SubjectID: relayid.Encode(relayid.Subject, "subject-1")})
-	if payload != nil || !errors.Is(err, errNodeLookup) {
+	if err != nil || payload == nil || payload.Request != nil || len(payload.Errors) != 1 || payload.Errors[0].Code != "DELETION_REQUEST_CONFLICT" || payload.Errors[0].Field == nil || *payload.Errors[0].Field != "subjectID" {
 		t.Fatalf("mismatched durable request = (%+v, %v)", payload, err)
+	}
+}
+
+func TestRequestSubjectDeletionReturnsExistingSameTargetRequestID(t *testing.T) {
+	port := &subjectMutationPort{subject: mutationSubjectFixture()}
+	deletion := &subjectDeletionPort{result: operations.DeletionRequest{
+		RequestID: "existing-request-42", TargetType: operations.DeletionTargetSubject,
+		TargetID: "subject-1", Status: operations.DeletionRequested,
+	}}
+	payload, err := resolveRequestSubjectDeletion(mutationContext(port, deletion), model.RequestSubjectDeletionInput{SubjectID: relayid.Encode(relayid.Subject, "subject-1")})
+	if err != nil || payload == nil || len(payload.Errors) != 0 || payload.Request == nil || payload.Request.RequestID != "existing-request-42" || payload.Request.Status != string(operations.DeletionRequested) {
+		t.Fatalf("existing same-target result = (%+v, %v)", payload, err)
+	}
+	if deletion.calls != 1 || deletion.requestID == "" || deletion.targetType != operations.DeletionTargetSubject || deletion.targetID != "subject-1" {
+		t.Fatalf("workflow request = %+v", deletion)
+	}
+}
+
+func TestRequestSubjectDeletionMapsActiveLegalHoldToTypedConflict(t *testing.T) {
+	port := &subjectMutationPort{subject: mutationSubjectFixture()}
+	deletion := &subjectDeletionPort{err: operations.ErrLegalHoldActive}
+	payload, err := resolveRequestSubjectDeletion(mutationContext(port, deletion), model.RequestSubjectDeletionInput{SubjectID: relayid.Encode(relayid.Subject, "subject-1")})
+	if err != nil || payload == nil || payload.Request != nil || len(payload.Errors) != 1 || payload.Errors[0].Code != "LEGAL_HOLD_ACTIVE" || payload.Errors[0].Field == nil || *payload.Errors[0].Field != "subjectID" {
+		t.Fatalf("legal hold result = (%+v, %v)", payload, err)
+	}
+	if deletion.calls != 1 || len(port.calls) != 1 || port.calls[0] != "authorize-delete" {
+		t.Fatalf("unexpected deletion flow: subject calls=%v, workflow calls=%d", port.calls, deletion.calls)
+	}
+}
+
+func TestRequestSubjectDeletionMapsWorkflowRequestCollisionToTypedConflict(t *testing.T) {
+	port := &subjectMutationPort{subject: mutationSubjectFixture()}
+	deletion := &subjectDeletionPort{err: operations.ErrInvalidDeletionRequest}
+	payload, err := resolveRequestSubjectDeletion(mutationContext(port, deletion), model.RequestSubjectDeletionInput{SubjectID: relayid.Encode(relayid.Subject, "subject-1")})
+	if err != nil || payload == nil || payload.Request != nil || len(payload.Errors) != 1 || payload.Errors[0].Code != "DELETION_REQUEST_CONFLICT" || payload.Errors[0].Field == nil || *payload.Errors[0].Field != "subjectID" {
+		t.Fatalf("workflow collision result = (%+v, %v)", payload, err)
+	}
+	if deletion.calls != 1 || len(port.calls) != 1 || port.calls[0] != "authorize-delete" {
+		t.Fatalf("unexpected deletion flow: subject calls=%v, workflow calls=%d", port.calls, deletion.calls)
 	}
 }

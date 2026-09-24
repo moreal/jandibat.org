@@ -1,6 +1,13 @@
 # jandibat.org 프로젝트 계획
 
-> 이 문서는 제품 범위와 단계 정의를 설명합니다. 항목별 완료 상태와 재현 가능한 검증 명령은 [`DELIVERY_CHECKLIST.ko.md`](DELIVERY_CHECKLIST.ko.md)를 단일 진행 현황으로 사용합니다.
+> Phase 0~3 최초 구현의 역사적 범위·기술 방향입니다. 아래의 단일 OpenAPI 계약 설명은
+> 2026-09-22 현대화에서 대체됐습니다. 현재 완료 상태는
+> [`MODERNIZATION_BACKLOG.ko.md`](MODERNIZATION_BACKLOG.ko.md), 도메인 계약은
+> [`graphql/schema/`](../graphql/schema/)의 SDL, HTTP edge 계약은
+> [`openapi/jandibat.yaml`](../openapi/jandibat.yaml)을 참조하세요.
+
+> 이 문서는 초기 제품 범위와 Phase 0~3 단계 정의를 설명합니다. 해당 시기의 항목별 완료
+> 기록과 검증 명령은 [`DELIVERY_CHECKLIST.ko.md`](DELIVERY_CHECKLIST.ko.md)에 남아 있습니다.
 
 ## 1. 프로젝트 목표
 

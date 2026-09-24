@@ -196,13 +196,15 @@ func resolveConnectProvider(ctx context.Context, input model.ConnectProviderInpu
 		}
 		return &model.ConnectProviderPayload{Errors: validation}, nil
 	}
-	if connection.ID == "" || connection.SubjectID != subjectID || connection.Status == integrations.ConnectionRevoked {
+	parsedID, parseErr := uuid.Parse(connection.ID)
+	if parseErr != nil || parsedID.String() != connection.ID || connection.SubjectID != subjectID || connection.Status == integrations.ConnectionRevoked {
 		return nil, errNodeLookup
 	}
 	projected := projectProviderConnection(connection)
 	if projected.ID == "" {
 		return nil, errNodeLookup
 	}
+	PublishMutationAuditTarget(ctx, "provider_connection", connection.ID)
 	return &model.ConnectProviderPayload{Errors: []*model.MutationError{}, Connection: projected, AuthorizationURL: authorizationURL}, nil
 }
 
@@ -277,7 +279,12 @@ func resolveUpdateProviderConnection(ctx context.Context, input model.UpdateProv
 	if connection.ID != raw || connection.SubjectID != previous.SubjectID || connection.Status == integrations.ConnectionRevoked {
 		return nil, errNodeLookup
 	}
-	return &model.UpdateProviderConnectionPayload{Errors: []*model.MutationError{}, Connection: projectProviderConnection(connection)}, nil
+	projected := projectProviderConnection(connection)
+	if projected.ID == "" {
+		return nil, errNodeLookup
+	}
+	PublishMutationAuditTarget(ctx, "provider_connection", connection.ID)
+	return &model.UpdateProviderConnectionPayload{Errors: []*model.MutationError{}, Connection: projected}, nil
 }
 
 func resolveRevokeProviderConnection(ctx context.Context, input model.RevokeProviderConnectionInput) (*model.RevokeProviderConnectionPayload, error) {
@@ -307,6 +314,7 @@ func resolveRevokeProviderConnection(ctx context.Context, input model.RevokeProv
 	if revoked.ID != raw || revoked.Status != integrations.ConnectionRevoked {
 		return nil, errNodeLookup
 	}
+	PublishMutationAuditTarget(ctx, "provider_connection", revoked.ID)
 	return &model.RevokeProviderConnectionPayload{Errors: []*model.MutationError{}, RevokedConnectionID: &input.ID}, nil
 }
 
@@ -364,5 +372,6 @@ func resolveEnqueueManualSync(ctx context.Context, input model.EnqueueManualSync
 		return nil, errNodeLookup
 	}
 	projected := &model.SyncJob{ID: globalID, Status: string(job.Status), Attempt: job.Attempt, CreatedAt: scalar.DateTime(job.CreatedAt), UpdatedAt: scalar.DateTime(job.UpdatedAt)}
+	PublishMutationAuditTarget(ctx, "provider_connection", raw)
 	return &model.EnqueueManualSyncPayload{Errors: []*model.MutationError{}, Job: projected}, nil
 }

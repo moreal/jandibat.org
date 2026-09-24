@@ -35,12 +35,17 @@ func TestBuildApplicationDevelopmentUsesExplicitDependencies(t *testing.T) {
 	})
 
 	deps := app.dependencies
-	if deps.Timeline == nil || deps.Readiness == nil || deps.Audit == nil || deps.Catalog == nil || deps.Auth == nil || deps.Sessions == nil ||
+	if deps.Timeline == nil || deps.Readiness == nil || deps.Audit == nil || deps.Auth == nil || deps.Sessions == nil ||
 		deps.Connections == nil || deps.OAuthConnections == nil || deps.OAuthFlows == nil ||
-		deps.CustomProviders == nil || deps.Sync == nil ||
-		deps.SubjectAuthorizer == nil || deps.SubjectVisibility == nil || deps.SubjectResolver == nil || deps.Subjects == nil ||
+		deps.CustomProviders == nil ||
+		deps.SubjectAuthorizer == nil || deps.SubjectVisibility == nil || deps.SubjectResolver == nil ||
 		deps.RateLimiter == nil {
-		t.Fatalf("runtime dependencies are incomplete: %#v", deps)
+		t.Fatal("HTTP edge runtime dependencies are incomplete")
+	}
+	if app.graphql.NodeServices.ViewerUsers == nil || app.graphql.SubjectQueries.Pages == nil || app.graphql.SubjectMutations.Subjects == nil ||
+		app.graphql.IntegrationQueries.Connections == nil || app.graphql.ConnectionMutations.Sync == nil || app.graphql.SyncJobs == nil ||
+		app.graphql.AuthAccounts == nil || app.graphql.Passkeys == nil {
+		t.Fatal("GraphQL domain runtime dependencies are incomplete")
 	}
 	if app.scheduler == nil || app.oauth == nil {
 		t.Fatal("background scheduler and OAuth registry must be constructed")
@@ -139,8 +144,8 @@ func TestBuildApplicationDefaultsToAPIOnlyProcess(t *testing.T) {
 	if app.scheduler != nil || len(app.background) != 0 {
 		t.Fatalf("API-only runtime started background work: scheduler=%v background=%#v", app.scheduler, app.background)
 	}
-	if app.dependencies.Sync == nil || app.dependencies.Audit == nil {
-		t.Fatalf("API queue/audit dependencies missing: %#v", app.dependencies)
+	if app.graphql.SyncJobs == nil || app.dependencies.Audit == nil {
+		t.Fatal("API GraphQL sync and HTTP audit dependencies are missing")
 	}
 }
 

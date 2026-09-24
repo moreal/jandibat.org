@@ -2,6 +2,12 @@
 
 기준일: 2026-03-02
 
+> 2026-03 초기 구현의 역사적 백로그입니다. 체크 상태와 REST 경로는 당시의 기록으로
+> 유지하며 현행 완료 판정이나 신규 작업 계약으로 사용하지 않습니다. 현재 범위·진행 상태는
+> [`MODERNIZATION_BACKLOG.ko.md`](MODERNIZATION_BACKLOG.ko.md), API 계약은
+> [`graphql/schema/`](../graphql/schema/)의 SDL과
+> [`openapi/jandibat.yaml`](../openapi/jandibat.yaml)의 HTTP edge만 참조하세요.
+
 ## 상태 표기
 
 - `[x]`: 저장소에 구현과 검증 경로가 모두 존재함

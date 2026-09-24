@@ -529,51 +529,52 @@ func TestVerifyAuthenticationRejectsInvalidSecurityBindings(t *testing.T) {
 		response   func() json.RawMessage
 		wantErr    error
 		wantAlso   error
+		wantNot    error
 	}{
-		{name: "malformed session", session: func() json.RawMessage { return json.RawMessage(`{`) }, credential: func() auth.PasskeyCredential { return stored }, response: validResponse, wantErr: ErrInvalidSession},
-		{name: "challenge not bound to session", session: func() json.RawMessage { return options.Session }, credential: func() auth.PasskeyCredential { return stored }, response: validResponse, wantErr: ErrInvalidSession},
+		{name: "malformed session", session: func() json.RawMessage { return json.RawMessage(`{`) }, credential: func() auth.PasskeyCredential { return stored }, response: validResponse, wantErr: ErrInvalidSession, wantNot: auth.ErrPasskeyVerification},
+		{name: "challenge not bound to session", session: func() json.RawMessage { return options.Session }, credential: func() auth.PasskeyCredential { return stored }, response: validResponse, wantErr: ErrInvalidSession, wantNot: auth.ErrPasskeyVerification},
 		{name: "authentication user not bound to session", session: func() json.RawMessage {
 			var session lib.SessionData
 			decodeJSON(t, options.Session, &session)
 			session.UserID = []byte("other-user")
 			return marshalJSON(t, session)
-		}, credential: func() auth.PasskeyCredential { return stored }, response: validResponse, wantErr: ErrInvalidSession},
-		{name: "expired session", session: func() json.RawMessage { return expiredSession(t, options.Session) }, credential: func() auth.PasskeyCredential { return stored }, response: validResponse, wantErr: ErrVerification},
+		}, credential: func() auth.PasskeyCredential { return stored }, response: validResponse, wantErr: ErrInvalidSession, wantNot: auth.ErrPasskeyVerification},
+		{name: "expired session", session: func() json.RawMessage { return expiredSession(t, options.Session) }, credential: func() auth.PasskeyCredential { return stored }, response: validResponse, wantErr: ErrVerification, wantAlso: auth.ErrPasskeyVerification},
 		{name: "malformed credential record", session: func() json.RawMessage { return options.Session }, credential: func() auth.PasskeyCredential {
 			credential := stored
 			credential.VerifierCredential = json.RawMessage(`{`)
 			return credential
-		}, response: validResponse, wantErr: ErrInvalidCredential},
+		}, response: validResponse, wantErr: ErrInvalidCredential, wantNot: auth.ErrPasskeyVerification},
 		{name: "incomplete credential", session: func() json.RawMessage { return options.Session }, credential: func() auth.PasskeyCredential {
 			credential := stored
 			credential.UserID = ""
 			return credential
-		}, response: validResponse, wantErr: ErrInvalidInput},
-		{name: "malformed response", session: func() json.RawMessage { return options.Session }, credential: func() auth.PasskeyCredential { return stored }, response: func() json.RawMessage { return json.RawMessage(`{`) }, wantErr: ErrVerification},
+		}, response: validResponse, wantErr: ErrInvalidInput, wantNot: auth.ErrPasskeyVerification},
+		{name: "malformed response", session: func() json.RawMessage { return options.Session }, credential: func() auth.PasskeyCredential { return stored }, response: func() json.RawMessage { return json.RawMessage(`{`) }, wantErr: ErrVerification, wantAlso: auth.ErrPasskeyVerification},
 		{name: "response challenge mismatch", session: func() json.RawMessage { return options.Session }, credential: func() auth.PasskeyCredential { return stored }, response: func() json.RawMessage {
 			return authenticator.authenticationResponse(t, authenticationResponseConfig{challenge: testChallenge(10), origin: testOrigin, rpID: testRPID, signCount: 1, userHandle: []byte(user.ID)})
-		}, wantErr: ErrVerification},
+		}, wantErr: ErrVerification, wantAlso: auth.ErrPasskeyVerification},
 		{name: "origin outside exact allowlist", session: func() json.RawMessage { return options.Session }, credential: func() auth.PasskeyCredential { return stored }, response: func() json.RawMessage {
 			return authenticator.authenticationResponse(t, authenticationResponseConfig{challenge: challenge, origin: "https://login.example.com", rpID: testRPID, signCount: 1, userHandle: []byte(user.ID)})
-		}, wantErr: ErrVerification},
+		}, wantErr: ErrVerification, wantAlso: auth.ErrPasskeyVerification},
 		{name: "rp id hash mismatch", session: func() json.RawMessage { return options.Session }, credential: func() auth.PasskeyCredential { return stored }, response: func() json.RawMessage {
 			return authenticator.authenticationResponse(t, authenticationResponseConfig{challenge: challenge, origin: testOrigin, rpID: "other.example.com", signCount: 1, userHandle: []byte(user.ID)})
-		}, wantErr: ErrVerification},
+		}, wantErr: ErrVerification, wantAlso: auth.ErrPasskeyVerification},
 		{name: "user verification missing", session: func() json.RawMessage { return options.Session }, credential: func() auth.PasskeyCredential { return stored }, response: func() json.RawMessage {
 			return authenticator.authenticationResponse(t, authenticationResponseConfig{challenge: challenge, origin: testOrigin, rpID: testRPID, flags: byte(protocol.FlagUserPresent), signCount: 1, userHandle: []byte(user.ID)})
-		}, wantErr: ErrVerification},
+		}, wantErr: ErrVerification, wantAlso: auth.ErrPasskeyVerification},
 		{name: "user presence missing", session: func() json.RawMessage { return options.Session }, credential: func() auth.PasskeyCredential { return stored }, response: func() json.RawMessage {
 			return authenticator.authenticationResponse(t, authenticationResponseConfig{challenge: challenge, origin: testOrigin, rpID: testRPID, flags: byte(protocol.FlagUserVerified), signCount: 1, userHandle: []byte(user.ID)})
-		}, wantErr: ErrVerification},
+		}, wantErr: ErrVerification, wantAlso: auth.ErrPasskeyVerification},
 		{name: "signature invalid", session: func() json.RawMessage { return options.Session }, credential: func() auth.PasskeyCredential { return stored }, response: func() json.RawMessage {
 			return authenticator.authenticationResponse(t, authenticationResponseConfig{challenge: challenge, origin: testOrigin, rpID: testRPID, signCount: 1, userHandle: []byte(user.ID), corruptSignature: true})
-		}, wantErr: ErrVerification},
+		}, wantErr: ErrVerification, wantAlso: auth.ErrPasskeyVerification},
 		{name: "credential id mismatch", session: func() json.RawMessage { return options.Session }, credential: func() auth.PasskeyCredential { return stored }, response: func() json.RawMessage {
 			return authenticator.authenticationResponse(t, authenticationResponseConfig{challenge: challenge, origin: testOrigin, rpID: testRPID, signCount: 1, userHandle: []byte(user.ID), credentialID: []byte("different")})
-		}, wantErr: ErrVerification},
+		}, wantErr: ErrVerification, wantAlso: auth.ErrPasskeyVerification},
 		{name: "user handle mismatch", session: func() json.RawMessage { return options.Session }, credential: func() auth.PasskeyCredential { return stored }, response: func() json.RawMessage {
 			return authenticator.authenticationResponse(t, authenticationResponseConfig{challenge: challenge, origin: testOrigin, rpID: testRPID, signCount: 1, userHandle: []byte("other-user")})
-		}, wantErr: ErrVerification},
+		}, wantErr: ErrVerification, wantAlso: auth.ErrPasskeyVerification},
 		{name: "non advancing counter", session: func() json.RawMessage { return options.Session }, credential: func() auth.PasskeyCredential {
 			credential := stored
 			var record lib.Credential
@@ -582,7 +583,7 @@ func TestVerifyAuthenticationRejectsInvalidSecurityBindings(t *testing.T) {
 			credential.SignCount = 1
 			credential.VerifierCredential = marshalJSON(t, record)
 			return credential
-		}, response: validResponse, wantErr: ErrVerification, wantAlso: auth.ErrInvalidSignCount},
+		}, response: validResponse, wantErr: ErrVerification, wantAlso: auth.ErrInvalidSignCount, wantNot: auth.ErrPasskeyVerification},
 	}
 
 	//lint:ignore SA1012 The contract deliberately rejects a nil caller context.
@@ -606,6 +607,9 @@ func TestVerifyAuthenticationRejectsInvalidSecurityBindings(t *testing.T) {
 			}
 			if tt.wantAlso != nil && !errors.Is(err, tt.wantAlso) {
 				t.Fatalf("error = %v, also want %v", err, tt.wantAlso)
+			}
+			if tt.wantNot != nil && errors.Is(err, tt.wantNot) {
+				t.Fatalf("error = %v, must not be %v", err, tt.wantNot)
 			}
 		})
 	}
@@ -647,6 +651,9 @@ func TestDiscoverableAuthenticationRejectsMissingOrForeignIdentity(t *testing.T)
 			})
 			if !errors.Is(err, ErrVerification) {
 				t.Fatalf("error = %v, want ErrVerification", err)
+			}
+			if !errors.Is(err, auth.ErrPasskeyVerification) {
+				t.Fatalf("error = %v, want auth.ErrPasskeyVerification", err)
 			}
 		})
 	}

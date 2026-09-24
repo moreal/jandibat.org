@@ -15,6 +15,9 @@ const ingestProviderKey = process.env.LOAD_INGEST_PROVIDER_KEY;
 const requireIngest = process.env.LOAD_REQUIRE_INGEST === "true";
 const ingestEvents = positiveInteger("LOAD_INGEST_EVENTS_PER_REQUEST", 100);
 const startedAt = new Date();
+const activityDate = startedAt.toISOString().slice(0, 10);
+const activityFrom = new Date(startedAt.getTime() - 29 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+const activityQuery = "query LoadActivitySnapshot($subject: String!, $range: DateRangeInput!, $timezone: TimeZone!) { subject(handleOrID: $subject) { handle activitySnapshot(range: $range, timezone: $timezone) { revision generatedAt dataUpdatedAt total } } }";
 
 if (Boolean(ingestProviderID) !== Boolean(ingestProviderKey)) {
   throw new Error("LOAD_INGEST_PROVIDER_ID and LOAD_INGEST_PROVIDER_KEY must be provided together");
@@ -25,7 +28,7 @@ if (requireIngest && !ingestProviderID) {
 
 const targets = [
   target("health", "/healthz", "GET", "LOAD_HEALTH_RPS", 1, "LOAD_HEALTH_P95_MS", 100, "LOAD_HEALTH_P99_MS", 250),
-  target("activities", `/v1/activities/${encodeURIComponent(subject)}`, "GET", "LOAD_ACTIVITY_RPS", 50, "LOAD_ACTIVITY_P95_MS", 300, "LOAD_ACTIVITY_P99_MS", 800),
+  target("activities", "/graphql", "POST", "LOAD_ACTIVITY_RPS", 50, "LOAD_ACTIVITY_P95_MS", 300, "LOAD_ACTIVITY_P99_MS", 800),
   target("render", `/v1/render/${encodeURIComponent(subject)}.svg`, "GET", "LOAD_RENDER_RPS", 10, "LOAD_RENDER_P95_MS", 500, "LOAD_RENDER_P99_MS", 1200),
 ];
 if (ingestProviderID) {
@@ -106,7 +109,10 @@ async function issue(item, sequence) {
   const headers = { Accept: item.name === "render" ? "image/svg+xml" : "application/json" };
   if (authorization) headers.Authorization = authorization;
   let body;
-  if (item.name === "ingest") {
+  if (item.name === "activities") {
+    headers["Content-Type"] = "application/json";
+    body = JSON.stringify({ query: activityQuery, operationName: "LoadActivitySnapshot", variables: { subject, range: { from: activityFrom, to: activityDate }, timezone: "UTC" } });
+  } else if (item.name === "ingest") {
     headers["Content-Type"] = "application/json";
     headers["X-Jandibat-Provider-Key"] = ingestProviderKey;
     headers["Idempotency-Key"] = `load-${startedAt.getTime()}-${sequence}-${randomUUID()}`;
@@ -132,10 +138,22 @@ async function issue(item, sequence) {
     const responseBody = await response.text();
     observations.get(item.name).push(performance.now() - requestStarted);
     if (!response.ok) failures.push({ endpoint: item.name, status: response.status });
+    else if (item.name === "activities" && !validActivityResponse(responseBody)) failures.push({ endpoint: item.name, error: "invalid-graphql-response" });
     if (item.name === "ingest" && response.ok) recordIngestionResponse(responseBody);
   } catch (error) {
     observations.get(item.name).push(performance.now() - requestStarted);
     failures.push({ endpoint: item.name, error: error instanceof Error ? error.name : "unknown" });
+  }
+}
+
+function validActivityResponse(body) {
+  try {
+    const result = JSON.parse(body);
+    return !result.errors && result.data?.subject?.handle === subject &&
+      typeof result.data.subject.activitySnapshot?.revision === "string" && result.data.subject.activitySnapshot.revision.length > 0 &&
+      typeof result.data.subject.activitySnapshot.generatedAt === "string";
+  } catch {
+    return false;
   }
 }
 

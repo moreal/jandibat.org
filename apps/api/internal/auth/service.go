@@ -532,11 +532,17 @@ func (s *Service) CompletePasskeyLogin(ctx context.Context, ceremonyID string, c
 	now := s.now().UTC()
 	ceremony, err := s.repository.ConsumeCeremony(ctx, ceremonyID, CeremonyAuthentication, now)
 	if err != nil {
-		return SessionGrant{}, ErrInvalidCeremony
+		if errors.Is(err, ErrNotFound) || errors.Is(err, ErrConsumed) || errors.Is(err, ErrExpired) {
+			return SessionGrant{}, ErrInvalidCeremony
+		}
+		return SessionGrant{}, fmt.Errorf("consume passkey ceremony: %w", err)
 	}
 	credential, err := s.repository.GetCredentialByCredentialID(ctx, credentialID)
 	if err != nil {
-		return SessionGrant{}, ErrPasskeyVerification
+		if errors.Is(err, ErrNotFound) {
+			return SessionGrant{}, ErrPasskeyVerification
+		}
+		return SessionGrant{}, fmt.Errorf("load passkey credential: %w", err)
 	}
 	if ceremony.UserID != "" && ceremony.UserID != credential.UserID {
 		return SessionGrant{}, ErrPasskeyVerification
@@ -555,7 +561,10 @@ func (s *Service) CompletePasskeyLogin(ctx context.Context, ceremonyID string, c
 		if errors.Is(err, ErrInvalidSignCount) {
 			return SessionGrant{}, s.rejectSuspectedPasskeyClone(ctx, credential)
 		}
-		return SessionGrant{}, fmt.Errorf("%w: %v", ErrPasskeyVerification, err)
+		if errors.Is(err, ErrPasskeyVerification) {
+			return SessionGrant{}, ErrPasskeyVerification
+		}
+		return SessionGrant{}, fmt.Errorf("verify passkey assertion: %w", err)
 	}
 	if counterDidNotAdvance(credential.SignCount, verified.SignCount) {
 		return SessionGrant{}, s.rejectSuspectedPasskeyClone(ctx, credential)
@@ -590,7 +599,7 @@ func (s *Service) rejectSuspectedPasskeyClone(ctx context.Context, credential Pa
 		OccurredAt: s.now().UTC(),
 	})
 	if err != nil {
-		return errors.Join(rejection, fmt.Errorf("record suspected passkey clone: %w", err))
+		return fmt.Errorf("record suspected passkey clone: %w", err)
 	}
 	return rejection
 }

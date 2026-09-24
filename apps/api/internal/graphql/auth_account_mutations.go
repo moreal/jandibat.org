@@ -148,6 +148,7 @@ func resolveSignOut(ctx context.Context) (*model.SignOutPayload, error) {
 	if err := service.RevokeSessionByID(ctx, actor, currentID); err != nil {
 		return nil, redactCurrentSessionMutationError(err)
 	}
+	PublishMutationAuditTarget(ctx, "session", currentID)
 	// Once server-side revocation succeeds, the cookie is cleared even if a
 	// follow-up metadata lookup fails. A failed clear returns only a generic
 	// transport error; the session remains revoked.
@@ -200,6 +201,7 @@ func resolveRevokeSession(ctx context.Context, globalID string) (*model.RevokeSe
 		}
 		return nil, errNodeLookup
 	}
+	PublishMutationAuditTarget(ctx, "session", targetID)
 	if transport != nil && transport.ClearSessionCookie() != nil {
 		return nil, errNodeLookup
 	}

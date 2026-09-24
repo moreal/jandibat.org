@@ -1,9 +1,11 @@
 # SVG 임베드 가이드
 
-기준 계약: `openapi/jandibat.yaml` 1.1.0
+기준 계약: `openapi/jandibat.yaml`의 HTTP edge API
 대상 endpoint: `GET /v1/render/{subject}.svg`
 
 이 endpoint는 Markdown이나 HTML의 이미지 URL로 사용할 수 있는 self-contained SVG를 반환합니다. 아래의 `API_BASE_URL`은 실제 배포의 `PUBLIC_BASE_URL`로 바꿉니다. 저장소에는 운영 hostname이 고정되어 있지 않으므로 예시에서는 `https://api.example.com`을 사용합니다.
+
+정적 사이트에서 activity 데이터를 조회해 자체 결과물을 빌드하려면 [정적 GraphQL 소비자 가이드](GRAPHQL_STATIC_CONSUMER_GUIDE.ko.md)의 `ActivitySnapshot` query를 사용하세요. SVG render는 이미지 전달용 HTTP edge이며 GraphQL 도메인 조회의 대체 REST API가 아닙니다.
 
 ## URL 만들기
 

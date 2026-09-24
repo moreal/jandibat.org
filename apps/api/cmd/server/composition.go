@@ -214,7 +214,6 @@ func buildApplication(ctx context.Context, settings config.Config, logger *zap.L
 	if err != nil {
 		return nil, fmt.Errorf("runtime: construct custom-provider service: %w", err)
 	}
-	catalog := integrations.NewCatalogService(customPersistence)
 
 	syncRegistry, err := integrations.NewSyncRegistry()
 	if err != nil {
@@ -286,10 +285,6 @@ func buildApplication(ctx context.Context, settings config.Config, logger *zap.L
 	if stores.operations != nil {
 		mutationAudits = stores.operations
 	}
-	var httpSubjectDeletions handlers.SubjectDeletionWorkflow
-	if subjectDeletions != nil {
-		httpSubjectDeletions = subjectDeletions
-	}
 	app := &application{
 		graphql: graphDeps,
 		dependencies: apihttp.Dependencies{
@@ -299,7 +294,6 @@ func buildApplication(ctx context.Context, settings config.Config, logger *zap.L
 			Audit:             operational.audit,
 			MutationAudits:    mutationAudits,
 			AuditSourceKey:    append([]byte(nil), settings.SessionSigningKey...),
-			Catalog:           catalog,
 			Auth:              authService,
 			Sessions:          authService,
 			Connections:       connections,
@@ -308,12 +302,9 @@ func buildApplication(ctx context.Context, settings config.Config, logger *zap.L
 			OAuthWebURL:       settings.WebURL.String(),
 			AllowedRedirects:  allowedRedirects(settings.WebURL),
 			CustomProviders:   customProviders,
-			Sync:              syncService,
 			SubjectAuthorizer: subjectService,
 			SubjectVisibility: subjectService,
 			SubjectResolver:   subjectService,
-			Subjects:          subjectService,
-			SubjectDeletions:  httpSubjectDeletions,
 			AllowedOrigins:    []string{origin(settings.WebURL)},
 			SecureCookies:     settings.WebURL.Scheme == "https",
 			TrustProxyHeaders: settings.TrustProxyHeaders,

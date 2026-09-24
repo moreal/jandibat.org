@@ -15,7 +15,6 @@ import (
 	"github.com/moreal/jandibat.org/apps/api/internal/auth"
 	"github.com/moreal/jandibat.org/apps/api/internal/http/handlers"
 	"github.com/moreal/jandibat.org/apps/api/internal/operations"
-	"github.com/moreal/jandibat.org/apps/api/internal/subjects"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 )
@@ -31,9 +30,9 @@ func TestAuditMiddlewareRecordsIntentBeforeCorrelatedOutcome(t *testing.T) {
 	router := chi.NewRouter()
 	router.Use(middleware.RequestID)
 	router.Use(auditRequests(recorder, []byte(auditTestSourceKey)))
-	router.Delete("/v1/subjects/{subject}", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	router.Post("/v1/custom-providers/{customProviderId}/activities:ingest", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
 
-	request := httptest.NewRequest(http.MethodDelete, "/v1/subjects/thing-1", nil)
+	request := httptest.NewRequest(http.MethodPost, "/v1/custom-providers/thing-1/activities:ingest", nil)
 	request.Header.Set(middleware.RequestIDHeader, "request-correlation-1")
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
@@ -46,17 +45,17 @@ func TestAuditMiddlewareRecordsIntentBeforeCorrelatedOutcome(t *testing.T) {
 	}
 	intent, outcome := events[0], events[1]
 	if intent.Action != "http.mutation.intent" || intent.Actor != (operations.AuditActor{Type: operations.AuditActorAnonymous}) ||
-		intent.Target != (operations.AuditTarget{Type: "subject"}) || intent.Outcome != operations.AuditSucceeded {
+		intent.Target != (operations.AuditTarget{Type: "custom_provider"}) || intent.Outcome != operations.AuditSucceeded {
 		t.Fatalf("intent = %#v", intent)
 	}
-	if intent.Metadata["method"] != http.MethodDelete || intent.Metadata["phase"] != "intent" {
+	if intent.Metadata["method"] != http.MethodPost || intent.Metadata["phase"] != "intent" {
 		t.Fatalf("intent metadata = %#v", intent.Metadata)
 	}
 	if _, exists := intent.Metadata["path"]; exists {
 		t.Fatalf("intent metadata includes raw path: %#v", intent.Metadata)
 	}
-	if outcome.Action != "delete.v1.subjects.subject" || outcome.Actor != (operations.AuditActor{Type: operations.AuditActorAnonymous}) ||
-		outcome.Target != (operations.AuditTarget{Type: "subject", ID: "thing-1"}) || outcome.Outcome != operations.AuditSucceeded || outcome.Metadata["phase"] != "outcome" {
+	if outcome.Action != "post.v1.custom-providers.customProviderId.activities.ingest" || outcome.Actor != (operations.AuditActor{Type: operations.AuditActorAnonymous}) ||
+		outcome.Target != (operations.AuditTarget{Type: "custom_provider", ID: "thing-1"}) || outcome.Outcome != operations.AuditSucceeded || outcome.Metadata["phase"] != "outcome" {
 		t.Fatalf("outcome = %#v", outcome)
 	}
 	if intent.RequestID == "" || intent.RequestID == "request-correlation-1" || outcome.RequestID != intent.RequestID || intent.ID == outcome.ID {
@@ -77,10 +76,10 @@ func TestAuditMiddlewareDoesNotTrustInboundRequestIDForDurableCorrelation(t *tes
 	router := chi.NewRouter()
 	router.Use(middleware.RequestID)
 	router.Use(auditRequests(recorder, []byte(auditTestSourceKey)))
-	router.Patch("/v1/subjects/{subject}", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	router.Post("/v1/custom-providers/{customProviderId}/activities:ingest", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 
 	for range 2 {
-		request := httptest.NewRequest(http.MethodPatch, "/v1/subjects/thing-1", nil)
+		request := httptest.NewRequest(http.MethodPost, "/v1/custom-providers/thing-1/activities:ingest", nil)
 		request.Header.Set(middleware.RequestIDHeader, "attacker-reused-correlation")
 		response := httptest.NewRecorder()
 		router.ServeHTTP(response, request)
@@ -121,13 +120,13 @@ func TestAuditMiddlewareBuffersSuccessUntilAtomicOutboxCommit(t *testing.T) {
 			router := chi.NewRouter()
 			router.Use(middleware.RequestID)
 			router.Use(auditRequests(recorder, []byte(auditTestSourceKey), fakeMutationAuditCoordinator{transaction: transaction}))
-			router.Post("/v1/subjects", func(w http.ResponseWriter, _ *http.Request) {
+			router.Post("/v1/auth/magic-link/consume", func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Set-Cookie", "private=response")
 				w.WriteHeader(http.StatusCreated)
 				_, _ = w.Write([]byte(`{"secret":"response"}`))
 			})
 			response := httptest.NewRecorder()
-			router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/v1/subjects", nil))
+			router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/v1/auth/magic-link/consume", nil))
 			if response.Code != test.wantStatus {
 				t.Fatalf("status = %d body=%s", response.Code, response.Body.String())
 			}
@@ -151,14 +150,14 @@ func TestAuditMiddlewareCommitsIntentionalFailureMutationWithOutbox(t *testing.T
 	router := chi.NewRouter()
 	router.Use(middleware.RequestID)
 	router.Use(auditRequests(recorder, []byte(auditTestSourceKey), fakeMutationAuditCoordinator{transaction: transaction}))
-	router.Post("/v1/auth/passkey/register/finish", func(w http.ResponseWriter, r *http.Request) {
+	router.Post("/v1/auth/magic-link/consume", func(w http.ResponseWriter, r *http.Request) {
 		if !operations.MarkMutationFailureCommit(r.Context()) {
 			t.Fatal("failure commit marker was not installed")
 		}
 		writeFrameworkProblem(w, r, http.StatusUnauthorized, "Unauthorized", "unauthorized", "invalid passkey")
 	})
 	response := httptest.NewRecorder()
-	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/v1/auth/passkey/register/finish", nil))
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/v1/auth/magic-link/consume", nil))
 	if response.Code != http.StatusUnauthorized || transaction.commits != 1 || transaction.rollbacks != 1 || len(transaction.events) != 1 {
 		t.Fatalf("response=%d commits=%d deferred rollbacks=%d", response.Code, transaction.commits, transaction.rollbacks)
 	}
@@ -178,11 +177,11 @@ func TestAuditMiddlewareRollsBackUnmarkedFailureAndRecordsDirectOutcome(t *testi
 	router := chi.NewRouter()
 	router.Use(middleware.RequestID)
 	router.Use(auditRequests(recorder, []byte(auditTestSourceKey), fakeMutationAuditCoordinator{transaction: transaction}))
-	router.Post("/v1/auth/passkey/register/finish", func(w http.ResponseWriter, r *http.Request) {
+	router.Post("/v1/auth/magic-link/consume", func(w http.ResponseWriter, r *http.Request) {
 		writeFrameworkProblem(w, r, http.StatusInternalServerError, "Internal Server Error", "internal_error", "failed")
 	})
 	response := httptest.NewRecorder()
-	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/v1/auth/passkey/register/finish", nil))
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/v1/auth/magic-link/consume", nil))
 	if response.Code != http.StatusInternalServerError || transaction.commits != 0 || len(transaction.events) != 0 || transaction.rollbacks == 0 {
 		t.Fatalf("response=%d commits=%d enqueued=%d rollbacks=%d", response.Code, transaction.commits, len(transaction.events), transaction.rollbacks)
 	}
@@ -199,12 +198,12 @@ func TestAuditMiddlewarePreservesInactiveMarkedReplayFailure(t *testing.T) {
 	router := chi.NewRouter()
 	router.Use(middleware.RequestID)
 	router.Use(auditRequests(recorder, []byte(auditTestSourceKey), fakeMutationAuditCoordinator{transaction: transaction}))
-	router.Post("/v1/auth/passkey/sign-in/finish", func(w http.ResponseWriter, r *http.Request) {
+	router.Post("/v1/auth/magic-link/consume", func(w http.ResponseWriter, r *http.Request) {
 		operations.MarkMutationFailureCommit(r.Context())
 		writeFrameworkProblem(w, r, http.StatusUnauthorized, "Unauthorized", "unauthorized", "replayed ceremony")
 	})
 	response := httptest.NewRecorder()
-	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/v1/auth/passkey/sign-in/finish", nil))
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/v1/auth/magic-link/consume", nil))
 	if response.Code != http.StatusUnauthorized || transaction.commits != 0 || len(transaction.events) != 0 {
 		t.Fatalf("response=%d commits=%d enqueued=%d", response.Code, transaction.commits, len(transaction.events))
 	}
@@ -222,7 +221,7 @@ func TestAuditMiddlewareRollsBackActiveMutationWhenDeadlineExpires(t *testing.T)
 	router.Use(middleware.RequestID)
 	router.Use(timeoutProblems(5 * time.Millisecond))
 	router.Use(auditRequests(recorder, []byte(auditTestSourceKey), fakeMutationAuditCoordinator{transaction: transaction}))
-	router.Patch("/v1/subjects/{subject}", func(w http.ResponseWriter, r *http.Request) {
+	router.Post("/v1/custom-providers/{customProviderId}/activities:ingest", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Set-Cookie", "must-not-escape=secret")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"uncommitted":true}`))
@@ -230,7 +229,7 @@ func TestAuditMiddlewareRollsBackActiveMutationWhenDeadlineExpires(t *testing.T)
 	})
 
 	response := httptest.NewRecorder()
-	router.ServeHTTP(response, httptest.NewRequest(http.MethodPatch, "/v1/subjects/timeout-target", nil))
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/v1/custom-providers/timeout-target/activities:ingest", nil))
 	if response.Code != http.StatusServiceUnavailable || response.Header().Get("Retry-After") != "5" {
 		t.Fatalf("timeout response=%d headers=%v body=%s", response.Code, response.Header(), response.Body.String())
 	}
@@ -287,14 +286,10 @@ func (transaction *fakeMutationAuditTransaction) Rollback() error {
 	return nil
 }
 
-func TestNewRouterAuditOutcomeUsesAuthenticatedActorAcrossTimeoutMiddleware(t *testing.T) {
+func TestNewRouterAuditOutcomeUsesAuthenticatedActorForMagicLinkConsume(t *testing.T) {
 	const userID = "usr_018f-audit-actor"
 	sink := operations.NewMemoryAuditSink()
 	recorder, err := operations.NewAuditRecorder(sink)
-	if err != nil {
-		t.Fatal(err)
-	}
-	subjectService, err := subjects.NewService(subjects.NewMemoryRepository(), subjects.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,71 +297,21 @@ func TestNewRouterAuditOutcomeUsesAuthenticatedActorAcrossTimeoutMiddleware(t *t
 		ID: userID, PrimaryEmail: "actor@example.com", Status: auth.UserStatusActive,
 		CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
 	}}
-	router := NewRouter(Dependencies{
-		Auth: validAuth, Subjects: subjectService, Audit: recorder, AuditSourceKey: []byte(auditTestSourceKey),
-	})
-
-	tests := []struct {
-		name       string
-		method     string
-		path       string
-		body       string
-		authHeader string
-		wantStatus int
-		wantActor  operations.AuditActor
-	}{
-		{name: "authenticated patch", method: http.MethodPatch, path: "/v1/me/settings", body: `{"locale":"ko-KR"}`, authHeader: "Bearer session-token", wantStatus: http.StatusOK, wantActor: operations.AuditActor{Type: operations.AuditActorUser, ID: userID}},
-		{name: "authenticated delete", method: http.MethodDelete, path: "/v1/auth/session", authHeader: "Bearer session-token", wantStatus: http.StatusNoContent, wantActor: operations.AuditActor{Type: operations.AuditActorUser, ID: userID}},
-		{name: "anonymous", method: http.MethodPatch, path: "/v1/me/settings", body: `{"locale":"ko-KR"}`, wantStatus: http.StatusUnauthorized, wantActor: operations.AuditActor{Type: operations.AuditActorAnonymous}},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			request := httptest.NewRequest(test.method, test.path, strings.NewReader(test.body))
-			if test.body != "" {
-				request.Header.Set("Content-Type", "application/json")
-			}
-			if test.authHeader != "" {
-				request.Header.Set("Authorization", test.authHeader)
-			}
-			response := httptest.NewRecorder()
-			router.ServeHTTP(response, request)
-			if response.Code != test.wantStatus {
-				t.Fatalf("status = %d, want %d: %s", response.Code, test.wantStatus, response.Body.String())
-			}
-			events, err := sink.Events(context.Background())
-			if err != nil || len(events) < 2 {
-				t.Fatalf("events = %#v, error = %v", events, err)
-			}
-			intent, outcome := events[len(events)-2], events[len(events)-1]
-			if intent.Actor != (operations.AuditActor{Type: operations.AuditActorAnonymous}) {
-				t.Fatalf("pre-auth intent actor = %#v", intent.Actor)
-			}
-			if outcome.Actor != test.wantActor {
-				t.Fatalf("outcome actor = %#v, want %#v", outcome.Actor, test.wantActor)
-			}
-		})
-	}
-
-	failedSink := operations.NewMemoryAuditSink()
-	failedRecorder, err := operations.NewAuditRecorder(failedSink)
-	if err != nil {
-		t.Fatal(err)
-	}
-	failedRouter := NewRouter(Dependencies{
-		Auth: auditRouteAuth{err: auth.ErrInvalidSession}, Subjects: subjectService,
-		Audit: failedRecorder, AuditSourceKey: []byte(auditTestSourceKey),
-	})
-	request := httptest.NewRequest(http.MethodPatch, "/v1/me/settings", strings.NewReader(`{"locale":"ko-KR"}`))
-	request.Header.Set("Authorization", "Bearer invalid-session")
+	router := NewRouter(Dependencies{Auth: validAuth, Audit: recorder, AuditSourceKey: []byte(auditTestSourceKey)})
+	request := httptest.NewRequest(http.MethodPost, "/v1/auth/magic-link/consume", strings.NewReader(`{"token":"valid-token"}`))
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
-	failedRouter.ServeHTTP(response, request)
-	if response.Code != http.StatusUnauthorized {
-		t.Fatalf("failed auth status = %d: %s", response.Code, response.Body.String())
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
 	}
-	events, err := failedSink.Events(context.Background())
-	if err != nil || len(events) != 2 || events[1].Actor != (operations.AuditActor{Type: operations.AuditActorAnonymous}) {
-		t.Fatalf("failed auth events = %#v, error = %v", events, err)
+	events, err := sink.Events(context.Background())
+	if err != nil || len(events) != 2 {
+		t.Fatalf("events = %#v, error = %v", events, err)
+	}
+	if events[0].Actor != (operations.AuditActor{Type: operations.AuditActorAnonymous}) ||
+		events[1].Actor != (operations.AuditActor{Type: operations.AuditActorUser, ID: userID}) {
+		t.Fatalf("intent/outcome actors = %#v, %#v", events[0].Actor, events[1].Actor)
 	}
 }
 
@@ -377,9 +322,9 @@ func TestAuditMiddlewareSanitizesHostileOutcomeTargetForAllStatuses(t *testing.T
 		status     int
 		wantTarget string
 	}{
-		{name: "success credential", path: "/v1/subjects/Bearer%20target-secret", status: http.StatusOK, wantTarget: operations.RedactedValue},
-		{name: "bad request query secret", path: "/v1/subjects/subject%3Faccess_token%3Dtarget-secret", status: http.StatusBadRequest, wantTarget: operations.RedactedValue},
-		{name: "forbidden CRLF", path: "/v1/subjects/subject%0D%0Aforged", status: http.StatusForbidden, wantTarget: "subjectforged"},
+		{name: "success credential", path: "/v1/custom-providers/Bearer%20target-secret/activities:ingest", status: http.StatusOK, wantTarget: operations.RedactedValue},
+		{name: "bad request query secret", path: "/v1/custom-providers/subject%3Faccess_token%3Dtarget-secret/activities:ingest", status: http.StatusBadRequest, wantTarget: operations.RedactedValue},
+		{name: "forbidden CRLF", path: "/v1/custom-providers/subject%0D%0Aforged/activities:ingest", status: http.StatusForbidden, wantTarget: "subjectforged"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -391,9 +336,9 @@ func TestAuditMiddlewareSanitizesHostileOutcomeTargetForAllStatuses(t *testing.T
 			router := chi.NewRouter()
 			router.Use(middleware.RequestID)
 			router.Use(auditRequests(recorder, []byte(auditTestSourceKey)))
-			router.Patch("/v1/subjects/{subject}", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(test.status) })
+			router.Post("/v1/custom-providers/{customProviderId}/activities:ingest", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(test.status) })
 			response := httptest.NewRecorder()
-			router.ServeHTTP(response, httptest.NewRequest(http.MethodPatch, test.path, nil))
+			router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, test.path, nil))
 			if response.Code != test.status {
 				t.Fatalf("status = %d, want %d", response.Code, test.status)
 			}
@@ -420,7 +365,7 @@ type auditRouteAuth struct {
 
 func (auditRouteAuth) RequestMagicLink(context.Context, string, string) error { return nil }
 func (auditRouteAuth) CompleteMagicLink(context.Context, string, auth.SessionMetadata) (auth.SessionGrant, error) {
-	return auth.SessionGrant{}, nil
+	return auth.SessionGrant{Token: "session-token", SessionID: "session-id", UserID: "usr_018f-audit-actor", ExpiresAt: time.Now().Add(time.Hour)}, nil
 }
 func (service auditRouteAuth) AuthenticateSession(context.Context, string) (auth.User, error) {
 	if service.err != nil {
@@ -453,13 +398,13 @@ func TestAuditMiddlewareFailsClosedBeforeMutationWhenIntentSinkFails(t *testing.
 	router := chi.NewRouter()
 	router.Use(middleware.RequestID)
 	router.Use(auditRequests(recorder, []byte(auditTestSourceKey), zap.New(core)))
-	router.Delete("/v1/subjects/{subject}", func(w http.ResponseWriter, _ *http.Request) {
+	router.Post("/v1/custom-providers/{customProviderId}/activities:ingest", func(w http.ResponseWriter, _ *http.Request) {
 		handlerCalled = true
 		w.WriteHeader(http.StatusNoContent)
 	})
 
 	response := httptest.NewRecorder()
-	router.ServeHTTP(response, httptest.NewRequest(http.MethodDelete, "/v1/subjects/access_token=do-not-leak", nil))
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/v1/custom-providers/access_token=do-not-leak/activities:ingest", nil))
 	if handlerCalled {
 		t.Fatal("mutation handler was called after intent persistence failed")
 	}
@@ -515,7 +460,7 @@ func TestAuditMiddlewareLeavesDetectableIntentWhenOutcomeIsMissing(t *testing.T)
 	router := chi.NewRouter()
 	router.Use(middleware.RequestID)
 	router.Use(auditRequests(recorder, []byte(auditTestSourceKey)))
-	router.Post("/v1/subjects", func(http.ResponseWriter, *http.Request) { panic("simulated process interruption") })
+	router.Post("/v1/auth/magic-link/consume", func(http.ResponseWriter, *http.Request) { panic("simulated process interruption") })
 
 	func() {
 		defer func() {
@@ -523,7 +468,7 @@ func TestAuditMiddlewareLeavesDetectableIntentWhenOutcomeIsMissing(t *testing.T)
 				t.Fatal("handler did not panic")
 			}
 		}()
-		router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/v1/subjects", nil))
+		router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/v1/auth/magic-link/consume", nil))
 	}()
 
 	events, err := sink.Events(context.Background())
@@ -545,8 +490,10 @@ func TestMutationAuditClassificationIncludesOAuthCallback(t *testing.T) {
 		{http.MethodPut, "/anything", false},
 		{http.MethodPatch, "/anything", false},
 		{http.MethodDelete, "/anything", false},
-		{http.MethodPost, "/v1/subjects", true},
-		{http.MethodDelete, "/v1/subjects/subject-1", true},
+		{http.MethodPost, "/v1/auth/magic-link/consume", true},
+		{http.MethodPost, "/v1/custom-providers/provider-1/activities:ingest", true},
+		{http.MethodPost, "/v1/subjects", false},
+		{http.MethodDelete, "/v1/subjects/subject-1", false},
 		{http.MethodGet, "/v1/integrations/github/callback", true},
 		{http.MethodGet, "/v1/integrations/github/not-callback", false},
 		{http.MethodGet, "/v1/activities/public", false},
@@ -587,30 +534,9 @@ func TestMutationRouteRegistryHasExplicitAtomicOutboxInventory(t *testing.T) {
 		t.Fatal(err)
 	}
 	capabilities := map[route]string{
-		{http.MethodPost, "/v1/auth/magic-link/request"}:                                           "auth.SaveMagicLinkDeliveryIntent",
-		{http.MethodPost, "/v1/auth/magic-link/consume"}:                                           "auth.ConsumeMagicLink+SaveSession",
-		{http.MethodPost, "/v1/auth/passkey/register/options"}:                                     "auth.SaveCeremony",
-		{http.MethodPost, "/v1/auth/passkey/register/finish"}:                                      "auth.ConsumeCeremony+SaveCredential",
-		{http.MethodPost, "/v1/auth/passkey/sign-in/options"}:                                      "auth.SaveCeremony",
-		{http.MethodPost, "/v1/auth/passkey/sign-in/finish"}:                                       "auth.ConsumeCeremony+UseCredential+SaveSession",
-		{http.MethodPost, "/v1/subjects"}:                                                          "subjects.ClaimOrCreateSubject",
-		{http.MethodPost, "/v1/subjects/{subject}/provider-connections"}:                           "integrations.SaveConnection",
-		{http.MethodPost, "/v1/subjects/{subject}/provider-connections/{connectionId}/sync"}:       "integrations.SaveSyncJob",
-		{http.MethodPost, "/v1/subjects/{subject}/custom-providers"}:                               "integrations.CreateCustomProvider",
-		{http.MethodPost, "/v1/subjects/{subject}/custom-providers/{customProviderId}/rotate-key"}: "integrations.UpdateCustomProvider",
-		{http.MethodPost, "/v1/custom-providers/{customProviderId}/activities:ingest"}:             "integrations.SaveIngestedActivities",
-		{http.MethodPatch, "/v1/me/settings"}:                                                      "subjects.SaveUserSettings",
-		{http.MethodPatch, "/v1/subjects/{subject}"}:                                               "subjects.SaveSubject",
-		{http.MethodPatch, "/v1/subjects/{subject}/settings"}:                                      "subjects.SaveSubjectSettings",
-		{http.MethodPatch, "/v1/subjects/{subject}/provider-connections/{connectionId}"}:           "integrations.SaveConnection",
-		{http.MethodPatch, "/v1/subjects/{subject}/custom-providers/{customProviderId}"}:           "integrations.UpdateCustomProvider",
-		{http.MethodDelete, "/v1/auth/session"}:                                                    "auth.RevokeSession",
-		{http.MethodDelete, "/v1/auth/sessions"}:                                                   "auth.RevokeOtherSessions",
-		{http.MethodDelete, "/v1/auth/sessions/{sessionId}"}:                                       "auth.RevokeSessionByID",
-		{http.MethodDelete, "/v1/subjects/{subject}"}:                                              "operations.EnqueueDeletion",
-		{http.MethodDelete, "/v1/subjects/{subject}/provider-connections/{connectionId}"}:          "integrations.RevokeConnectionAggregate",
-		{http.MethodDelete, "/v1/subjects/{subject}/custom-providers/{customProviderId}"}:          "integrations.DeleteCustomProviderAggregate",
-		{http.MethodGet, "/v1/integrations/{provider}/callback"}:                                   "integrations.SaveConnection (OAuth state is preflight)",
+		{http.MethodPost, "/v1/auth/magic-link/consume"}:                               "auth.ConsumeMagicLink+SaveSession",
+		{http.MethodPost, "/v1/custom-providers/{customProviderId}/activities:ingest"}: "integrations.SaveIngestedActivities",
+		{http.MethodGet, "/v1/integrations/{provider}/callback"}:                       "integrations.SaveConnection (OAuth state is preflight)",
 	}
 	registered := 0
 	for method, patterns := range mutationRoutePatterns {
@@ -626,7 +552,7 @@ func TestMutationRouteRegistryHasExplicitAtomicOutboxInventory(t *testing.T) {
 			delete(capabilities, key)
 		}
 	}
-	if registered != 24 || len(capabilities) != 0 {
+	if registered != 3 || len(capabilities) != 0 {
 		t.Fatalf("mutation registry=%d unmatched capabilities=%v", registered, capabilities)
 	}
 }
@@ -641,7 +567,7 @@ func TestAuditMiddlewareSkipsUnknownMutationsAndCapsIntentWrites(t *testing.T) {
 	router := chi.NewRouter()
 	router.Use(middleware.RequestID)
 	router.Use(auditRequests(recorder, []byte(auditTestSourceKey), limiter))
-	router.Post("/v1/subjects", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusCreated) })
+	router.Post("/v1/auth/magic-link/consume", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusCreated) })
 
 	unknown := httptest.NewRecorder()
 	router.ServeHTTP(unknown, httptest.NewRequest(http.MethodPost, "/not-a-contract-route", nil))
@@ -663,9 +589,9 @@ func TestAuditMiddlewareSkipsUnknownMutationsAndCapsIntentWrites(t *testing.T) {
 	}
 
 	first := httptest.NewRecorder()
-	router.ServeHTTP(first, httptest.NewRequest(http.MethodPost, "/v1/subjects", nil))
+	router.ServeHTTP(first, httptest.NewRequest(http.MethodPost, "/v1/auth/magic-link/consume", nil))
 	second := httptest.NewRecorder()
-	router.ServeHTTP(second, httptest.NewRequest(http.MethodPost, "/v1/subjects", nil))
+	router.ServeHTTP(second, httptest.NewRequest(http.MethodPost, "/v1/auth/magic-link/consume", nil))
 	events, _ := sink.Events(context.Background())
 	if first.Code != http.StatusCreated || second.Code != http.StatusTooManyRequests || second.Header().Get("Retry-After") != "60" || len(events) != 2 {
 		t.Fatalf("responses=%d/%d retry=%q events=%d", first.Code, second.Code, second.Header().Get("Retry-After"), len(events))

@@ -13,6 +13,7 @@ import (
 	"github.com/moreal/jandibat.org/apps/api/internal/graphql/model"
 	"github.com/moreal/jandibat.org/apps/api/internal/graphql/relayid"
 	"github.com/moreal/jandibat.org/apps/api/internal/integrations"
+	"github.com/moreal/jandibat.org/apps/api/internal/operations"
 )
 
 const customMutationID = "550e8400-e29b-41d4-a716-446655440404"
@@ -23,6 +24,7 @@ type customMutationPort struct {
 	updated                          integrations.UpdateCustomProviderInput
 	rotatedID, rotatedKey, deletedID string
 	err                              error
+	writeErr                         error
 	calls                            []string
 }
 
@@ -42,16 +44,25 @@ func (p *customMutationPort) Get(_ context.Context, id string) (integrations.Cus
 func (p *customMutationPort) Update(_ context.Context, input integrations.UpdateCustomProviderInput) (integrations.CustomProvider, error) {
 	p.calls = append(p.calls, "update")
 	p.updated = input
+	if p.writeErr != nil {
+		return integrations.CustomProvider{}, p.writeErr
+	}
 	return p.provider, p.err
 }
 func (p *customMutationPort) RotateIngestSecret(_ context.Context, id, key string) error {
 	p.calls = append(p.calls, "rotate")
 	p.rotatedID, p.rotatedKey = id, key
+	if p.writeErr != nil {
+		return p.writeErr
+	}
 	return p.err
 }
 func (p *customMutationPort) Delete(_ context.Context, id string) error {
 	p.calls = append(p.calls, "delete")
 	p.deletedID = id
+	if p.writeErr != nil {
+		return p.writeErr
+	}
 	return p.err
 }
 
@@ -274,5 +285,119 @@ func TestUpdateCustomProviderRejectsNoOpBeforeAnyPortCall(t *testing.T) {
 		if err != nil || got == nil || got.Provider != nil || len(got.Errors) != 1 || got.Errors[0].Code != "BAD_USER_INPUT" || len(p.calls) != 0 {
 			t.Fatalf("no-op update = (%#v, %v), calls=%v", got, err, p.calls)
 		}
+	}
+}
+
+func TestCustomProviderMutationsPublishOwnedRawUUIDOnlyAfterSuccess(t *testing.T) {
+	id := relayid.Encode(relayid.CustomProvider, customMutationID)
+	for _, test := range []struct {
+		name string
+		run  func(context.Context) error
+	}{
+		{"create", func(ctx context.Context) error {
+			payload, err := resolveCreateCustomProvider(ctx, model.CreateCustomProviderInput{SubjectID: relayid.Encode(relayid.Subject, "subject-1"), Slug: "manual", Name: "Manual"})
+			if err == nil && (payload == nil || len(payload.Errors) != 0 || payload.Provider == nil || payload.IngestionKey == nil) {
+				return errors.New("create did not succeed")
+			}
+			return err
+		}},
+		{"update", func(ctx context.Context) error {
+			payload, err := resolveUpdateCustomProvider(ctx, model.UpdateCustomProviderInput{ID: id, Name: stringPtr("Renamed")})
+			if err == nil && (payload == nil || len(payload.Errors) != 0 || payload.Provider == nil) {
+				return errors.New("update did not succeed")
+			}
+			return err
+		}},
+		{"rotate", func(ctx context.Context) error {
+			payload, err := resolveRotateCustomProviderKey(ctx, model.RotateCustomProviderKeyInput{ID: id})
+			if err == nil && (payload == nil || len(payload.Errors) != 0 || payload.IngestionKey == nil) {
+				return errors.New("rotate did not succeed")
+			}
+			return err
+		}},
+		{"delete", func(ctx context.Context) error {
+			payload, err := resolveDeleteCustomProvider(ctx, model.DeleteCustomProviderInput{ID: id})
+			if err == nil && (payload == nil || len(payload.Errors) != 0 || payload.DeletedProviderID == nil) {
+				return errors.New("delete did not succeed")
+			}
+			return err
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			port := &customMutationPort{provider: customMutationFixture()}
+			ctx := ContextWithCustomProviderMutationServices(customMutationContext(port, true), CustomProviderMutationServices{Providers: port, KeyReader: strings.NewReader(strings.Repeat("x", 32))})
+			var targets []operations.AuditTarget
+			ctx = ContextWithMutationAuditTargetPublisher(ctx, func(target operations.AuditTarget) { targets = append(targets, target) })
+			if err := test.run(ctx); err != nil {
+				t.Fatalf("mutation error = %v", err)
+			}
+			if len(targets) != 1 || targets[0] != (operations.AuditTarget{Type: "custom_provider", ID: customMutationID}) {
+				t.Fatalf("canonical audit targets = %#v", targets)
+			}
+		})
+	}
+}
+
+func TestCustomProviderMutationsNeverPublishUnverifiedOrFailedTarget(t *testing.T) {
+	id := relayid.Encode(relayid.CustomProvider, customMutationID)
+	for _, test := range []struct {
+		name     string
+		owned    bool
+		err      error
+		writeErr error
+		run      func(context.Context) error
+	}{
+		{"foreign create", false, nil, nil, func(ctx context.Context) error {
+			_, err := resolveCreateCustomProvider(ctx, model.CreateCustomProviderInput{SubjectID: relayid.Encode(relayid.Subject, "subject-1"), Slug: "manual", Name: "Manual"})
+			return err
+		}},
+		{"foreign update", false, nil, nil, func(ctx context.Context) error {
+			_, err := resolveUpdateCustomProvider(ctx, model.UpdateCustomProviderInput{ID: id, Name: stringPtr("Renamed")})
+			return err
+		}},
+		{"foreign rotate", false, nil, nil, func(ctx context.Context) error {
+			_, err := resolveRotateCustomProviderKey(ctx, model.RotateCustomProviderKeyInput{ID: id})
+			return err
+		}},
+		{"foreign delete", false, nil, nil, func(ctx context.Context) error {
+			_, err := resolveDeleteCustomProvider(ctx, model.DeleteCustomProviderInput{ID: id})
+			return err
+		}},
+		{"invalid ID", true, nil, nil, func(ctx context.Context) error {
+			_, err := resolveDeleteCustomProvider(ctx, model.DeleteCustomProviderInput{ID: "not-a-relay-id"})
+			return err
+		}},
+		{"failed create", true, integrations.ErrConflict, nil, func(ctx context.Context) error {
+			_, err := resolveCreateCustomProvider(ctx, model.CreateCustomProviderInput{SubjectID: relayid.Encode(relayid.Subject, "subject-1"), Slug: "manual", Name: "Manual"})
+			return err
+		}},
+		{"failed update", true, nil, integrations.ErrConflict, func(ctx context.Context) error {
+			_, err := resolveUpdateCustomProvider(ctx, model.UpdateCustomProviderInput{ID: id, Name: stringPtr("Renamed")})
+			return err
+		}},
+		{"failed rotate", true, nil, integrations.ErrConflict, func(ctx context.Context) error {
+			_, err := resolveRotateCustomProviderKey(ctx, model.RotateCustomProviderKeyInput{ID: id})
+			return err
+		}},
+		{"failed delete", true, nil, integrations.ErrConflict, func(ctx context.Context) error {
+			_, err := resolveDeleteCustomProvider(ctx, model.DeleteCustomProviderInput{ID: id})
+			return err
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			port := &customMutationPort{provider: customMutationFixture(), err: test.err, writeErr: test.writeErr}
+			ctx := customMutationContext(port, test.owned)
+			var targets []operations.AuditTarget
+			ctx = ContextWithMutationAuditTargetPublisher(ctx, func(target operations.AuditTarget) { targets = append(targets, target) })
+			if err := test.run(ctx); err != nil {
+				t.Fatalf("unexpected mutation error = %v", err)
+			}
+			if test.writeErr != nil && len(port.calls) != 2 {
+				t.Fatalf("write failure did not reach owned provider write: calls=%v", port.calls)
+			}
+			if len(targets) != 0 {
+				t.Fatalf("unverified or failed mutation published targets = %#v", targets)
+			}
+		})
 	}
 }

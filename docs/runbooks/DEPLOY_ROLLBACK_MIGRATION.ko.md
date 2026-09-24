@@ -136,7 +136,7 @@ make deploy-staging
 3. migration 직후 기존 API image로 5분 smoke해 backward compatibility 확인.
 4. 새 API image 1 instance/canary 배포, 10분 관찰.
 5. API 100% 전환 후 새 Web image 배포.
-6. synthetic smoke와 OpenAPI contract test.
+6. synthetic smoke와 GraphQL SDL domain contract/OpenAPI HTTP edge contract test.
 7. 30분 Phase 3 load test와 지정 fault/security subset.
 8. rollback rehearsal로 직전 API/Web image를 배포했다가 다시 candidate로 복귀.
 9. evidence와 승인 기록 후에만 production promotion 가능.
@@ -145,9 +145,12 @@ make deploy-staging
 
 ```sh
 curl --fail --silent "$STAGING_BASE_URL/healthz"
-curl --fail --silent \
-  "$STAGING_BASE_URL/v1/activities/$STAGING_FIXTURE_SUBJECT" \
-  | jq -e '.subject == env.STAGING_FIXTURE_SUBJECT'
+jq -n --arg subject "$STAGING_FIXTURE_SUBJECT" --arg day "$(date -u +%Y-%m-%d)" \
+  '{query:"query StagingSnapshot($subject:String!,$range:DateRangeInput!,$timezone:TimeZone!){subject(handleOrID:$subject){handle activitySnapshot(range:$range,timezone:$timezone){revision generatedAt dataUpdatedAt}}}",operationName:"StagingSnapshot",variables:{subject:$subject,range:{from:$day,to:$day},timezone:"UTC"}}' \
+  | curl --fail --silent --show-error --request POST \
+      --header 'Content-Type: application/json' --data-binary @- "$STAGING_BASE_URL/graphql" \
+  | jq -e --arg subject "$STAGING_FIXTURE_SUBJECT" \
+      '(.errors == null) and (.data.subject.handle == $subject) and (.data.subject.activitySnapshot.revision | type == "string" and length > 0)'
 curl --fail --silent \
   "$STAGING_BASE_URL/v1/render/$STAGING_FIXTURE_SUBJECT.svg" \
   | xmllint --noout -

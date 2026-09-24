@@ -1,6 +1,8 @@
 #!/bin/sh
 set -eu
 
+sh scripts/test-openapi-edge-contract.sh
+
 generated_file="apps/web/src/generated/api.ts"
 temporary_file="$(mktemp)"
 trap 'rm -f "$temporary_file"' EXIT HUP INT TERM

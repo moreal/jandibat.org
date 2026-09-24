@@ -1,24 +1,24 @@
 # Custom Provider SDK 가이드
 
-기준 계약: `openapi/jandibat.yaml` 1.1.0
+기준 계약: provider 관리·조회는 [`graphql/schema/`](../graphql/schema/)의 GraphQL SDL,
+activity ingest는 [`openapi/jandibat.yaml`](../openapi/jandibat.yaml)의 HTTP edge입니다.
 
 Custom provider는 외부 시스템이 정규화한 activity event를 jandibat API로 밀어 넣는 push-only 통합입니다. API가 고객 endpoint, webhook URL, feed URL을 받아 다시 호출하는 pull/callback 방식이 아닙니다.
 
 ## 1. Provider 생성과 key 보관
 
-생성 endpoint는 subject owner의 user session이 필요합니다.
-
-```http
-POST /v1/subjects/{subject}/custom-providers
-Authorization: Bearer <opaque-user-session-token>
-Content-Type: application/json
-```
+생성은 subject owner의 session이 필요한 GraphQL mutation입니다. `POST /graphql`에 이름 있는
+operation을 보내고, 브라우저에서는 HttpOnly session cookie를 사용합니다. 아래 curl 예시는
+이미 인증된 session의 비공개 cookie jar 경로를 사용합니다. `subjectID`는 raw handle이 아닌
+`Subject.id` Relay ID입니다. `subject(handleOrID:) { id }`로 조회할 수 있습니다.
+Cookie 인증 POST는 CSRF 검사도 통과해야 하므로, `Origin`은 서버에 허용된 웹 origin과
+scheme·host·port까지 정확히 일치해야 합니다. 임의 origin이나 `Origin` 생략은 403입니다.
 
 생성 body 제한은 다음과 같습니다.
 
 | field | 필수 | 제한 |
 | --- | --- | --- |
-| `key` | 예 | 1~64자, `^[a-z0-9][a-z0-9_-]*$` |
+| `slug` | 예 | 1~64자, `^[a-z0-9][a-z0-9_-]*$` |
 | `name` | 예 | 1~100자 |
 | `description` | 아니요 | 최대 500자 |
 | `allowedActions` | 아니요 | 중복 없는 문자열 최대 100개, 각 1~64자 |
@@ -27,54 +27,69 @@ Content-Type: application/json
 
 ```sh
 API_BASE_URL=https://api.example.com
-SUBJECT=alice
-SESSION_TOKEN='secret-from-your-session-store'
-
+ALLOWED_ORIGIN=https://app.example.com
+COOKIE_JAR=/path/to/private-session-cookie-jar
+SUBJECT_RELAY_ID='opaque-Subject.id-from-owner-query'
 umask 077
-curl --fail-with-body \
-  --request POST \
-  --url "$API_BASE_URL/v1/subjects/$SUBJECT/custom-providers" \
-  --header "Authorization: Bearer $SESSION_TOKEN" \
+RESPONSE_FILE=$(mktemp)
+
+jq -nc --arg subjectID "$SUBJECT_RELAY_ID" '{
+  operationName: "CreateCustomProvider",
+  query: "mutation CreateCustomProvider($input: CreateCustomProviderInput!) { createCustomProvider(input: $input) { errors { code message field } provider { id ingestProviderID slug name allowedActions } ingestionKey } }",
+  variables: {input: {subjectID: $subjectID, slug: "build_agent", name: "Build Agent", description: "CI build completions", allowedActions: ["build_succeeded", "build_failed"]}}
+}' | curl --fail-with-body --silent --show-error \
+  --request POST --url "$API_BASE_URL/graphql" \
+  --cookie "$COOKIE_JAR" --header "Origin: $ALLOWED_ORIGIN" \
   --header 'Content-Type: application/json' \
-  --data '{
-    "key": "build_agent",
-    "name": "Build Agent",
-    "description": "CI build completions",
-    "allowedActions": ["build_succeeded", "build_failed"]
-  }' \
-  --output custom-provider-created.json
+  --data-binary @- --output "$RESPONSE_FILE"
+
+jq -e '.errors == null and (.data.createCustomProvider.errors | length == 0) and (.data.createCustomProvider.ingestionKey | type == "string")' "$RESPONSE_FILE" >/dev/null
+CUSTOM_PROVIDER_RELAY_ID=$(jq -er '.data.createCustomProvider.provider.id' "$RESPONSE_FILE")
+CUSTOM_PROVIDER_ID=$(jq -er '.data.createCustomProvider.provider.ingestProviderID' "$RESPONSE_FILE")
 ```
 
-성공 시 `201 Created`, `Location`, `X-Request-ID`와 다음 형태의 body를 반환합니다.
+HTTP 성공 여부와 별개로 GraphQL 최상위 `errors` 및
+`data.createCustomProvider.errors`를 확인해야 합니다. `provider.id`는 변경·회전 mutation에
+사용하는 opaque Relay ID이고, `provider.ingestProviderID`는 HTTP ingest 경로와 SDK에만
+사용하는 raw UUID입니다. 둘을 바꿔 넣으면 안 됩니다.
 
-```json
-{
-  "provider": {
-    "id": "00000000-0000-4000-8000-000000000000",
-    "subjectId": "subject-id",
-    "environmentId": "custom:build_agent",
-    "key": "build_agent",
-    "name": "Build Agent",
-    "description": "CI build completions",
-    "status": "active",
-    "allowedActions": ["build_succeeded", "build_failed"],
-    "createdAt": "2026-08-12T00:00:00Z",
-    "updatedAt": "2026-08-12T00:00:00Z"
-  },
-  "ingestionKey": "returned-only-once"
+현재 `ingestionKey`는 cryptographic random 32바이트를 padding 없는 base64url로 인코딩한 값입니다. 평문은 생성 응답에서 한 번만 반환됩니다. 위 `RESPONSE_FILE`은 권한을 제한한 임시 파일이며, 내용을 stdout, CI artifact, application log, trace 또는 Relay normalized store에 남기지 말고 즉시 접근이 제한된 secret manager로 옮긴 뒤 파일을 제거합니다. 서버는 key의 SHA-256 digest만 저장하며 기존 평문을 다시 조회하는 GraphQL field는 없습니다.
+
+분실 또는 유출 시 owner 전용 GraphQL mutation으로 교체합니다. 여기에도 `provider.id`
+Relay ID를 사용하고 새 일회용 key 응답에 위와 같은 취급을 적용합니다.
+
+```graphql
+mutation RotateCustomProviderKey($input: RotateCustomProviderKeyInput!) {
+  rotateCustomProviderKey(input: $input) {
+    errors { code message field }
+    ingestionKey
+    createdAt
+  }
 }
 ```
 
-현재 `ingestionKey`는 cryptographic random 32바이트를 padding 없는 base64url로 인코딩한 값입니다. 평문은 생성 응답에서 한 번만 반환됩니다. 응답 파일을 stdout, CI artifact, application log, trace에 남기지 말고 즉시 접근이 제한된 secret manager로 옮깁니다. 서버는 key의 SHA-256 digest만 저장하며 기존 평문을 다시 조회하는 endpoint는 없습니다.
+변수는 `{ "input": { "id": "<provider.id Relay ID>" } }` 형태입니다. 앞서 받은
+`CUSTOM_PROVIDER_RELAY_ID`로 요청하는 예시는 다음과 같습니다. 출력 파일의 secret은 생성
+응답과 동일하게 취급합니다.
 
-분실 또는 유출 시 다음 owner 전용 endpoint로 교체합니다.
+```sh
+ROTATION_FILE=$(mktemp)
+jq -nc --arg id "$CUSTOM_PROVIDER_RELAY_ID" '{
+  operationName: "RotateCustomProviderKey",
+  query: "mutation RotateCustomProviderKey($input: RotateCustomProviderKeyInput!) { rotateCustomProviderKey(input: $input) { errors { code message field } ingestionKey createdAt } }",
+  variables: {input: {id: $id}}
+}' | curl --fail-with-body --silent --show-error \
+  --request POST --url "$API_BASE_URL/graphql" \
+  --cookie "$COOKIE_JAR" --header "Origin: $ALLOWED_ORIGIN" \
+  --header 'Content-Type: application/json' \
+  --data-binary @- --output "$ROTATION_FILE"
 
-```http
-POST /v1/subjects/{subject}/custom-providers/{customProviderId}/rotate-key
-Authorization: Bearer <opaque-user-session-token>
+jq -e '.errors == null and (.data.rotateCustomProviderKey.errors | length == 0) and (.data.rotateCustomProviderKey.ingestionKey | type == "string")' "$ROTATION_FILE" >/dev/null
 ```
 
-새 key도 응답에서 한 번만 반환되고, 교체가 성공하는 즉시 이전 key는 인증에 실패합니다. overlap이나 이전 key 복구는 지원하지 않습니다. 현재 rotate 제한은 client address당 시간당 5회입니다.
+새 key는 한 번만 반환되고, 교체가 성공하는 즉시 이전 key는 인증에 실패합니다. overlap이나
+이전 key 복구는 지원하지 않습니다. HTTP 성공만으로 완료를 판단하지 말고 최상위 `errors`와
+`data.rotateCustomProviderKey.errors`를 확인합니다.
 
 ## 2. Ingestion 계약
 

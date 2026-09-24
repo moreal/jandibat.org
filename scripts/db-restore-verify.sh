@@ -65,6 +65,27 @@ scalar() {
 	tail -n 1 "$result" | tr -d '\r'
 }
 
+http_get() {
+	url=$1
+	output=${2:-/dev/null}
+	case "${http_bin##*/}" in
+		curl) "$http_bin" --fail --silent --max-time 5 --output "$output" "$url" ;;
+		wget) "$http_bin" -q -O "$output" -T 5 "$url" ;;
+		*) "$http_bin" wget -q -O "$output" -T 5 "$url" ;;
+	esac
+}
+
+http_post_json() {
+	url=$1
+	output=$2
+	request=$3
+	case "${http_bin##*/}" in
+		curl) "$http_bin" --fail --silent --max-time 5 --output "$output" --header 'Content-Type: application/json' --data-binary "$request" "$url" ;;
+		wget) "$http_bin" -q -O "$output" -T 5 --header='Content-Type: application/json' --post-data="$request" "$url" ;;
+		*) "$http_bin" wget -q -O "$output" -T 5 --header='Content-Type: application/json' --post-data="$request" "$url" ;;
+	esac
+}
+
 started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 if [ -z "$drill_started_at" ]; then drill_started_at=$started_at; fi
 case "$drill_started_at" in
@@ -86,7 +107,7 @@ if [ -z "$source_migrations" ] || [ "$source_migrations" != "$restore_migrations
 	exit 1
 fi
 
-expected_tables='activity_facts activity_refresh_cache api_rate_limit_buckets audit_events auth_challenges custom_activity_events custom_providers deleted_identity_tombstones deleted_identity_tombstones_v2 deletion_request_claims deletion_request_inbox deletion_requests environments ingest_idempotency_keys legal_holds magic_link_mail_outbox magic_link_tokens maintenance_checkpoints mutation_audit_outbox provider_connection_private_consents provider_connections provider_sync_jobs provider_token_revocation_jobs schema_migrations subject_settings subjects timeline_cache user_passkeys user_sessions user_settings users'
+expected_tables='activity_facts activity_refresh_cache activity_snapshot_changes api_rate_limit_buckets audit_events auth_challenges custom_activity_events custom_provider_secrets custom_providers deleted_identity_tombstones deleted_identity_tombstones_v2 deletion_request_claims deletion_request_inbox deletion_requests environments ingest_idempotency_keys legal_holds magic_link_mail_outbox magic_link_tokens maintenance_checkpoints mutation_audit_outbox provider_connection_private_consents provider_connections provider_sync_jobs provider_token_revocation_jobs schema_migrations subject_settings subjects timeline_cache user_passkeys user_sessions user_settings users'
 row_counts=''
 for table in $expected_tables; do
 	present=$(scalar "$database_url" "SELECT count(*) FROM $restore_database.information_schema.tables WHERE table_schema = 'public' AND table_name = '$table'")
@@ -158,7 +179,7 @@ if [ -z "$api_base_url" ] && [ -n "$api_database_url_template" ] && [ -n "$api_b
 	api_base_url=http://127.0.0.1:18083
 	attempt=1
 	while [ "$attempt" -le 30 ]; do
-		if "$http_bin" wget --spider -q -T 3 "$api_base_url/readyz"; then break; fi
+		if http_get "$api_base_url/readyz"; then break; fi
 		if ! kill -0 "$api_pid" 2>/dev/null; then echo "restored API exited before readiness" >&2; tail -n 50 "$api_log" >&2; api_smoke_result=failed; break; fi
 		sleep 1
 		attempt=$((attempt + 1))
@@ -200,10 +221,21 @@ fi
 if [ -n "$api_base_url" ] && [ -n "$fixture_subject" ]; then
 	case "$fixture_subject" in *[!A-Za-z0-9._~-]*) echo "RESTORE_FIXTURE_SUBJECT must be URL-path safe" >&2; api_smoke_result=failed ;;
 	*)
+		snapshot=$(mktemp "${TMPDIR:-/tmp}/jandibat-restore-snapshot.XXXXXX")
+		tmp_files="$tmp_files $snapshot"
+		chmod 600 "$snapshot"
+		activity_day=$(date -u +%Y-%m-%d)
+		# GraphQL variable names are literal inside the JSON query string.
+		# shellcheck disable=SC2016
+		snapshot_request=$(printf '{"query":"query RestoreSnapshot($subject:String!,$range:DateRangeInput!,$timezone:TimeZone!){subject(handleOrID:$subject){handle activitySnapshot(range:$range,timezone:$timezone){revision generatedAt dataUpdatedAt}}}","operationName":"RestoreSnapshot","variables":{"subject":"%s","range":{"from":"%s","to":"%s"},"timezone":"UTC"}}' "$fixture_subject" "$activity_day" "$activity_day")
 		if command -v "$http_bin" >/dev/null 2>&1 &&
-		   "$http_bin" wget -q -O /dev/null -T 5 "$api_base_url/readyz" &&
-		   "$http_bin" wget -q -O /dev/null -T 5 "$api_base_url/v1/activities/$fixture_subject" &&
-		   "$http_bin" wget -q -O /dev/null -T 5 "$api_base_url/v1/render/$fixture_subject.svg"; then
+		   http_get "$api_base_url/readyz" &&
+		   http_post_json "$api_base_url/graphql" "$snapshot" "$snapshot_request" &&
+		   ! grep -q '"errors"[[:space:]]*:' "$snapshot" &&
+		   grep -Fq "\"handle\":\"$fixture_subject\"" "$snapshot" &&
+		   grep -Eq '"activitySnapshot"[[:space:]]*:[[:space:]]*\{' "$snapshot" &&
+		   grep -Eq '"revision"[[:space:]]*:[[:space:]]*"[^"]+"' "$snapshot" &&
+		   http_get "$api_base_url/v1/render/$fixture_subject.svg"; then
 			api_smoke_result=passed
 		else
 			api_smoke_result=failed

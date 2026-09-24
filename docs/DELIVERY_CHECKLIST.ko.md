@@ -2,6 +2,13 @@
 
 기준일: 2026-08-13
 
+> Phase 0~3 최초 구현의 역사적 완료 기록입니다. 체크박스는 당시 검증을 뜻하며 현재
+> REST 도메인 API의 제공을 보증하지 않습니다. 현행 완료 판정은
+> [`MODERNIZATION_BACKLOG.ko.md`](MODERNIZATION_BACKLOG.ko.md), 도메인 계약은
+> [`graphql/schema/`](../graphql/schema/)의 SDL, HTTP edge 계약은
+> [`openapi/jandibat.yaml`](../openapi/jandibat.yaml)을 참조하세요. 아래 공통 게이트와
+> Phase별 기록은 현대화 전체 게이트를 대체하지 않습니다.
+
 이 문서는 `PROJECT_PLAN.ko.md`의 Phase 0~3을 실제로 완료했는지 판단하는 실행 가능한 체크리스트입니다. 체크박스는 구현 파일이 있다는 이유만으로 갱신하지 않습니다. 각 항목의 자동 검사와 수동 인수 조건을 모두 충족한 뒤 체크하고, 계약 변경은 `docs/interface-change-log.md`에 기록합니다.
 
 ## 공통 품질 게이트
@@ -47,7 +54,11 @@ git status --short
 ```sh
 make ci
 curl --fail --silent http://localhost:8080/healthz
-curl --fail --silent 'http://localhost:8080/v1/activities/octocat' | jq -e '.subject == "octocat" and (.days | type == "array")'
+curl --fail-with-body --silent --show-error \
+  --request POST 'http://localhost:8080/graphql' \
+  --header 'Content-Type: application/json' \
+  --data-binary '{"operationName":"ChecklistActivitySnapshot","query":"query ChecklistActivitySnapshot($subject: String!, $range: DateRangeInput!, $timezone: TimeZone!) { subject(handleOrID: $subject) { activitySnapshot(range: $range, timezone: $timezone) { days { date count level } generatedAt dataUpdatedAt revision } } }","variables":{"subject":"octocat","range":{"from":"2026-01-01","to":"2026-01-31"},"timezone":"UTC"}}' \
+  | jq -e '.errors == null and (.data.subject.activitySnapshot.days | type == "array")'
 curl --fail --silent 'http://localhost:8080/v1/render/octocat.svg' | xmllint --noout -
 ```
 

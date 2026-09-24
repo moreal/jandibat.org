@@ -1,0 +1,9 @@
+{
+  "name": "@jandibat/graphql-static-renderer-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "render": "node --experimental-strip-types src/index.ts",
+    "test": "node --experimental-strip-types --test test/*.test.ts"
+  }
+}

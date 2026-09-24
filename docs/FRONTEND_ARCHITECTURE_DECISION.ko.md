@@ -1,10 +1,17 @@
 # 프론트엔드 아키텍처 결정: Solid 2 공식 start mode
 
-> 상태: Solid 2 및 start mode 결정은 유지한다. 서버 상태를 지역 signal로만 관리한다는 결정은
-> 2026-09-22의 [`PLATFORM_MODERNIZATION_DESIGN.ko.md`](PLATFORM_MODERNIZATION_DESIGN.ko.md)로
-> 대체되었으며, 구현 후 `solid-relay`/Relay normalized store가 그 역할을 맡는다.
+> 상태: **부분 채택 / 나머지는 역사적 결정 기록**. Solid 2, 공식 Vite `start: true`
+> client-only mode, 런타임 `/config.json` 부트스트랩만 유지합니다. 아래 본문의 정확한
+> `rc.0`·`next.28` 버전, OpenAPI 단일 DTO/API 경계, `AppStateProvider`·지역 signal 중심의
+> 서버 상태 및 데이터 패칭 라이브러리 미사용 규칙은 더 이상 현행 지침이 아닙니다.
+> 도메인 API는 GraphQL SDL, 공식 UI 서버 상태는 고정 revision의 `solid-relay`/Relay
+> normalized store가 담당합니다. 현재 계약과 버전·진행 상태는
+> [`PLATFORM_MODERNIZATION_DESIGN.ko.md`](PLATFORM_MODERNIZATION_DESIGN.ko.md),
+> [`MODERNIZATION_BACKLOG.ko.md`](MODERNIZATION_BACKLOG.ko.md),
+> [`../graphql/schema/`](../graphql/schema/)를 참조하세요. 아래의 `결정`·`개발 복잡성 통제`·
+> `호환성과 결과`는 2026-08-14 당시의 배경 설명으로 보존합니다.
 
-- 상태: 채택
+- 상태: 부분 채택(현행 범위는 위 안내 참조)
 - 결정일: 2026-08-14
 - 범위: `apps/web/**`
 

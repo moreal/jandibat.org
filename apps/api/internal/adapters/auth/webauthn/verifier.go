@@ -234,7 +234,10 @@ func (v *Verifier) VerifyAuthentication(ctx context.Context, input auth.Authenti
 	}
 	parsed, err := protocol.ParseCredentialRequestResponseBody(bytes.NewReader(input.Response))
 	if err != nil {
-		return auth.AuthenticationVerification{}, fmt.Errorf("%w: parse authentication response: %v", ErrVerification, err)
+		return auth.AuthenticationVerification{}, errors.Join(
+			ErrVerification,
+			fmt.Errorf("%w: parse authentication response: %v", auth.ErrPasskeyVerification, err),
+		)
 	}
 	user := &libraryUser{
 		id:          []byte(input.Credential.UserID),
@@ -265,7 +268,10 @@ func (v *Verifier) VerifyAuthentication(ctx context.Context, input auth.Authenti
 		verified, err = v.webAuthn.ValidateLogin(user, session, parsed)
 	}
 	if err != nil {
-		return auth.AuthenticationVerification{}, fmt.Errorf("%w: authentication: %v", ErrVerification, err)
+		return auth.AuthenticationVerification{}, errors.Join(
+			ErrVerification,
+			fmt.Errorf("%w: authentication: %v", auth.ErrPasskeyVerification, err),
+		)
 	}
 	if verified.Authenticator.CloneWarning {
 		return auth.AuthenticationVerification{}, errors.Join(

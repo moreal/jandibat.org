@@ -14,6 +14,7 @@ import (
 	"github.com/moreal/jandibat.org/apps/api/internal/graphql/relayid"
 	"github.com/moreal/jandibat.org/apps/api/internal/graphql/scalar"
 	"github.com/moreal/jandibat.org/apps/api/internal/integrations"
+	"github.com/moreal/jandibat.org/apps/api/internal/operations"
 	"github.com/moreal/jandibat.org/apps/api/internal/subjects"
 )
 
@@ -117,6 +118,110 @@ func connectionMutationContext(port *connectionMutationPort, owned bool) context
 	ctx := ContextWithVerifiedViewer(context.Background(), "owner")
 	ctx = ContextWithNodeServices(ctx, NodeServices{Subjects: ownedMutationSubjectPort{subject: subjects.Subject{ID: "subject-1", OwnerUserID: "owner", Handle: "handle"}, owned: owned}, Connections: mutationConnectionLookup{connection: mutationConnectionFixture()}})
 	return ContextWithConnectionMutationServices(ctx, ConnectionMutationServices{Connections: port, Sync: port})
+}
+
+func connectionMutationAuditContext(port *connectionMutationPort, owned bool, targets *[]operations.AuditTarget) context.Context {
+	return ContextWithMutationAuditTargetPublisher(connectionMutationContext(port, owned), func(target operations.AuditTarget) {
+		*targets = append(*targets, target)
+	})
+}
+
+func TestConnectionMutationsPublishCanonicalOwnedAuditTarget(t *testing.T) {
+	want := operations.AuditTarget{Type: "provider_connection", ID: mutationConnectionID}
+	global := relayid.Encode(relayid.ProviderConnection, mutationConnectionID)
+	for _, tc := range []struct {
+		name string
+		run  func(context.Context, *connectionMutationPort) error
+	}{
+		{name: "connect public", run: func(ctx context.Context, _ *connectionMutationPort) error {
+			_, err := resolveConnectProvider(ctx, model.ConnectProviderInput{SubjectID: relayid.Encode(relayid.Subject, "subject-1"), ProviderID: "gitlab", AuthMethod: model.ProviderAuthMethodPublic})
+			return err
+		}},
+		{name: "connect token", run: func(ctx context.Context, _ *connectionMutationPort) error {
+			_, err := resolveConnectProvider(ctx, model.ConnectProviderInput{SubjectID: relayid.Encode(relayid.Subject, "subject-1"), ProviderID: "gitlab", AuthMethod: model.ProviderAuthMethodToken, Token: stringPtr("private-token")})
+			return err
+		}},
+		{name: "update", run: func(ctx context.Context, _ *connectionMutationPort) error {
+			_, err := resolveUpdateProviderConnection(ctx, model.UpdateProviderConnectionInput{ID: global, Enabled: boolPtr(false)})
+			return err
+		}},
+		{name: "revoke", run: func(ctx context.Context, _ *connectionMutationPort) error {
+			_, err := resolveRevokeProviderConnection(ctx, model.RevokeProviderConnectionInput{ID: global})
+			return err
+		}},
+		{name: "enqueue manual sync", run: func(ctx context.Context, _ *connectionMutationPort) error {
+			_, err := resolveEnqueueManualSync(ctx, model.EnqueueManualSyncInput{ConnectionID: global, IdempotencyKey: "request-1234"})
+			return err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			port := &connectionMutationPort{connection: mutationConnectionFixture(), job: integrations.SyncJob{ID: mutationJobID, ConnectionID: mutationConnectionID, Status: integrations.SyncJobPending, CreatedAt: mutationConnectionFixture().CreatedAt, UpdatedAt: mutationConnectionFixture().UpdatedAt}}
+			var targets []operations.AuditTarget
+			if err := tc.run(connectionMutationAuditContext(port, true, &targets), port); err != nil {
+				t.Fatalf("mutation failed: %v", err)
+			}
+			if len(targets) != 1 || targets[0] != want {
+				t.Fatalf("audit targets = %#v, want %#v (not opaque %q)", targets, want, global)
+			}
+		})
+	}
+}
+
+func TestConnectionMutationsDoNotPublishUnverifiedOrFailedAuditTarget(t *testing.T) {
+	global := relayid.Encode(relayid.ProviderConnection, mutationConnectionID)
+	for _, tc := range []struct {
+		name  string
+		owned bool
+		input string
+		fail  bool
+		run   func(context.Context, string) error
+	}{
+		{name: "foreign connect", owned: false, run: func(ctx context.Context, _ string) error {
+			_, err := resolveConnectProvider(ctx, model.ConnectProviderInput{SubjectID: relayid.Encode(relayid.Subject, "subject-1"), ProviderID: "gitlab", AuthMethod: model.ProviderAuthMethodPublic})
+			return err
+		}},
+		{name: "invalid update ID", owned: true, input: relayid.Encode(relayid.Subject, mutationConnectionID), run: func(ctx context.Context, id string) error {
+			_, err := resolveUpdateProviderConnection(ctx, model.UpdateProviderConnectionInput{ID: id})
+			return err
+		}},
+		{name: "foreign update", owned: false, input: global, run: func(ctx context.Context, id string) error {
+			_, err := resolveUpdateProviderConnection(ctx, model.UpdateProviderConnectionInput{ID: id})
+			return err
+		}},
+		{name: "failed revoke", owned: true, input: global, fail: true, run: func(ctx context.Context, id string) error {
+			_, err := resolveRevokeProviderConnection(ctx, model.RevokeProviderConnectionInput{ID: id})
+			return err
+		}},
+		{name: "foreign manual sync", owned: false, input: global, run: func(ctx context.Context, id string) error {
+			_, err := resolveEnqueueManualSync(ctx, model.EnqueueManualSyncInput{ConnectionID: id, IdempotencyKey: "request-1234"})
+			return err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			port := &connectionMutationPort{connection: mutationConnectionFixture()}
+			if tc.fail {
+				port.revokeErr = integrations.ErrNotFound
+			}
+			var targets []operations.AuditTarget
+			if err := tc.run(connectionMutationAuditContext(port, tc.owned, &targets), tc.input); err != nil {
+				t.Fatalf("safe denial should return a typed payload: %v", err)
+			}
+			if len(targets) != 0 {
+				t.Fatalf("unverified audit targets = %#v", targets)
+			}
+		})
+	}
+}
+
+func TestConnectProviderRejectsNoncanonicalReturnedIdentityBeforeAudit(t *testing.T) {
+	port := &connectionMutationPort{connection: mutationConnectionFixture()}
+	port.connection.ID = "not-a-uuid"
+	var targets []operations.AuditTarget
+	ctx := connectionMutationAuditContext(port, true, &targets)
+	payload, err := resolveConnectProvider(ctx, model.ConnectProviderInput{SubjectID: relayid.Encode(relayid.Subject, "subject-1"), ProviderID: "gitlab", AuthMethod: model.ProviderAuthMethodPublic})
+	if payload != nil || err == nil || len(targets) != 0 {
+		t.Fatalf("noncanonical result = (%#v, %v), audit targets=%#v", payload, err, targets)
+	}
 }
 
 func TestConnectProviderRequiresSubjectOwnershipAndKeepsTokenOutOfPayload(t *testing.T) {

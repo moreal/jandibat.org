@@ -1,12 +1,12 @@
 YARN ?= corepack yarn
 COCKROACH_DATABASE ?= jandibat
 
-.PHONY: install check ci nix-check ci-nix-gates-test tool-versions sql-generate sql-check sql-check-live sql-live-drift-test sql-generated-drift-check sql-generated-drift-test adapter-sql-allowlist-check graphql-generate graphql-check dev-web build-web test-web test-sdk typecheck typecheck-web typecheck-sdk dev-api dev-worker dev-maintenance test-api test-api-race test-api-integration vet-api lint-api openapi-lint openapi-types openapi-check contract-change-check ci-version-authority-check secret-scan shell-check security-review-check security-review-gate security-review-validator-test audit-verifier-test restore-verifier-test migration-atomicity-test db-cli-secret-boundary-test db-bootstrap-roles-test baseline-history-test load-check security-smoke monitoring-check staging-compose-check deploy-staging rollback-rehearsal retention-dry-run retention-execute credential-reencrypt-dry-run credential-reencrypt-execute verify-deletion verify-audit-log db-up db-down db-logs db-shell db-wait db-migrate db-migrate-url db-bootstrap-roles db-configure-runtime-roles db-runtime-roles-test db-backup db-backup-schedule db-restore-verify
+.PHONY: install check ci nix-check ci-nix-gates-test workflow-expression-check tool-versions sql-generate sql-check sql-check-live sql-live-drift-test sql-generated-drift-check sql-generated-drift-test adapter-sql-allowlist-check graphql-generate graphql-check dev-web build-web test-web test-sdk typecheck typecheck-web typecheck-sdk dev-api dev-worker dev-maintenance test-api test-api-race test-api-integration vet-api lint-api openapi-lint openapi-types openapi-check contract-change-check ci-version-authority-check secret-scan shell-check security-review-check security-review-gate security-review-validator-test audit-verifier-test restore-verifier-test migration-atomicity-test db-cli-secret-boundary-test db-bootstrap-roles-test baseline-history-test load-check security-smoke monitoring-check staging-compose-check deploy-staging rollback-rehearsal retention-dry-run retention-execute credential-reencrypt-dry-run credential-reencrypt-execute verify-deletion verify-audit-log db-up db-down db-logs db-shell db-wait db-migrate db-migrate-url db-bootstrap-roles db-configure-runtime-roles db-runtime-roles-test db-backup db-backup-schedule db-restore-verify
 
 install:
 	$(YARN) install --immutable
 
-check: openapi-check graphql-check ci-version-authority-check ci-nix-gates-test secret-scan shell-check db-cli-secret-boundary-test db-bootstrap-roles-test image-contract-validator-test image-release-policy-test image-runtime-contract-test adapter-sql-allowlist-check monitoring-check security-review-validator-test audit-verifier-test restore-verifier-test test-api test-api-race lint-api test-sdk test-web typecheck build-web
+check: openapi-check graphql-check ci-version-authority-check ci-nix-gates-test workflow-expression-check secret-scan shell-check db-cli-secret-boundary-test db-bootstrap-roles-test image-contract-validator-test image-release-policy-test image-runtime-contract-test adapter-sql-allowlist-check monitoring-check security-review-validator-test audit-verifier-test restore-verifier-test test-api test-api-race lint-api test-sdk test-web typecheck build-web
 
 ci: nix-check install check
 
@@ -32,6 +32,9 @@ nix-check:
 
 ci-nix-gates-test:
 	sh scripts/check-ci-nix-gates.test.sh
+
+workflow-expression-check:
+	actionlint -shellcheck= .github/workflows/*.yml
 
 tool-versions:
 	go version

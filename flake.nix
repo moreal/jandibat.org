@@ -180,6 +180,7 @@
           };
 
           shellPackages = [
+            pkgs.actionlint
             go
             nodejs
             yarnBerry

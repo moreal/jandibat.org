@@ -191,6 +191,7 @@
         in
         {
           inherit
+            buildGoModule
             go
             goCheckSumtype
             exhaustive
@@ -205,6 +206,17 @@
         };
     in
     {
+      packages = forAllSystems (system:
+        let
+          toolchain = mkToolchain system;
+        in
+        if toolchain.pkgs.stdenv.hostPlatform.isLinux then
+          import ./nix/images.nix {
+            inherit (toolchain) buildGoModule nodejs pkgs yarnBerry yarnDeps;
+          }
+        else
+          { });
+
       devShells = forAllSystems (system:
         let
           toolchain = mkToolchain system;

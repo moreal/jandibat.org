@@ -4,10 +4,11 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 
 const names = ['api', 'worker', 'maintenance', 'web', 'restore-tools'];
 const hash = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
+const fileHash = path => hash(readFileSync(path)).slice('sha256:'.length);
 const json = path => JSON.parse(readFileSync(path, 'utf8'));
 function command(program, args, allowFailure = false) {
   const result = spawnSync(program, args, { encoding: 'utf8', maxBuffer: 128 * 1024 * 1024 });
@@ -19,22 +20,60 @@ function save(path, value) { writeFileSync(path, JSON.stringify(value, null, 2) 
 function scan(name, target, imageId, manifestDigest, evidence) {
   const identity = manifestDigest || imageId;
   const prefix = join(evidence, `${name}-${identity.replace(':', '-')}`);
-  const receipt = { name, target, imageId, manifestDigest, sbom: prefix + '.spdx.json', syft: prefix + '.syft.json', grype: prefix + '.grype.json' };
-  command('syft', [target, '-o', `spdx-json=${receipt.sbom}`, '-o', `syft-json=${receipt.syft}`]);
+  const paths = { spdx: prefix + '.spdx.json', syft: prefix + '.syft.json', grype: prefix + '.grype.json' };
+  command('syft', [target, '-o', `spdx-json=${paths.spdx}`, '-o', `syft-json=${paths.syft}`]);
   const result = command('grype', [target, '--fail-on', 'high', '-o', 'json'], true);
-  writeFileSync(receipt.grype, result.stdout || '');
+  writeFileSync(paths.grype, result.stdout || '');
   assert.equal(result.status, 0, `high/critical scan failed for ${target}: ${result.stderr}`);
-  assert.match(json(receipt.sbom).spdxVersion, /^SPDX-/);
-  const syftSource = json(receipt.syft).source?.metadata;
-  const report = json(receipt.grype);
+  assert.match(json(paths.spdx).spdxVersion, /^SPDX-/);
+  const syftSource = json(paths.syft).source?.metadata;
+  const report = json(paths.grype);
   for (const source of [syftSource, report.source?.target]) {
     assert.equal(source?.imageID, imageId, `scan image ID must equal imported archive: ${target}`);
     if (manifestDigest) assert.equal(source?.manifestDigest, manifestDigest, `scan manifest must equal deploy digest: ${target}`);
   }
   assert.ok(Array.isArray(report.matches), 'Grype must include match results');
   assert.ok(!report.matches.some(m => /^(high|critical)$/i.test(m.vulnerability?.severity)), 'high/critical finding');
+  const receipt = { name, target, imageId, manifestDigest: manifestDigest ?? null,
+    artifacts: Object.fromEntries(Object.entries(paths).map(([key, path]) => [key, { file: basename(path), sha256: fileHash(path) }])) };
   save(prefix + '.release.json', receipt);
-  return receipt;
+  return basename(prefix + '.release.json');
+}
+
+function validate(evidence) {
+  const release = json(join(evidence, 'release.json'));
+  assert.equal(release.schemaVersion, 1);
+  assert.match(release.sourceSha || '', /^[0-9a-f]{40}$/);
+  assert.deepEqual(Object.keys(release).sort(), ['images', 'schemaVersion', 'sourceSha']);
+  assert.ok(Array.isArray(release.images));
+  assert.deepEqual(release.images.map(image => image.name).sort(), [...names].sort());
+  for (const image of release.images) {
+    assert.deepEqual(Object.keys(image).sort(), ['imageId', 'manifestDigest', 'name', 'ref', 'scanReceipt', 'scanReceiptSha256', 'tag']);
+    assert.match(image.imageId, /^sha256:[0-9a-f]{64}$/);
+    assert.match(image.manifestDigest, /^sha256:[0-9a-f]{64}$/);
+    assert.equal(image.tag, image.ref.replace(`@${image.manifestDigest}`, `:${release.sourceSha}`));
+    assert.match(image.ref, /^ghcr\.io\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/[a-z-]+@sha256:[0-9a-f]{64}$/);
+    assert.ok(image.ref.endsWith(`/${image.name}@${image.manifestDigest}`));
+    assert.equal(image.scanReceipt, basename(image.scanReceipt));
+    assert.match(image.scanReceipt, new RegExp(`^${image.name}-${image.manifestDigest.replace(':', '-') }\\.release\\.json$`));
+    assert.match(image.scanReceiptSha256, /^[0-9a-f]{64}$/);
+    const receiptPath = join(evidence, image.scanReceipt);
+    assert.equal(fileHash(receiptPath), image.scanReceiptSha256);
+    const receipt = json(receiptPath);
+    assert.deepEqual(Object.keys(receipt).sort(), ['artifacts', 'imageId', 'manifestDigest', 'name', 'target']);
+    assert.equal(receipt.name, image.name);
+    assert.equal(receipt.target, `registry:${image.ref}`);
+    assert.equal(receipt.imageId, image.imageId);
+    assert.equal(receipt.manifestDigest, image.manifestDigest);
+    assert.deepEqual(Object.keys(receipt.artifacts).sort(), ['grype', 'spdx', 'syft']);
+    for (const [kind, artifact] of Object.entries(receipt.artifacts)) {
+      assert.deepEqual(Object.keys(artifact).sort(), ['file', 'sha256']);
+      assert.equal(artifact.file, basename(artifact.file));
+      assert.match(artifact.file, new RegExp(`^${image.name}-${image.manifestDigest.replace(':', '-') }\\.${kind}\\.json$`));
+      assert.match(artifact.sha256, /^[0-9a-f]{64}$/);
+      assert.equal(fileHash(join(evidence, artifact.file)), artifact.sha256);
+    }
+  }
 }
 
 function importArchive(name, archive, evidence) {
@@ -129,19 +168,23 @@ function publish(evidence) {
     const current = existingManifest(candidate.tag);
     assert.ok(current === null || current === candidate.manifestDigest, `immutable SHA tag mismatch: ${candidate.tag}`);
     if (current === null) command('skopeo', ['copy', '--preserve-digests', `dir:${candidate.layout}`, `docker://${candidate.tag}`]);
+    candidate.scanReceipt = scan(candidate.name, `registry:${candidate.ref}`, candidate.imageId, candidate.manifestDigest, evidence);
     assert.equal(existingManifest(candidate.ref), candidate.manifestDigest, 'registry changed candidate manifest');
-    scan(candidate.name, `registry:${candidate.ref}`, candidate.imageId, candidate.manifestDigest, evidence);
+    assert.equal(existingManifest(candidate.tag), candidate.manifestDigest, 'registry changed immutable SHA tag');
   }
   // Export nothing until every workload AND restore tool has passing evidence.
+  save(join(evidence, 'release.json'), { schemaVersion: 1, sourceSha: sha, images: candidates.map(({ name, tag, ref, imageId, manifestDigest, scanReceipt }) =>
+    ({ name, tag, ref, imageId, manifestDigest, scanReceipt, scanReceiptSha256: fileHash(join(evidence, scanReceipt)) })) });
+  validate(evidence);
   appendFileSync(output, candidates.map(c => `${c.name.replace('-', '_')}_ref=${c.ref}\n`).join(''));
-  save(join(evidence, 'release.json'), candidates.map(({ name, ref, imageId, manifestDigest }) => ({ name, ref, imageId, manifestDigest })));
 }
 
 try {
   const [operation, ...args] = process.argv.slice(2);
   if (operation === 'import' && args.length === 3) importArchive(args[0], resolve(args[1]), resolve(args[2]));
   else if (operation === 'publish' && args.length === 1) publish(resolve(args[0]));
-  else throw new Error('usage: image-release.mjs import NAME ARCHIVE EVIDENCE | publish EVIDENCE');
+  else if (operation === 'validate' && args.length === 1) validate(resolve(args[0]));
+  else throw new Error('usage: image-release.mjs import NAME ARCHIVE EVIDENCE | publish EVIDENCE | validate EVIDENCE');
 } catch (error) {
   console.error(error.message);
   process.exitCode = 1;

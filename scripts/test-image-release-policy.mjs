@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { spawnSync, execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, cpSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, resolve, basename } from 'node:path';
 import test from 'node:test';
 import { createHash } from 'node:crypto';
 
@@ -10,6 +10,7 @@ const root = resolve(import.meta.dirname, '..');
 const names = ['api', 'worker', 'maintenance', 'web', 'restore-tools'];
 const sha = 'a'.repeat(40);
 const digest = 'sha256:' + 'b'.repeat(64);
+const fileSha = path => createHash('sha256').update(readFileSync(path)).digest('hex');
 const previousDigest = 'sha256:' + 'c'.repeat(64);
 const ref = name => `example.invalid/release/${name}@${digest}`;
 const yaml = file => JSON.parse(execFileSync('ruby', ['-rjson', '-ryaml', '-e', 'puts JSON.generate(YAML.safe_load(File.read(ARGV[0]), permitted_classes: [Symbol]))', file]));
@@ -235,8 +236,11 @@ function registryFixture(t, mode = 'matching') {
 const fs = require('node:fs'); const args = process.argv.slice(2);
 fs.appendFileSync(process.env.TRACE, JSON.stringify(['skopeo', ...args]) + '\\n');
 if (args[0] === 'inspect') {
+ const published = fs.existsSync(process.env.PUBLISHED) && fs.readFileSync(process.env.PUBLISHED, 'utf8').split('\\n').includes(args.at(-1));
+ if (process.env.MODE === 'tag-race' && !args.at(-1).includes('@') && published) process.stdout.write('{}');
+ else {
  if (process.env.REGISTRY_DIAGNOSTIC) { console.error(process.env.REGISTRY_DIAGNOSTIC); process.exit(1); }
- if (process.env.MODE.startsWith('skopeo-1.24.1-') && !args.at(-1).includes('@')) {
+ if (process.env.MODE.startsWith('skopeo-1.24.1-') && !args.at(-1).includes('@') && !published) {
    const reference = args.at(-1).slice('docker://'.length);
    const split = reference.lastIndexOf(':');
    const message = 'Error parsing image name "docker://' + reference + '": reading manifest ' + reference.slice(split + 1) + ' in ' + reference.slice(0, split) + ': ' + (process.env.MODE.endsWith('manifest') ? 'manifest unknown' : 'name unknown');
@@ -251,13 +255,16 @@ if (args[0] === 'inspect') {
  if (process.env.MODE === 'absent-transport') { console.error('NAME_UNKNOWN: transport failure: connection reset by peer'); process.exit(1); }
  if (process.env.MODE === 'mixed-auth-codes') { console.error(JSON.stringify({errors:[{code:'NAME_UNKNOWN',message:'repository absent'},{code:'UNAUTHORIZED',message:'authentication required'}]})); process.exit(1); }
  if (process.env.MODE === 'mixed-unknown-codes') { console.error(JSON.stringify({errors:[{code:'NAME_UNKNOWN',message:'repository absent'},{code:'UNKNOWN',message:'unclassified registry error'}]})); process.exit(1); }
- if (process.env.MODE === 'absent' && !args.at(-1).includes('@')) { console.error('manifest unknown'); process.exit(1); }
- if (process.env.MODE === 'new-repository' && !args.at(-1).includes('@')) { console.error('NAME_UNKNOWN: repository name not known to registry'); process.exit(1); }
- if (process.env.MODE === 'structured-name' && !args.at(-1).includes('@')) { console.error(JSON.stringify({errors:[{code:'NAME_UNKNOWN',message:'repository name not known to registry'}]})); process.exit(1); }
- if (process.env.MODE === 'structured-manifest' && !args.at(-1).includes('@')) { console.error(JSON.stringify({errors:[{code:'MANIFEST_UNKNOWN',message:'manifest unknown'}]})); process.exit(1); }
- if (process.env.MODE === 'structured-reordered' && !args.at(-1).includes('@')) { console.error(JSON.stringify({errors:[{message:'manifest unknown',code:'MANIFEST_UNKNOWN'}]})); process.exit(1); }
+ if (process.env.MODE === 'tag-race' && !args.at(-1).includes('@') && !published) { console.error('manifest unknown'); process.exit(1); }
+ if (process.env.MODE === 'absent' && !args.at(-1).includes('@') && !published) { console.error('manifest unknown'); process.exit(1); }
+ if (process.env.MODE === 'new-repository' && !args.at(-1).includes('@') && !published) { console.error('NAME_UNKNOWN: repository name not known to registry'); process.exit(1); }
+ if (process.env.MODE === 'structured-name' && !args.at(-1).includes('@') && !published) { console.error(JSON.stringify({errors:[{code:'NAME_UNKNOWN',message:'repository name not known to registry'}]})); process.exit(1); }
+ if (process.env.MODE === 'structured-manifest' && !args.at(-1).includes('@') && !published) { console.error(JSON.stringify({errors:[{code:'MANIFEST_UNKNOWN',message:'manifest unknown'}]})); process.exit(1); }
+ if (process.env.MODE === 'structured-reordered' && !args.at(-1).includes('@') && !published) { console.error(JSON.stringify({errors:[{message:'manifest unknown',code:'MANIFEST_UNKNOWN'}]})); process.exit(1); }
  process.stdout.write(process.env.MODE === 'mismatch' ? '{}' : process.env.MANIFEST);
+ }
 }
+if (args[0] === 'copy' && args.at(-1).startsWith('docker:')) fs.appendFileSync(process.env.PUBLISHED, args.at(-1) + '\\n');
 if (args[0] === 'copy' && args.at(-1).startsWith('dir:')) {
  const dir = args.at(-1).slice(4); fs.mkdirSync(dir, {recursive:true}); fs.writeFileSync(dir + '/manifest.json', process.env.MANIFEST);
 }
@@ -274,10 +281,19 @@ for (let i=0;i<args.length;i++) if (args[i] === '-o') {
   executable(dir, 'grype', `
 const fs = require('node:fs'); const args = process.argv.slice(2);
 fs.appendFileSync(process.env.TRACE, JSON.stringify(['grype', ...args]) + '\\n');
+if (process.env.MODE === 'missing-receipt' && args[0].includes('/restore-tools@')) {
+ const first = fs.readdirSync(process.env.EVIDENCE).find(file => /^api-.*\\.release\\.json$/.test(file));
+ fs.unlinkSync(process.env.EVIDENCE + '/' + first);
+}
+if (process.env.MODE === 'mismatched-receipt' && args[0].includes('/restore-tools@')) {
+ const first = fs.readdirSync(process.env.EVIDENCE).find(file => /^api-.*\\.release\\.json$/.test(file));
+ const path = process.env.EVIDENCE + '/' + first;
+ const receipt = JSON.parse(fs.readFileSync(path)); receipt.imageId = 'sha256:'+'f'.repeat(64); fs.writeFileSync(path, JSON.stringify(receipt));
+}
 process.stdout.write(JSON.stringify({matches:process.env.MODE === 'scan-fail' ? [{vulnerability:{severity:'High'}}] : [],source:{target:{imageID:process.env.IMAGE_ID,manifestDigest:process.env.MANIFEST_DIGEST}}}));
-if (process.env.MODE === 'scan-fail') process.exit(2);
+if (process.env.MODE === 'scan-fail' || (process.env.MODE === 'partial-scan' && args[0].includes('/restore-tools@'))) process.exit(2);
 `);
-  const env = { PATH: `${join(dir, 'bin')}:${process.env.PATH}`, MODE: mode, TRACE: join(dir, 'trace'), MANIFEST: manifest, MANIFEST_DIGEST: manifestDigest, IMAGE_ID: digest, GITHUB_SHA: sha, GITHUB_REPOSITORY: 'Owner/Repo', GITHUB_OUTPUT: join(dir, 'outputs') };
+  const env = { PATH: `${join(dir, 'bin')}:${process.env.PATH}`, MODE: mode, TRACE: join(dir, 'trace'), PUBLISHED: join(dir, 'published'), EVIDENCE: evidence, MANIFEST: manifest, MANIFEST_DIGEST: manifestDigest, IMAGE_ID: digest, GITHUB_SHA: sha, GITHUB_REPOSITORY: 'Owner/Repo', GITHUB_OUTPUT: join(dir, 'outputs') };
   return { dir, evidence, env, manifestDigest, run: () => invoke('image-release.mjs', env, ['publish', evidence]), trace: () => existsSync(env.TRACE) ? readFileSync(env.TRACE,'utf8').trim().split('\n').map(JSON.parse) : [] };
 }
 
@@ -295,10 +311,63 @@ for (const mode of ['matching', 'absent', 'new-repository', 'structured-name', '
       assert.ok(readFileSync(f.env.GITHUB_OUTPUT,'utf8').includes(`${name.replace('-', '_')}_ref=ghcr.io/owner/repo/${name}@${f.manifestDigest}`));
       const receipt = JSON.parse(readFileSync(join(f.evidence, `${name}-${f.manifestDigest.replace(':', '-')}.release.json`)));
       assert.equal(receipt.target, target);
-      for (const key of ['sbom', 'syft', 'grype']) assert.ok(existsSync(receipt[key]));
+      assert.equal(receipt.imageId, digest);
+      assert.equal(receipt.manifestDigest, f.manifestDigest);
+      for (const key of ['spdx', 'syft', 'grype']) {
+        assert.equal(receipt.artifacts[key].file, basename(receipt.artifacts[key].file));
+        assert.match(receipt.artifacts[key].sha256, /^[0-9a-f]{64}$/);
+        assert.equal(receipt.artifacts[key].sha256, fileSha(join(f.evidence, receipt.artifacts[key].file)));
+      }
     }
+    const release = JSON.parse(readFileSync(join(f.evidence, 'release.json')));
+    assert.equal(release.schemaVersion, 1);
+    assert.equal(release.sourceSha, sha);
+    assert.deepEqual(release.images.map(image => image.name).sort(), ['api','maintenance','restore-tools','web','worker']);
+    for (const image of release.images) {
+      assert.equal(image.tag.split(':').at(-1), release.sourceSha);
+      assert.match(image.ref, /@sha256:[0-9a-f]{64}$/);
+      assert.equal(image.scanReceipt, basename(image.scanReceipt));
+      assert.equal(image.scanReceiptSha256, fileSha(join(f.evidence, image.scanReceipt)));
+    }
+    const moved = join(f.dir, 'relocated');
+    cpSync(f.evidence, moved, { recursive: true });
+    const validated = invoke('image-release.mjs', f.env, ['validate', moved]);
+    assert.equal(validated.status, 0, validated.stderr);
   });
 }
+
+for (const mode of ['tag-race', 'missing-receipt', 'mismatched-receipt', 'partial-scan']) {
+  test(`registry ${mode} leaves GITHUB_OUTPUT untouched`, t => {
+    const f = registryFixture(t, 'absent');
+    f.env.MODE = mode;
+    const result = f.run();
+    assert.notEqual(result.status, 0);
+    assert.equal(existsSync(f.env.GITHUB_OUTPUT), false);
+  });
+}
+
+test('relocated evidence rejects absolute paths and altered artifact bytes', t => {
+  const f = registryFixture(t);
+  f.env.RELEASE_SECRET_CANARY = 'release-secret-canary-5e3ad5c04e8b';
+  assert.equal(f.run().status, 0);
+  for (const file of ['release.json', ...names.map(name => `${name}-${f.manifestDigest.replace(':', '-')}.release.json`)]) {
+    const bytes = readFileSync(join(f.evidence, file), 'utf8');
+    assert.ok(!bytes.includes(f.dir), `${file} contains an absolute runner path`);
+    assert.ok(!bytes.includes(f.env.RELEASE_SECRET_CANARY), `${file} contains a secret canary`);
+  }
+  const moved = join(f.dir, 'relocated');
+  cpSync(f.evidence, moved, { recursive: true });
+  const releasePath = join(moved, 'release.json');
+  const release = JSON.parse(readFileSync(releasePath));
+  release.images[0].scanReceipt = join(moved, release.images[0].scanReceipt);
+  writeFileSync(releasePath, JSON.stringify(release));
+  assert.notEqual(invoke('image-release.mjs', f.env, ['validate', moved]).status, 0);
+  release.images[0].scanReceipt = basename(release.images[0].scanReceipt);
+  writeFileSync(releasePath, JSON.stringify(release));
+  const receipt = JSON.parse(readFileSync(join(moved, release.images[0].scanReceipt)));
+  writeFileSync(join(moved, receipt.artifacts.spdx.file), 'altered');
+  assert.notEqual(invoke('image-release.mjs', f.env, ['validate', moved]).status, 0);
+});
 
 // Full wrapper observed from the flake-locked Skopeo 1.24.1 against a
 // disposable local OCI fixture (canonical MANIFEST_UNKNOWN/NAME_UNKNOWN).

@@ -22,4 +22,6 @@ Migration Job은 application rollout보다 먼저 실행합니다. Job image에�
 
 운영 key 형식은 `DELETED_IDENTITY_HMAC_KEYS`의 각 값이 **정확히 32바이트를 unpadded standard base64**로 인코딩한 JSON map이고, `DELETION_PSEUDONYM_KEY`는 **32바이트 이상을 unpadded base64url**로 인코딩한 값입니다. 두 형식은 바꿔 쓸 수 없습니다. Key 원문이나 DSN을 Job log, image, 배포 manifest에 기록하지 않습니다.
 
+이미지 게시 증거의 `release.json` 및 스캔 영수증 형식과 디렉터리 이동 검증 절차는 [이미지 릴리스 증거 계약](IMAGE_RELEASE_EVIDENCE_CONTRACT.ko.md)을 따릅니다.
+
 호스트 계약 확인은 `nix develop --command make image-runtime-contract-test`를 사용하며 `make check`에도 포함됩니다. CI migrations job은 격리된 테스트 DB에 migration과 runtime role GRANT를 적용한 뒤 이 검사를 실행합니다. 이때 `TASK3_WORKER_OAUTH_TEST_DSN`에 테스트용 `jandibat_worker` DSN을 제공하여 worker의 DB 연결 이후 OAuth 누락도 실제 process에서 거부되는지 확인합니다. 테스트 key는 실행마다 임시로 생성하고 로그에 출력하지 않습니다. Linux image/container 확인은 `nix develop --command make images-smoke`를 사용합니다. Darwin에서 image output 평가와 Go process 테스트가 통과해도 Linux container smoke를 수행했다고 기록하지 않습니다.

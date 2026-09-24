@@ -122,15 +122,38 @@ esac
       docker: `#!/bin/sh
 case "$1" in
   load) echo 'Loaded image: fixture';;
-  run) echo web-fixture-id;;
+  run)
+    count=0
+    [ ! -f "$FIXTURES/run-count" ] || count=$(cat "$FIXTURES/run-count")
+    count=$((count + 1))
+    echo "$count" >"$FIXTURES/run-count"
+    case "$count" in 1) echo web-fixture-id;; 2) echo readonly-fixture-id;; 3) echo db-fixture-id;; 4) echo api-fixture-id;; esac;;
   exec)
     case "$*" in
       *'/healthz'*) case "$FAIL_MODE" in health*) exit 1;; esac; echo ok;;
-      *'/config.json'*) echo '{"apiBaseUrl":"https://api.example.test"}';;
-      *'http://127.0.0.1:8080/'*) echo 'HTTP/1.1 200 OK' >&2; echo 'Content-Security-Policy: connect-src https://wrong.example.test' >&2;;
+      *'/config.json'*)
+        if [ "$FAIL_MODE" = config ]; then echo '{"apiBaseUrl":"https://wrong.example.test"}';
+        else echo '{"apiBaseUrl":"https://api.example.test"}'; fi;;
+      *'http://127.0.0.1:8080/')
+        echo 'HTTP/1.1 200 OK' >&2
+        if [ "$FAIL_MODE" = headers ]; then echo 'Content-Security-Policy: connect-src https://wrong.example.test' >&2
+        else echo "Content-Security-Policy: connect-src 'self' https://api.example.test" >&2; fi;;
+      *'api-fixture-id'*'/livez'*) if [ "$FAIL_MODE" = api-health ]; then exit 1; fi; echo ok;;
     esac ;;
-  inspect) if [ "$FAIL_MODE" = health127 ]; then echo 'exited 127'; else echo 'exited 1'; fi;;
-  logs) echo 'nginx: permission denied token=SUPER_SECRET_VALUE' >&2;;
+  inspect)
+    case "$*" in
+      *State.Status*State.ExitCode*) if [ "$FAIL_MODE" = health127 ]; then echo 'exited 127'; else echo 'exited 1'; fi;;
+      *State.Running*) echo false;;
+      *State.ExitCode*) echo 1;;
+    esac;;
+  logs)
+    case "$*" in
+      *api-fixture-id*) echo 'api: connection failed token=SUPER_SECRET_VALUE' >&2;;
+      *readonly-fixture-id*) echo 'runtime output directory must exist and be writable' >&2;;
+      *) echo 'nginx: permission denied token=SUPER_SECRET_VALUE' >&2;;
+    esac;;
+  compose) echo '{"services":{"cockroach":{"image":"cockroach-fixture"}}}';;
+  network) echo smoke-network-fixture;;
 esac
 `,
     };
@@ -162,6 +185,24 @@ test('failed CSP assertion reports the phase and bounded header context', () => 
   assert.equal(result.status, 1);
   assert.match(result.stderr, /image smoke failed: web CSP headers/);
   assert.match(result.stderr, /web headers:.*Content-Security-Policy/);
+  assert.match(result.stderr, /web CSP: connect-src mismatch/);
+  assert.doesNotMatch(result.stderr, /SUPER_SECRET_VALUE/);
+});
+
+test('failed web config assertion reports a fixed reason without the response body', () => {
+  const result = runtimeFailure('config');
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /image smoke failed: web config.json body/);
+  assert.match(result.stderr, /web config.json: apiBaseUrl mismatch/);
+  assert.doesNotMatch(result.stderr, /wrong.example.test/);
+});
+
+test('API health timeout reports safe context for the API container', () => {
+  const result = runtimeFailure('api-health');
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /image smoke failed: api livez/);
+  assert.match(result.stderr, /api container: status=exited exit=1/);
+  assert.match(result.stderr, /api logs: failed/);
   assert.doesNotMatch(result.stderr, /SUPER_SECRET_VALUE/);
 });
 

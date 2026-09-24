@@ -49,6 +49,7 @@ if [ "${1:-}" = --archive ]; then
 fi
 
 phase='image derivation evaluation'
+trap 'result=$?; if [ "$result" -ne 0 ]; then printf "image smoke failed: %s (exit %s)\n" "$phase" "$result" >&2; fi' EXIT
 for name in api worker maintenance web; do
 	phase="image derivation evaluation: $name"
 	nix eval --raw ".#packages.x86_64-linux.${name}-image.drvPath" >/dev/null
@@ -67,31 +68,34 @@ scratch=$(mktemp -d)
 containers=
 network=
 web=
+diagnostic_container=
+diagnostic_label=
 phase='scratch setup'
-web_failure_context() {
-	[ -n "$web" ] || return 0
-	state=$(docker inspect -f '{{.State.Status}} {{.State.ExitCode}}' "$web" 2>/dev/null) || state='unavailable'
+container_failure_context() {
+	label=$1
+	target=$2
+	state=$(docker inspect -f '{{.State.Status}} {{.State.ExitCode}}' "$target" 2>/dev/null) || state='unavailable'
 	case "$state" in
 		'created '*|'running '*|'paused '*|'restarting '*|'removing '*|'exited '*|'dead '*)
 			state_name=${state%% *}
 			exit_code=${state#* }
 			case "$exit_code" in
-				''|*[!0-9]*) echo 'web container: state unavailable' >&2 ;;
-				*) printf 'web container: status=%s exit=%s\n' "$state_name" "$exit_code" >&2 ;;
+				''|*[!0-9]*) printf '%s container: state unavailable\n' "$label" >&2 ;;
+				*) printf '%s container: status=%s exit=%s\n' "$label" "$state_name" "$exit_code" >&2 ;;
 			esac ;;
-		*) echo 'web container: state unavailable' >&2 ;;
+		*) printf '%s container: state unavailable\n' "$label" >&2 ;;
 	esac
 	# Only fixed diagnostic markers are emitted. Container logs and headers can
 	# contain request values or credentials and must never be copied to CI logs.
-	docker logs --tail 20 "$web" 2>&1 | node -e '
+	docker logs --tail 20 "$target" 2>&1 | node -e '
 let data = "";
 process.stdin.on("data", chunk => { data += chunk.toString().slice(0, Math.max(0, 16384 - data.length)); });
 process.stdin.on("end", () => {
   const markers = ["permission denied", "runtime output directory must exist and be writable", "address already in use", "no such file", "host not found", "emerg", "failed"];
   const found = markers.filter(marker => data.toLowerCase().includes(marker));
-  console.error(`web logs: ${found.length ? found.join(", ") : "no recognized error markers"}`);
-});' || :
-	if [ -f "$scratch/headers" ]; then
+  console.error(`${process.argv[1]} logs: ${found.length ? found.join(", ") : "no recognized error markers"}`);
+});' "$label" || :
+	if [ "$label" = web ] && [ -f "$scratch/headers" ]; then
 		node - "$scratch/headers" <<'NODE' || :
 const fs = require('node:fs');
 const headers = fs.readFileSync(process.argv[2], 'utf8');
@@ -105,7 +109,11 @@ cleanup() {
 	status=$?
 	if [ "$status" -ne 0 ]; then
 		printf 'image smoke failed: %s (exit %s)\n' "$phase" "$status" >&2
-		web_failure_context
+		if [ -n "$diagnostic_container" ]; then
+			container_failure_context "$diagnostic_label" "$diagnostic_container"
+		elif [ -n "$web" ]; then
+			container_failure_context web "$web"
+		fi
 	fi
 	for container in $containers; do docker rm -f "$container" >/dev/null 2>&1 || :; done
 	if [ -n "$network" ]; then docker network rm "$network" >/dev/null 2>&1 || :; fi
@@ -133,8 +141,13 @@ done
 
 wait_http() {
 	container=$1 port=$2 route=$3
+	diagnostic_container=$container
+	diagnostic_label=${4:-runtime}
 	for attempt in $(seq 1 60); do
-		if docker exec "$container" /busybox wget -T 5 -q -O - "http://127.0.0.1:$port$route" >"$scratch/body"; then return; fi
+		if docker exec "$container" /busybox wget -T 5 -q -O - "http://127.0.0.1:$port$route" >"$scratch/body"; then
+			diagnostic_container=
+			return
+		fi
 		sleep 1
 	done
 	echo "timed out waiting for $route" >&2
@@ -146,21 +159,33 @@ web=$(docker run -d --read-only --tmpfs /tmp:rw,nosuid,nodev --user 101:101 \
 	-e JANDIBAT_API_BASE_URL=https://api.example.test jandibat-web:nix)
 containers="$containers $web"
 phase='web healthz'
-wait_http "$web" 8080 /healthz
+wait_http "$web" 8080 /healthz web
 phase='web healthz body'
 test "$(cat "$scratch/body")" = ok
 phase='web config.json'
-wait_http "$web" 8080 /config.json
+wait_http "$web" 8080 /config.json web
 phase='web config.json body'
-node -e 'require("node:assert/strict").deepEqual(JSON.parse(require("node:fs").readFileSync(process.argv[1])), {apiBaseUrl:"https://api.example.test"})' "$scratch/body" 2>"$scratch/config-error"
+node - "$scratch/body" <<'NODE'
+const fs = require('node:fs');
+let config;
+try { config = JSON.parse(fs.readFileSync(process.argv[2], 'utf8')); }
+catch { console.error('web config.json: invalid JSON'); process.exit(1); }
+if (!config || config.apiBaseUrl !== 'https://api.example.test' || Object.keys(config).length !== 1) {
+  console.error('web config.json: apiBaseUrl mismatch');
+  process.exit(1);
+}
+NODE
 phase='web CSP headers'
 docker exec "$web" /busybox wget -T 5 -S -O /dev/null http://127.0.0.1:8080/ 2>"$scratch/headers"
-node - "$scratch/headers" 2>"$scratch/csp-error" <<'NODE'
-const assert = require('node:assert/strict');
+node - "$scratch/headers" <<'NODE'
 const headers = require('node:fs').readFileSync(process.argv[2], 'utf8');
 const policies = [...headers.matchAll(/content-security-policy:\s*([^\r\n]+)/gi)];
-assert.equal(policies.length, 1);
-assert.equal(policies[0][1].match(/(?:^|;)\s*connect-src\s+([^;]+)/)[1], "'self' https://api.example.test");
+if (policies.length !== 1) { console.error('web CSP: expected one policy'); process.exit(1); }
+const connectSrc = policies[0][1].match(/(?:^|;)\s*connect-src\s+([^;]+)/)?.[1];
+if (connectSrc !== "'self' https://api.example.test") {
+  console.error(connectSrc ? 'web CSP: connect-src mismatch' : 'web CSP: connect-src missing');
+  process.exit(1);
+}
 NODE
 
 # Bounded wait also catches a regression that silently starts without /tmp.
@@ -182,6 +207,7 @@ docker logs "$readonly" 2>&1 | grep -q 'runtime output directory must exist and 
 phase='database fixture image resolution'
 db_image=$(docker compose -f docker-compose.yml config --format json | node -e \
 	'let data="";process.stdin.on("data", x=>data+=x);process.stdin.on("end",()=>console.log(JSON.parse(data).services.cockroach.image))')
+phase='database fixture network create'
 network=$(docker network create "jandibat-images-$(basename "$scratch")")
 phase='database fixture start'
 db=$(docker run -d --network "$network" --network-alias database \
@@ -213,9 +239,9 @@ for spec in api:8080:DATABASE_URL worker:8081:WORKER_DATABASE_URL maintenance:80
 	containers="$containers $container"
 	processes="$processes $container:$port"
 	phase="$name livez"
-	wait_http "$container" "$port" /livez
+	wait_http "$container" "$port" /livez "$name"
 	phase="$name readyz"
-	wait_http "$container" "$port" /readyz
+	wait_http "$container" "$port" /readyz "$name"
 done
 
 # Loss of the dependency must fail readiness without failing liveness.

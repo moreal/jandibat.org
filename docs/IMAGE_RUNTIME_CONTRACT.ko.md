@@ -24,4 +24,6 @@ Migration Job은 application rollout보다 먼저 실행합니다. Job image에�
 
 이미지 게시 증거의 `release.json` 및 스캔 영수증 형식과 디렉터리 이동 검증 절차는 [이미지 릴리스 증거 계약](IMAGE_RELEASE_EVIDENCE_CONTRACT.ko.md)을 따릅니다.
 
+이미지 게시만 필요한 경우 `.github/workflows/publish-images.yml`을 수동 실행합니다. 먼저 `docs/evidence/security/*.md`의 사람이 작성한 보안 검토 기록을 커밋하고, `security_review_path`에 그 저장소 상대 경로를 입력합니다. 워크플로는 기록의 검토 SHA가 실행 SHA의 조상인지, 그 사이에 검토 기록 외 코드 변경이 없는지 확인한 후에만 다섯 이미지의 Nix archive를 빌드·검사하고 GHCR에 전체 소스 SHA 태그로 게시합니다. 게시 작업만 `packages: write` 권한을 가지며, 결과는 다섯 digest ref와 SBOM/Grype 영수증을 포함한 다운로드 가능한 artifact로 남습니다. 이 실행은 staging 또는 production 배포를 시작하지 않습니다. 실제 게시 실행과 재실행을 통한 불변 태그 검증은 별도 릴리스 승인 후 수행합니다.
+
 호스트 계약 확인은 `nix develop --command make image-runtime-contract-test`를 사용하며 `make check`에도 포함됩니다. CI migrations job은 격리된 테스트 DB에 migration과 runtime role GRANT를 적용한 뒤 이 검사를 실행합니다. 이때 `TASK3_WORKER_OAUTH_TEST_DSN`에 테스트용 `jandibat_worker` DSN을 제공하여 worker의 DB 연결 이후 OAuth 누락도 실제 process에서 거부되는지 확인합니다. 테스트 key는 실행마다 임시로 생성하고 로그에 출력하지 않습니다. Linux image/container 확인은 `nix develop --command make images-smoke`를 사용합니다. Darwin에서 image output 평가와 Go process 테스트가 통과해도 Linux container smoke를 수행했다고 기록하지 않습니다.

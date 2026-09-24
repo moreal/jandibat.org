@@ -71,6 +71,39 @@ test('workflows build Nix archives and gate release on local and registry eviden
   }
 });
 
+test('publish workflow requires human review and cannot deploy', () => {
+  const workflow = yaml(join(root, '.github/workflows/publish-images.yml'));
+  const events = workflow.true; // Ruby YAML parses unquoted `on` as boolean true.
+  assert.equal(events.workflow_dispatch.inputs.security_review_path.required, true);
+  assert.deepEqual(Object.keys(workflow.jobs).sort(), ['publish', 'security-review']);
+  assert.equal(workflow.permissions.contents, 'read');
+  assert.equal(workflow.permissions.packages, undefined);
+  const review = workflow.jobs['security-review'];
+  const publish = workflow.jobs.publish;
+  assert.equal(review['runs-on'], 'ubuntu-24.04');
+  assert.equal(review.permissions, undefined);
+  assert.equal(publish['runs-on'], 'ubuntu-24.04');
+  assert.equal(publish.needs, 'security-review');
+  assert.equal(publish.permissions.contents, 'read');
+  assert.equal(publish.permissions.packages, 'write');
+  for (const job of Object.values(workflow.jobs)) {
+    assert.equal(job.environment, undefined);
+    const steps = job.steps || [];
+    assert.ok(steps.some(s => s.uses === 'actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5' && s.with['persist-credentials'] === false));
+    assert.ok(steps.some(s => s.uses === 'DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25'));
+    assert.ok(steps.some(s => s.uses === 'DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d'));
+    for (const step of steps) assert.doesNotMatch(JSON.stringify(step), /\bssh\b|docker\s+compose|\bkubectl\b|flux\s+reconcile/i);
+  }
+  const reviewRun = review.steps.find(s => s.run?.includes('reviewed_sha'))?.run || '';
+  assert.match(reviewRun, /security-review-check/);
+  assert.match(reviewRun, /git merge-base --is-ancestor/);
+  assert.match(reviewRun, /git diff --name-only/);
+  assert.ok(publish.steps.some(s => s.run?.includes('build-release-images.sh')));
+  assert.ok(publish.steps.some(s => s.run?.includes('docker login ghcr.io')));
+  assert.ok(publish.steps.some(s => s.run?.includes('image-release.mjs publish')));
+  assert.ok(publish.steps.some(s => s.uses === 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a' && s.with['if-no-files-found'] === 'error'));
+});
+
 test('Compose gives every workload its own image and migration preflight inputs', () => {
   const { services } = yaml(join(root, 'deploy/staging/compose.yaml'));
   for (const name of names.slice(0, 4)) {
@@ -555,6 +588,14 @@ for (const forbidden of [
     assert.equal(result.status, 1, result.stdout + result.stderr);
   });
 }
+
+test('version authority rejects installing a package manager in a publish workflow', t => {
+  const dir = fixture(t);
+  mkdirSync(join(dir, 'workflows'));
+  writeFileSync(join(dir, 'workflows/publish-images.yml'), 'jobs:\n  publish:\n    steps:\n      - run: pnpm install\n');
+  const result = invoke('check-ci-version-authority.sh', {}, [join(dir, 'workflows'), dir]);
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+});
 
 for (const instruction of ['run go build ./...', 'RuN yarn build', 'add https://example.invalid/source.tar /src']) {
   test(`restore packaging guard rejects case-insensitive Dockerfile instruction: ${instruction}`, t => {

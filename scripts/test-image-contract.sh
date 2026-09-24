@@ -48,11 +48,15 @@ if [ "${1:-}" = --archive ]; then
 	exit
 fi
 
+phase='image derivation evaluation'
 for name in api worker maintenance web; do
+	phase="image derivation evaluation: $name"
 	nix eval --raw ".#packages.x86_64-linux.${name}-image.drvPath" >/dev/null
 done
+phase='flake check'
 nix flake check --all-systems --no-build
 
+phase='host architecture evaluation'
 system=$(nix eval --impure --raw --expr builtins.currentSystem)
 if [ "$system" != x86_64-linux ]; then
 	echo "SKIP: archive builds, rebuild hashes, and container smoke require x86_64-linux; evaluated on $system"
@@ -62,7 +66,47 @@ fi
 scratch=$(mktemp -d)
 containers=
 network=
+web=
+phase='scratch setup'
+web_failure_context() {
+	[ -n "$web" ] || return 0
+	state=$(docker inspect -f '{{.State.Status}} {{.State.ExitCode}}' "$web" 2>/dev/null) || state='unavailable'
+	case "$state" in
+		'created '*|'running '*|'paused '*|'restarting '*|'removing '*|'exited '*|'dead '*)
+			state_name=${state%% *}
+			exit_code=${state#* }
+			case "$exit_code" in
+				''|*[!0-9]*) echo 'web container: state unavailable' >&2 ;;
+				*) printf 'web container: status=%s exit=%s\n' "$state_name" "$exit_code" >&2 ;;
+			esac ;;
+		*) echo 'web container: state unavailable' >&2 ;;
+	esac
+	# Only fixed diagnostic markers are emitted. Container logs and headers can
+	# contain request values or credentials and must never be copied to CI logs.
+	docker logs --tail 20 "$web" 2>&1 | node -e '
+let data = "";
+process.stdin.on("data", chunk => { data += chunk.toString().slice(0, Math.max(0, 16384 - data.length)); });
+process.stdin.on("end", () => {
+  const markers = ["permission denied", "runtime output directory must exist and be writable", "address already in use", "no such file", "host not found", "emerg", "failed"];
+  const found = markers.filter(marker => data.toLowerCase().includes(marker));
+  console.error(`web logs: ${found.length ? found.join(", ") : "no recognized error markers"}`);
+});' || :
+	if [ -f "$scratch/headers" ]; then
+		node - "$scratch/headers" <<'NODE' || :
+const fs = require('node:fs');
+const headers = fs.readFileSync(process.argv[2], 'utf8');
+const status = headers.match(/HTTP\/[0-9.]+\s+([0-9]{3})/i)?.[1] || 'unavailable';
+const csp = /^content-security-policy:/im.test(headers) ? 'present' : 'missing';
+console.error(`web headers: status=${status} Content-Security-Policy=${csp}`);
+NODE
+	fi
+}
 cleanup() {
+	status=$?
+	if [ "$status" -ne 0 ]; then
+		printf 'image smoke failed: %s (exit %s)\n' "$phase" "$status" >&2
+		web_failure_context
+	fi
 	for container in $containers; do docker rm -f "$container" >/dev/null 2>&1 || :; done
 	if [ -n "$network" ]; then docker network rm "$network" >/dev/null 2>&1 || :; fi
 	rm -r "$scratch"
@@ -72,14 +116,18 @@ trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 
 for name in api worker maintenance web; do
+	phase="archive build: $name"
 	archive=$(nix build --no-link --print-out-paths ".#${name}-image")
+	phase="archive contract: $name"
 	check_archive "$name" "$archive"
+	phase="archive rebuild: $name"
 	before=$(sha256sum "$archive" | cut -d ' ' -f 1)
 	# --rebuild really reruns the archive derivation instead of reusing its output.
 	nix build --offline --rebuild --option sandbox true --no-link ".#${name}-image"
 	after=$(sha256sum "$archive" | cut -d ' ' -f 1)
 	test "$before" = "$after"
 	printf '%s %s\n' "$name" "$after"
+	phase="docker image load: $name"
 	docker load -i "$archive"
 done
 
@@ -89,20 +137,25 @@ wait_http() {
 		if docker exec "$container" /busybox wget -T 5 -q -O - "http://127.0.0.1:$port$route" >"$scratch/body"; then return; fi
 		sleep 1
 	done
-	docker logs "$container" >&2
 	echo "timed out waiting for $route" >&2
 	exit 1
 }
 
+phase='web container start'
 web=$(docker run -d --read-only --tmpfs /tmp:rw,nosuid,nodev --user 101:101 \
 	-e JANDIBAT_API_BASE_URL=https://api.example.test jandibat-web:nix)
 containers="$containers $web"
+phase='web healthz'
 wait_http "$web" 8080 /healthz
+phase='web healthz body'
 test "$(cat "$scratch/body")" = ok
+phase='web config.json'
 wait_http "$web" 8080 /config.json
-node -e 'require("node:assert/strict").deepEqual(JSON.parse(require("node:fs").readFileSync(process.argv[1])), {apiBaseUrl:"https://api.example.test"})' "$scratch/body"
+phase='web config.json body'
+node -e 'require("node:assert/strict").deepEqual(JSON.parse(require("node:fs").readFileSync(process.argv[1])), {apiBaseUrl:"https://api.example.test"})' "$scratch/body" 2>"$scratch/config-error"
+phase='web CSP headers'
 docker exec "$web" /busybox wget -T 5 -S -O /dev/null http://127.0.0.1:8080/ 2>"$scratch/headers"
-node - "$scratch/headers" <<'NODE'
+node - "$scratch/headers" 2>"$scratch/csp-error" <<'NODE'
 const assert = require('node:assert/strict');
 const headers = require('node:fs').readFileSync(process.argv[2], 'utf8');
 const policies = [...headers.matchAll(/content-security-policy:\s*([^\r\n]+)/gi)];
@@ -111,9 +164,11 @@ assert.equal(policies[0][1].match(/(?:^|;)\s*connect-src\s+([^;]+)/)[1], "'self'
 NODE
 
 # Bounded wait also catches a regression that silently starts without /tmp.
+phase='web read-only without tmpfs start'
 readonly=$(docker run -d --read-only --user 101:101 \
 	-e JANDIBAT_API_BASE_URL=https://api.example.test jandibat-web:nix)
 containers="$containers $readonly"
+phase='web read-only without tmpfs exit'
 for attempt in $(seq 1 15); do
 	[ "$(docker inspect -f '{{.State.Running}}' "$readonly")" = true ] || break
 	sleep 1
@@ -124,20 +179,25 @@ docker logs "$readonly" 2>&1 | grep -q 'runtime output directory must exist and 
 
 # Use only an isolated, disposable in-memory DB: no existing service or volume.
 # Read the already pinned fixture image rather than introduce a version authority.
+phase='database fixture image resolution'
 db_image=$(docker compose -f docker-compose.yml config --format json | node -e \
 	'let data="";process.stdin.on("data", x=>data+=x);process.stdin.on("end",()=>console.log(JSON.parse(data).services.cockroach.image))')
 network=$(docker network create "jandibat-images-$(basename "$scratch")")
+phase='database fixture start'
 db=$(docker run -d --network "$network" --network-alias database \
 	--mount "type=bind,src=$PWD/db/migrations,dst=/migrations,readonly" \
 	--mount "type=bind,src=$PWD/scripts/db-migrate-url.sh,dst=/migrate.sh,readonly" \
 	"$db_image" start-single-node --insecure --store=type=mem,size=0.25 \
 	--cache=64MiB --max-sql-memory=64MiB)
 containers="$containers $db"
+phase='database fixture ready'
 for attempt in $(seq 1 60); do
 	if docker exec "$db" cockroach sql --insecure -e 'SELECT 1' >/dev/null 2>&1; then break; fi
 	sleep 1
 done
+phase='database fixture create schema'
 docker exec "$db" cockroach sql --insecure -e 'CREATE DATABASE image_smoke'
+phase='database fixture migrations'
 docker exec -e MIGRATION_DATABASE_URL=postgresql://root@localhost:26257/image_smoke?sslmode=disable \
 	-e COCKROACH_DATABASE=image_smoke -e MIGRATIONS_DIR=/migrations "$db" sh /migrate.sh
 
@@ -146,20 +206,26 @@ docker exec -e MIGRATION_DATABASE_URL=postgresql://root@localhost:26257/image_sm
 processes=
 for spec in api:8080:DATABASE_URL worker:8081:WORKER_DATABASE_URL maintenance:8082:MAINTENANCE_DATABASE_URL; do
 	name=${spec%%:*} rest=${spec#*:} port=${rest%%:*} variable=${rest#*:}
+	phase="$name container start"
 	container=$(docker run -d --network "$network" --read-only --tmpfs /tmp:rw,nosuid,nodev \
 		-e APP_ENV=development -e "$variable=postgresql://root@database:26257/image_smoke?sslmode=disable" \
 		"jandibat-$name:nix")
 	containers="$containers $container"
 	processes="$processes $container:$port"
+	phase="$name livez"
 	wait_http "$container" "$port" /livez
+	phase="$name readyz"
 	wait_http "$container" "$port" /readyz
 done
 
 # Loss of the dependency must fail readiness without failing liveness.
+phase='database fixture stop'
 docker stop -t 5 "$db" >/dev/null
 for spec in $processes; do
 	container=${spec%:*} port=${spec#*:}
+	phase="dependency loss livez: $container"
 	wait_http "$container" "$port" /livez
+	phase="dependency loss readyz: $container"
 	if docker exec "$container" /busybox wget -T 5 -S -O /dev/null "http://127.0.0.1:$port/readyz" 2>"$scratch/readiness"; then
 		echo 'readiness unexpectedly succeeded without a database' >&2
 		exit 1

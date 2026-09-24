@@ -15,7 +15,7 @@ for file in db/migrations/*.sql; do
 	expected="$expected/workspace/$file
 "
 done
-for file in db-migrate-url.sh db-configure-runtime-roles.sh db-verify-runtime-roles.sh; do
+for file in db-migrate-url.sh db-configure-runtime-roles.sh db-verify-runtime-roles.sh db-bootstrap-roles.sh; do
 	test -f "scripts/$file" || { echo "missing source script: $file" >&2; exit 1; }
 	expected="$expected/workspace/scripts/$file
 "
@@ -28,7 +28,7 @@ if [ "$actual" != "$expected" ]; then
 	exit 1
 fi
 
-for file in db/migrations/*.sql scripts/db-migrate-url.sh scripts/db-configure-runtime-roles.sh scripts/db-verify-runtime-roles.sh; do
+for file in db/migrations/*.sql scripts/db-migrate-url.sh scripts/db-configure-runtime-roles.sh scripts/db-verify-runtime-roles.sh scripts/db-bootstrap-roles.sh; do
 	source_hash=$(sha256sum "$file" | cut -d ' ' -f 1)
 	image_hash=$(docker run --rm --entrypoint /busybox "$image_id" sha256sum "/workspace/$file" | cut -d ' ' -f 1)
 	if [ "$source_hash" != "$image_hash" ]; then
@@ -36,7 +36,7 @@ for file in db/migrations/*.sql scripts/db-migrate-url.sh scripts/db-configure-r
 		exit 1
 	fi
 done
-for file in db-migrate-url.sh db-configure-runtime-roles.sh db-verify-runtime-roles.sh; do
+for file in db-migrate-url.sh db-configure-runtime-roles.sh db-verify-runtime-roles.sh db-bootstrap-roles.sh; do
 	docker run --rm --user 65532:65532 --read-only --entrypoint /busybox "$image_id" test -x "/workspace/scripts/$file"
 done
 docker run --rm --user 65532:65532 --read-only --entrypoint /busybox "$image_id" test ! -w /workspace/db/migrations

@@ -84,7 +84,7 @@ skopeo copy "docker-archive:$maintenance_archive" "oci:$restore_context/maintena
 mkdir -p "$restore_context/db/migrations" "$restore_context/scripts"
 cp db/migrations/*.sql "$restore_context/db/migrations/"
 chmod 444 "$restore_context"/db/migrations/*.sql
-for file in db-migrate-url.sh db-configure-runtime-roles.sh db-verify-runtime-roles.sh; do
+for file in db-migrate-url.sh db-configure-runtime-roles.sh db-verify-runtime-roles.sh db-bootstrap-roles.sh; do
 	cp "scripts/$file" "$restore_context/scripts/$file"
 	chmod 555 "$restore_context/scripts/$file"
 done

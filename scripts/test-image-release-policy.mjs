@@ -98,7 +98,7 @@ test('restore image packages the named database payload and checks it after impo
   assert.match(dockerfile, /^COPY db\/migrations\/ \/workspace\/db\/migrations\/$/m);
   assert.match(dockerfile, /^COPY scripts\/ \/workspace\/scripts\/$/m);
   assert.match(builder, /cp db\/migrations\/\*\.sql "\$restore_context\/db\/migrations\/"/);
-  assert.match(builder, /for file in db-migrate-url\.sh db-configure-runtime-roles\.sh db-verify-runtime-roles\.sh; do/);
+  assert.match(builder, /for file in db-migrate-url\.sh db-configure-runtime-roles\.sh db-verify-runtime-roles\.sh db-bootstrap-roles\.sh; do/);
   assert.match(builder, /cp "scripts\/\$file" "\$restore_context\/scripts\/\$file"/);
   assert.match(builder, /node scripts\/image-release\.mjs import restore-tools[^\n]*\n(?:[^\n]*\n)*?sh scripts\/test-restore-tools-payload\.sh/);
 });
@@ -420,7 +420,7 @@ if (a[1] === 'build') {
  const context = a.at(-1);
  const scripts = fs.readdirSync(context + '/scripts').sort();
  const migrations = fs.readdirSync(context + '/db/migrations').sort();
- if (JSON.stringify(scripts) !== JSON.stringify(['db-configure-runtime-roles.sh','db-migrate-url.sh','db-verify-runtime-roles.sh'])) process.exit(10);
+ if (JSON.stringify(scripts) !== JSON.stringify(['db-bootstrap-roles.sh','db-configure-runtime-roles.sh','db-migrate-url.sh','db-verify-runtime-roles.sh'])) process.exit(10);
  if (JSON.stringify(migrations) !== JSON.stringify(fs.readdirSync('db/migrations').filter(f => f.endsWith('.sql')).sort())) process.exit(11);
  for (const file of scripts) if (!(fs.statSync(context + '/scripts/' + file).mode & 0o111)) process.exit(12);
  for (const file of migrations) if (fs.statSync(context + '/db/migrations/' + file).mode & 0o222) process.exit(13);

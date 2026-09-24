@@ -133,18 +133,23 @@ func graphQLTrustedContext(deps Dependencies, graphDeps GraphQLDependencies, nex
 		ctx = graph.ContextWithAuthMutationFailureReporter(ctx, graphDeps.AuthFailureReporter)
 		ctx = graph.ContextWithMagicLinkRedirects(ctx, deps.AllowedRedirects)
 		ctx = graph.ContextWithProviderOAuthRedirects(ctx, deps.AllowedRedirects)
-		ctx = graph.ContextWithAuthTransport(ctx, GraphQLCookieTransport{Writer: w, Secure: deps.SecureCookies})
+		cookieTransport := GraphQLCookieTransport{Writer: w, Secure: deps.SecureCookies}
+		ctx = graph.ContextWithAuthTransport(ctx, cookieTransport)
 		token, fromCookie, present, malformed := graphQLCredential(r)
+		rejected := false
 		if malformed {
 			ctx = graph.ContextWithFailedAuthentication(ctx)
+			rejected = true
 		} else if present {
 			if deps.Auth == nil || deps.Sessions == nil {
 				ctx = graph.ContextWithFailedAuthentication(ctx)
+				rejected = true
 			} else {
 				user, userErr := deps.Auth.AuthenticateSession(ctx, token)
 				session, sessionErr := deps.Sessions.CurrentSession(ctx, token)
 				if userErr != nil || sessionErr != nil || user.ID == "" || session.UserID != user.ID || session.ID == "" {
 					ctx = graph.ContextWithFailedAuthentication(ctx)
+					rejected = true
 				} else {
 					ctx = graph.ContextWithVerifiedViewer(ctx, user.ID)
 					publishGraphQLAuditActor(ctx, user.ID)
@@ -161,6 +166,9 @@ func graphQLTrustedContext(deps Dependencies, graphDeps GraphQLDependencies, nex
 					}
 				}
 			}
+		}
+		if fromCookie && rejected {
+			_ = cookieTransport.ClearSessionCookie()
 		}
 		if !fromCookie || !present || malformed {
 			connectionServices := graphDeps.ConnectionMutations

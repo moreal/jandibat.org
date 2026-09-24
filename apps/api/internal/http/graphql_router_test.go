@@ -329,6 +329,46 @@ func TestGraphQLTrustedContextDoesNotDowngradeBadBearer(t *testing.T) {
 			if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), tc.want) {
 				t.Fatalf("response=%d %s, want %s", response.Code, response.Body.String(), tc.want)
 			}
+			if len(response.Result().Cookies()) != 0 {
+				t.Fatal("a rejected bearer credential must not clear the browser cookie")
+			}
+		})
+	}
+}
+
+// A rejected browser cookie remains failed authentication for this request,
+// but the response must remove it so the next request can sign in anonymously.
+func TestGraphQLTrustedContextClearsRejectedSessionCookie(t *testing.T) {
+	for _, token := range []string{"expired-token", ""} {
+		t.Run("cookie value "+token, func(t *testing.T) {
+			deps := Dependencies{Auth: graphQLAuthStub{}, Sessions: graphQLSessionsStub{}, RateLimiter: handlers.DefaultRateLimiter(), SecureCookies: true}
+			graphDeps := GraphQLDependencies{
+				NodeServices:        graph.NodeServices{ViewerUsers: graphQLViewerUsersStub{}},
+				AuthAccounts:        graphQLAccountPortStub{},
+				AuthFailureReporter: graphQLAuthFailureStub{},
+			}
+			handler := graph.PreflightHTTP(graphQLTrustedContext(deps, graphDeps, graph.NewHTTPHandler(&graph.Resolver{}, graph.HTTPOptions{})), graph.HTTPOptions{})
+			request := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{"query":"query Viewer { viewer { user { id } } }","operationName":"Viewer"}`))
+			request.Header.Set("Content-Type", "application/json")
+			request.AddCookie(&http.Cookie{Name: "jandibat_session", Value: token})
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"errors"`) || strings.Contains(response.Body.String(), `"id":"user-1"`) {
+				t.Fatalf("rejected cookie response status=%d body=%s", response.Code, response.Body.String())
+			}
+			cookies := response.Result().Cookies()
+			if len(cookies) != 1 || cookies[0].Name != "jandibat_session" || cookies[0].Value != "" || cookies[0].Path != "/" || cookies[0].MaxAge >= 0 || !cookies[0].HttpOnly || !cookies[0].Secure || cookies[0].SameSite != http.SameSiteLaxMode {
+				t.Fatalf("rejected cookie was not safely expired: %#v", cookies)
+			}
+
+			// A browser drops the expired cookie before its next request.
+			next := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{"query":"mutation SignIn { requestMagicLink(input: {email: \"person@example.test\"}) { accepted errors { code } } }","operationName":"SignIn"}`))
+			next.Header.Set("Content-Type", "application/json")
+			nextResponse := httptest.NewRecorder()
+			handler.ServeHTTP(nextResponse, next)
+			if nextResponse.Code != http.StatusOK || !strings.Contains(nextResponse.Body.String(), `"accepted":true`) {
+				t.Fatalf("anonymous sign-in after cookie expiry status=%d body=%s", nextResponse.Code, nextResponse.Body.String())
+			}
 		})
 	}
 }

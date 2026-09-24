@@ -46,7 +46,7 @@ adapter-sql-allowlist-check:
 graphql-generate:
 	sh scripts/render-graphql-schema.sh > graphql/schema.graphql
 	cd apps/api && go tool gqlgen generate
-	$(YARN) relay-compiler
+	$(YARN) relay-compiler --noWatchman
 
 graphql-check:
 	sh scripts/test-graphql-contract.sh
@@ -58,7 +58,7 @@ graphql-check:
 	sh scripts/test-graphql-custom-provider-mutation-contract.sh
 	sh scripts/test-graphql-generated-drift.sh
 	sh scripts/check-graphql-generated.sh
-	$(YARN) relay-compiler --validate
+	$(YARN) relay-compiler --noWatchman --validate
 	cd apps/api && go test ./internal/graphql/...
 
 sql-generated-drift-test:

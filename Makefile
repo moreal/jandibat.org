@@ -14,7 +14,7 @@ ci: nix-check install check
 images-build:
 	nix build .#packages.x86_64-linux.api-image .#packages.x86_64-linux.worker-image .#packages.x86_64-linux.maintenance-image .#packages.x86_64-linux.web-image --no-link
 
-images-smoke: image-contract-validator-test
+images-smoke: image-contract-validator-test image-release-policy-test
 	sh scripts/test-image-contract.sh
 
 image-contract-validator-test:

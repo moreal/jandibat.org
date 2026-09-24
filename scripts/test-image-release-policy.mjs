@@ -92,6 +92,29 @@ test('make check executes the host runtime contract', () => {
   assert.ok(result.stdout.split('\n').includes('sh scripts/test-image-runtime-contract.sh'));
 });
 
+test('restore image packages the named database payload and checks it after import', () => {
+  const dockerfile = readFileSync(join(root, 'deploy/restore-tools.Dockerfile'), 'utf8');
+  const builder = readFileSync(script('build-release-images.sh'), 'utf8');
+  assert.match(dockerfile, /^COPY db\/migrations\/ \/workspace\/db\/migrations\/$/m);
+  assert.match(dockerfile, /^COPY scripts\/ \/workspace\/scripts\/$/m);
+  assert.match(builder, /cp db\/migrations\/\*\.sql "\$restore_context\/db\/migrations\/"/);
+  assert.match(builder, /for file in db-migrate-url\.sh db-configure-runtime-roles\.sh db-verify-runtime-roles\.sh; do/);
+  assert.match(builder, /cp "scripts\/\$file" "\$restore_context\/scripts\/\$file"/);
+  assert.match(builder, /node scripts\/image-release\.mjs import restore-tools[^\n]*\n(?:[^\n]*\n)*?sh scripts\/test-restore-tools-payload\.sh/);
+});
+
+test('restore payload validation rejects an archive missing the baseline migration', t => {
+  const dir = fixture(t);
+  executable(dir, 'docker', `
+const args = process.argv.slice(2);
+if (args.includes('find')) { console.log('/workspace/db/migrations/0002_ingest_reservation_token.sql'); process.exit(0); }
+process.exit(2);
+`);
+  const result = invoke('test-restore-tools-payload.sh', { PATH: `${join(dir, 'bin')}:${process.env.PATH}` }, ['sha256:' + 'b'.repeat(64)]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /0001_baseline\.sql/);
+});
+
 test('CI exercises runtime secrets and worker OAuth after isolated test database migrations and grants', () => {
   const steps = yaml(join(root, '.github/workflows/ci.yml')).jobs.migrations.steps;
   const runtime = steps.findIndex(s => s.run?.includes('make image-runtime-contract-test'));
@@ -370,8 +393,15 @@ test(`release packaging ${uncertainOwnership ? 'preserves uncertain builder afte
   executable(dir, 'nix', `console.log(process.argv[2] === 'eval' ? 'x86_64-linux' : process.env.FIXTURE_ARCHIVE);`);
   executable(dir, 'make', '');
   // Image import/scan has its own real-program fixture; this shell fixture
-  // isolates builder lifecycle from Nix build and the image import boundary.
+  // isolates builder lifecycle from Nix build, image import and payload checks.
   executable(dir, 'node', '');
+  executable(dir, 'sh', `
+const {spawnSync} = require('node:child_process');
+const args = process.argv.slice(2);
+if (args[0] === 'scripts/test-restore-tools-payload.sh') process.exit(0);
+const result = spawnSync('/bin/sh', args, {stdio:'inherit', env:process.env});
+process.exit(result.status ?? 1);
+`);
   executable(dir, 'skopeo', '');
   executable(dir, 'docker', `
 const fs = require('node:fs'); const a = process.argv.slice(2);
@@ -387,6 +417,14 @@ if (a[1] === 'create') {
 if (a[1] === 'inspect') { if (!fs.existsSync(process.env.BUILDER_STATE)) process.exit(4); console.log('docker-container'); process.exit(0); }
 if (a[1] === 'build') {
  if (!fs.existsSync(process.env.BUILDER_STATE) || a[a.indexOf('--builder')+1] !== fs.readFileSync(process.env.BUILDER_STATE,'utf8')) { console.error('Docker exporter is not supported for the docker driver'); process.exit(5); }
+ const context = a.at(-1);
+ const scripts = fs.readdirSync(context + '/scripts').sort();
+ const migrations = fs.readdirSync(context + '/db/migrations').sort();
+ if (JSON.stringify(scripts) !== JSON.stringify(['db-configure-runtime-roles.sh','db-migrate-url.sh','db-verify-runtime-roles.sh'])) process.exit(10);
+ if (JSON.stringify(migrations) !== JSON.stringify(fs.readdirSync('db/migrations').filter(f => f.endsWith('.sql')).sort())) process.exit(11);
+ for (const file of scripts) if (!(fs.statSync(context + '/scripts/' + file).mode & 0o111)) process.exit(12);
+ for (const file of migrations) if (fs.statSync(context + '/db/migrations/' + file).mode & 0o222) process.exit(13);
+ for (const path of ['/db/migrations','/scripts']) if (fs.statSync(context + path).mode & 0o222) process.exit(14);
  if (process.env.FAILURE === 'build') process.exit(9);
  process.exit(0);
 }

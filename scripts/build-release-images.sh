@@ -41,6 +41,9 @@ cleanup() {
 	if [ "$builder_created" = true ]; then
 		docker buildx rm "$restore_builder" >/dev/null || :
 	fi
+	for directory in "$restore_context/db/migrations" "$restore_context/scripts"; do
+		if [ -d "$directory" ]; then chmod u+w "$directory"; fi
+	done
 	rm -r "$restore_context"
 }
 trap cleanup EXIT
@@ -78,6 +81,14 @@ docker buildx inspect "$restore_builder" --bootstrap --format '{{.Driver}}' >"$e
 test "$(cat "$evidence/buildx-driver.txt")" = docker-container
 skopeo copy "docker-archive:$api_archive" "oci:$restore_context/api:release"
 skopeo copy "docker-archive:$maintenance_archive" "oci:$restore_context/maintenance:release"
+mkdir -p "$restore_context/db/migrations" "$restore_context/scripts"
+cp db/migrations/*.sql "$restore_context/db/migrations/"
+chmod 444 "$restore_context"/db/migrations/*.sql
+for file in db-migrate-url.sh db-configure-runtime-roles.sh db-verify-runtime-roles.sh; do
+	cp "scripts/$file" "$restore_context/scripts/$file"
+	chmod 555 "$restore_context/scripts/$file"
+done
+chmod 555 "$restore_context/db/migrations" "$restore_context/scripts"
 docker buildx build --file deploy/restore-tools.Dockerfile --platform linux/amd64 \
 	--builder "$restore_builder" \
 	--build-context "api=oci-layout://$restore_context/api:release" \
@@ -86,3 +97,5 @@ docker buildx build --file deploy/restore-tools.Dockerfile --platform linux/amd6
 	--output "type=docker,dest=$restore_context/restore-tools.tar,rewrite-timestamp=true" \
 	"$restore_context"
 node scripts/image-release.mjs import restore-tools "$restore_context/restore-tools.tar" "$evidence"
+image_id=$(node -e 'process.stdout.write(require(process.argv[1]).imageId)' "$evidence/restore-tools.json")
+sh scripts/test-restore-tools-payload.sh "$image_id"

@@ -7,5 +7,7 @@ COPY --from=maintenance /nix/store /nix/store
 COPY --from=api /bin/server /jandibat-api
 COPY --from=maintenance /bin/maintenance /jandibat-maintenance
 COPY --from=api /busybox /busybox
+COPY db/migrations/ /workspace/db/migrations/
+COPY scripts/ /workspace/scripts/
 
 WORKDIR /workspace

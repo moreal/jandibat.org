@@ -240,6 +240,9 @@
       checks = forAllSystems (system:
         let
           toolchain = mkToolchain system;
+          imagePackages = import ./nix/images.nix {
+            inherit (toolchain) buildGoModule nodejs pkgs yarnBerry yarnDeps;
+          };
         in
         {
           toolchain-interface = toolchain.pkgs.runCommand "jandibat-toolchain-interface" {
@@ -259,6 +262,13 @@
             touch "$out"
           '';
           yarn-dependencies = toolchain.yarnDeps.webDependencies;
-        });
+        } // toolchain.pkgs.lib.optionalAttrs (system == "x86_64-linux")
+          (toolchain.pkgs.lib.genAttrs [ "api-image" "worker-image" "maintenance-image" "web-image" ]
+            (name: toolchain.pkgs.runCommand "${name}-contract" {
+              nativeBuildInputs = [ toolchain.nodejs toolchain.pkgs.gnutar toolchain.pkgs.gzip ];
+            } ''
+              sh ${./scripts/test-image-contract.sh} --archive ${toolchain.pkgs.lib.removeSuffix "-image" name} ${imagePackages.${name}}
+              touch "$out"
+            '')));
     };
 }

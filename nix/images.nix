@@ -29,8 +29,33 @@ let
       ../packages/solid-relay
     ];
   };
+
+  runtimeEnvironment = [
+    "PATH=/bin"
+    "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt"
+  ];
+
+  mkGoImage = name: program: port: payload:
+    pkgs.dockerTools.buildLayeredImage {
+      name = "jandibat-${name}";
+      tag = "nix";
+      created = "1970-01-01T00:00:01Z";
+      contents = pkgs.runCommand "${name}-image-root" { } ''
+        mkdir -p "$out/bin" "$out/etc/ssl/certs" "$out/tmp"
+        ln -s ${payload}/bin/${program} "$out/bin/${program}"
+        ln -s ${pkgs.busybox}/bin/busybox "$out/busybox"
+        ln -s ${pkgs.cacert}/etc/ssl/certs/ca-certificates.crt "$out/etc/ssl/certs/ca-certificates.crt"
+      '';
+      fakeRootCommands = ''chmod 1777 tmp'';
+      config = {
+        User = "65532:65532";
+        Entrypoint = [ "/bin/${program}" ];
+        Env = runtimeEnvironment;
+        ExposedPorts = { "${toString port}/tcp" = { }; };
+      };
+    };
 in
-{
+rec {
   api-payload = mkGoPayload "api" "server";
   worker-payload = mkGoPayload "worker" "worker";
   maintenance-payload = mkGoPayload "maintenance" "maintenance";
@@ -63,5 +88,38 @@ in
       cp -R apps/web/dist/client "$out/dist/client"
       runHook postInstall
     '';
+  };
+
+  api-image = mkGoImage "api" "server" 8080 api-payload;
+  worker-image = mkGoImage "worker" "worker" 8081 worker-payload;
+  maintenance-image = mkGoImage "maintenance" "maintenance" 8082 maintenance-payload;
+
+  web-image = pkgs.dockerTools.buildLayeredImage {
+    name = "jandibat-web";
+    tag = "nix";
+    created = "1970-01-01T00:00:01Z";
+    contents = pkgs.runCommand "web-image-root" { } ''
+      mkdir -p "$out/bin" "$out/etc/nginx" "$out/etc/ssl/certs" "$out/usr/share/nginx" "$out/tmp"
+      cp ${./web-start.sh} "$out/bin/web-start"
+      chmod 755 "$out/bin/web-start"
+      cp ${./nginx.conf} "$out/etc/nginx/nginx.conf"
+      cp ${../apps/web/nginx.conf} "$out/etc/nginx/site.conf"
+      cp ${../apps/web/docker-entrypoint.d/40-runtime-config.sh} "$out/etc/nginx/runtime-config.sh"
+      ln -s ${pkgs.nginxMainline}/conf/mime.types "$out/etc/nginx/mime.types"
+      ln -s ${pkgs.nginxMainline}/bin/nginx "$out/bin/nginx"
+      ln -s ${web-payload}/dist/client "$out/usr/share/nginx/html"
+      ln -s ${pkgs.busybox}/bin/busybox "$out/busybox"
+      for tool in sh grep awk sed; do
+        ln -s ${pkgs.busybox}/bin/$tool "$out/bin/$tool"
+      done
+      ln -s ${pkgs.cacert}/etc/ssl/certs/ca-certificates.crt "$out/etc/ssl/certs/ca-certificates.crt"
+    '';
+    fakeRootCommands = ''chmod 1777 tmp'';
+    config = {
+      User = "101:101";
+      Entrypoint = [ "/bin/web-start" ];
+      Env = runtimeEnvironment;
+      ExposedPorts = { "8080/tcp" = { }; };
+    };
   };
 }

@@ -21,7 +21,7 @@ docs/evidence/staging/2026-08-12-a1b2c3d/README.md
 ```
 
 - UTC 시각을 사용합니다.
-- commit SHA, API/Web image digest, CockroachDB exact version을 고정합니다.
+- commit SHA, API/worker/maintenance/web 및 restore-tools image digest, CockroachDB exact version을 고정합니다. 각 digest와 일치하는 SPDX/Syft/Grype evidence와 Linux archive 재빌드·runtime 로그를 연결합니다.
 - CI/run/dashboard 링크는 조직 권한 안에서 최소 400일 유지합니다.
 - raw log가 크면 immutable CI artifact/object storage에 저장하고 SHA-256과 expiry를 기록합니다.
 - token, cookie, email, 실제 user/subject ID, ciphertext, external connection URI를 넣지 않습니다.
@@ -50,7 +50,10 @@ Status: NOT RUN | RUNNING | FAILED | PASSED
 | Release approver | NOT RUN |
 | Commit SHA | NOT RUN |
 | API image digest | NOT RUN |
+| Worker image digest | NOT RUN |
+| Maintenance image digest | NOT RUN |
 | Web image digest | NOT RUN |
+| Restore-tools image digest | NOT RUN |
 | CockroachDB version | NOT RUN |
 | Change/incident ID | NOT RUN |
 

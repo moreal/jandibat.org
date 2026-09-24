@@ -125,7 +125,7 @@ blocking SQL session을 오래 유지할 수 없으면 `WITH new_db_name = '...'
 RTO 측정은 incident/drill 선언 시각에 시작하고 다음 검증 종료 시 끝납니다.
 
 1. restore job이 `succeeded`인지 확인.
-2. `MIGRATION_DATABASE_URL=<대상 URL> make db-migrate-url`을 source와 restore database에 각각 실행해 모든 migration version/checksum이 같고 재실행 시 전부 `already applied`인지 확인.
+2. `MIGRATION_DATABASE_URL=<대상 URL> COCKROACH_DATABASE=<URL과 일치하는 대상 DB명> MIGRATIONS_DIR="$PWD/db/migrations" TMPDIR=/tmp make db-migrate-url`을 source와 restore database에 각각 실행해 모든 migration version/checksum이 같고 재실행 시 전부 `already applied`인지 확인. Cockroach CLI와 writable 임시 디렉터리가 필수이며 `DATABASE_URL` fallback은 없습니다.
 3. expected table/constraint/index 목록과 row count를 비교.
 4. synthetic sentinel user/subject/fact의 referential integrity와 API projection을 확인.
 5. 가장 최신 synthetic event의 시각으로 실제 RPO를 계산.

@@ -2,14 +2,14 @@
 
 기준일: 2026-08-13
 
-이 runbook은 immutable API/Web image 배포, API image의 분리된 HTTP/sync/maintenance process, checksum migration, staging promotion과 rollback 기준을 정의합니다. 저장소에는 image build, checksum migration, backup, 배포와 application rollback 자동화가 있습니다. 다만 실제 staging 실행 기록은 아직 없으므로 운영 검증 상태는 `NOT VERIFIED`입니다.
+이 runbook은 별도의 immutable API/worker/maintenance/web Nix image 배포, checksum migration, staging promotion과 rollback 기준을 정의합니다. restore tooling도 별도 digest로 고정합니다. 실제 Linux image 빌드·재현성·스캔 및 staging 실행 기록을 확인하기 전까지 운영 검증 상태는 `NOT VERIFIED`입니다.
 
 ## 1. Release 불변 조건
 
-- release 단위는 Git commit SHA와 API/Web image digest 두 개로 식별합니다.
+- release 단위는 full Git commit SHA와 API/worker/maintenance/web 및 restore-tools digest 다섯 개로 식별합니다.
 - tag만으로 배포하지 않고 digest를 manifest에 고정합니다.
 - 동일 SHA의 image를 staging에서 production으로 promote하며 다시 build하지 않습니다.
-- API 변경은 OpenAPI, generated TypeScript type, interface change log와 함께 배포합니다.
+- 도메인 API 변경은 GraphQL SDL/Relay artifact, HTTP edge 변경은 OpenAPI/type 및 interface change log와 함께 배포합니다.
 - migration은 expand → compatible application → contract 순서로 최소 두 release에 나눕니다.
 - production migration 전 24시간 이내 성공 backup과 최근 7일 이내 restore drill이 필요합니다.
 - migration과 deploy 실행자는 분리된 최소 권한 identity를 사용합니다.
@@ -22,8 +22,8 @@ git status --short
 git rev-parse HEAD
 make ci
 make staging-compose-check
-test -f apps/api/Dockerfile
-test -f apps/web/Dockerfile
+test -f nix/images.nix
+test -f scripts/build-release-images.sh
 test -f scripts/db-migrate-url.sh
 test -f scripts/deploy-staging.sh
 ```
@@ -42,43 +42,45 @@ CI에서 다음이 모두 green이어야 합니다.
 - frontend typecheck/build/test.
 - 실제 CockroachDB v26.2에서 migration apply/verify/reapply.
 - dependency, code, secret, container scan에서 신규 high/critical 0건.
-- API/Web image build와 SBOM/provenance 생성.
+- 네 Nix payload의 offline 재빌드/store path 일치, archive 재빌드/hash 일치와 non-root/read-only runtime 검증.
+- workload 네 개와 restore-tools의 exact image ID 및 registry digest에 대한 SPDX SBOM/high·critical scan 생성과 identity 일치.
 
 ## 3. Immutable image build
 
-구현된 Dockerfile 기준 명령:
+실제 x86_64 Linux와 Docker runtime에서 수행하는 로컬 검증(게시 없음):
 
 ```sh
-docker build --pull \
-  --file apps/api/Dockerfile \
-  --tag "ghcr.io/moreal/jandibat-api:$RELEASE_SHA" \
-  apps/api
-
-docker build --pull \
-  --file apps/web/Dockerfile \
-  --tag "ghcr.io/moreal/jandibat-web:$RELEASE_SHA" \
-  .
+nix develop .#images --command sh scripts/build-release-images.sh /tmp/jandibat-image-evidence
 ```
 
-각 image는 non-root user와 explicit healthcheck를 정의합니다. API image에는 `/jandibat-api`, `/jandibat-worker`, `/jandibat-maintenance` 세 executable이 있으며 staging Compose가 별도 container/DB role로 실행합니다. 각 runtime container에는 자기 DSN만 주입하고 read-only root filesystem, capability drop, `no-new-privileges`를 적용합니다. CI가 registry push 후 반환한 manifest digest를 기록하고 이후 deploy는 다음 형태로 digest를 사용합니다. Dockerfile과 Compose base image는 사람이 읽을 수 있는 정확한 version tag와 multi-arch manifest digest를 함께 고정하며, 의존성 갱신 PR이 둘을 같이 검증·갱신합니다.
+`api-image`, `worker-image`, `maintenance-image`, `web-image`는 각각 `/bin/server`, `/bin/worker`, `/bin/maintenance`, `/bin/web-start`를 entrypoint로 갖는 별도 Nix archive입니다. 실제 import한 config hash(image ID)를 inspect하고 바로 그 ID로 SPDX SBOM과 high/critical Grype 검사를 수행합니다. restore-tools Dockerfile은 digest 고정 Cockroach base에 API/maintenance archive의 완성된 바이너리와 Nix runtime closure를 복사만 하며 production code를 컴파일하지 않습니다. restore-tools도 동일한 scan gate를 통과해야 합니다.
+
+각 runtime container에는 자기 DSN만 주입하고 numeric non-root user, read-only root filesystem, capability drop, `no-new-privileges`를 적용합니다. web의 runtime 출력과 Nginx 임시 파일은 writable `/tmp`에 둡니다. `/livez`는 DB와 독립적인 liveness, `/readyz`와 API `/healthz`는 dependency readiness입니다. API `/metrics`는 loopback 수집이 필요합니다.
+
+수동 staging workflow는 후보 archive에서 registry manifest를 먼저 계산하고 기존 full-SHA tag가 다른 digest이면 중단합니다. 기존 tag가 동일하면 재사용합니다. 게시 후 registry의 digest를 다시 검사하고 바로 그 digest의 SPDX/Syft/Grype 결과를 검증한 뒤 deploy output을 내보냅니다. archive SHA-256, config image ID, registry manifest digest는 서로 다른 값으로 evidence에 기록합니다. workflow concurrency 외부의 publisher가 동일 tag를 쓰지 못하도록 registry 권한도 제한합니다.
 
 ```text
-ghcr.io/moreal/jandibat-api@sha256:<digest>
-ghcr.io/moreal/jandibat-web@sha256:<digest>
+ghcr.io/owner/repository/api@sha256:<64 hex>
+ghcr.io/owner/repository/worker@sha256:<64 hex>
+ghcr.io/owner/repository/maintenance@sha256:<64 hex>
+ghcr.io/owner/repository/web@sha256:<64 hex>
+ghcr.io/owner/repository/restore-tools@sha256:<64 hex>
 ```
 
-로컬 build 성공은 registry artifact provenance나 staging 실행을 대체하지 않습니다.
+Darwin에서는 Nix 평가와 정책 테스트까지만 수행할 수 있습니다. 로컬 fixture 통과는 실제 Linux 빌드·archive 반복성·runtime·스캔이나 registry/staging 실행을 대체하지 않습니다.
 
 ## 4. Checksum migration runner 계약
 
 원격/staging migration은 `scripts/db-migrate-url.sh` 또는 다음 Make target으로 실행합니다.
 
 ```sh
-MIGRATION_DATABASE_URL="$STAGING_MIGRATION_DATABASE_URL" make db-migrate-url
-MIGRATION_DATABASE_URL="$STAGING_MIGRATION_DATABASE_URL" make db-migrate-url
+MIGRATION_DATABASE_URL="$STAGING_MIGRATION_DATABASE_URL" COCKROACH_DATABASE=jandibat MIGRATIONS_DIR="$PWD/db/migrations" TMPDIR=/tmp make db-migrate-url
+MIGRATION_DATABASE_URL="$STAGING_MIGRATION_DATABASE_URL" COCKROACH_DATABASE=jandibat MIGRATIONS_DIR="$PWD/db/migrations" TMPDIR=/tmp make db-migrate-url
 ```
 
 첫 실행은 pending migration을 적용하고, 두 번째 실행은 모든 항목을 `already applied`로 보고해야 합니다. 로컬 Compose DB에는 `make db-migrate`를 사용합니다.
+
+위 세 migration 입력과 Cockroach CLI, 쓰기 가능한 `TMPDIR`가 필수입니다. `DATABASE_URL` fallback은 없습니다. staging의 migration tool은 read-only mount의 migration SQL과 writable `/tmp`를 사용합니다.
 
 Migration runner는 각 파일과 `schema_migrations` ledger INSERT를 `autocommit_before_ddl=off`인 한 Cockroach transaction/session에서 실행합니다. Schema-locked table을 변경해야 하는 migration은 검증된 `-- jandibat:schema-unlock <table>` directive를 한 개만 선언합니다. Runner는 table identifier를 allowlist 형식으로 검증하고 별도 implicit transaction에서 unlock한 뒤 DDL+ledger를 원자적으로 적용하며 성공·실패·다음 재실행 모두에서 relock합니다. `scripts/db-verify-schema-locks.sh`는 모든 directive table을 독립 process에서 검증하고, migration process가 SIGKILL되어 trap을 실행하지 못한 경우에만 배포 실패 경로가 `--repair`로 같은 allowlist를 재잠급니다. 배포 성공 뒤에도 verify-only 단계를 실행하고 결과를 staging evidence에 보존합니다. `make migration-atomicity-test`는 일반 DDL 오류와 constraint 교체 중 오류의 rollback뿐 아니라 trap이 실행되지 않은 unlocked 상태의 fail-closed 탐지·독립 복구를 확인합니다. Fixture 경로는 runtime migration directory와 분리되어 있습니다.
 
@@ -120,14 +122,17 @@ Contract release:
 
 ```sh
 API_IMAGE="ghcr.io/moreal/jandibat-api@sha256:$API_DIGEST" \
+WORKER_IMAGE="ghcr.io/moreal/jandibat-worker@sha256:$WORKER_DIGEST" \
+MAINTENANCE_IMAGE="ghcr.io/moreal/jandibat-maintenance@sha256:$MAINTENANCE_DIGEST" \
 WEB_IMAGE="ghcr.io/moreal/jandibat-web@sha256:$WEB_DIGEST" \
+RESTORE_TOOLS_IMAGE="ghcr.io/moreal/jandibat-restore-tools@sha256:$RESTORE_TOOLS_DIGEST" \
 BUILD_SHA="$RELEASE_SHA" \
 REGION="$STAGING_REGION" \
 STAGING_ENV_FILE="$PWD/deploy/staging/.env.staging" \
 make deploy-staging
 ```
 
-스크립트는 digest 형식을 검증하고 pull → backup → checksum migration → runtime GRANT 재적용 → API/worker/maintenance/Web 교체 → API/Web host health와 worker/maintenance 내부 readiness smoke를 수행합니다. 실패하면 이전 application image를 복구하며 이미 적용된 forward migration은 되돌리지 않습니다. 현재 single-host Compose 자동화에는 weighted 5%/25% traffic splitting이 없으므로 아래 canary 관찰은 staging ingress/orchestrator에서 별도로 수행하고 증거를 남겨야 합니다.
+스크립트는 digest 형식을 검증하고 pull → backup → checksum migration → runtime GRANT 재적용 → positive/negative role 검증 → API/worker/maintenance/Web 교체 → API/Web host health와 worker/maintenance 내부 readiness smoke를 수행합니다. 실패하면 이전 네 workload와 restore tooling 참조를 복구하며 이미 적용된 forward migration은 되돌리지 않습니다. 구형 API/Web-only state는 새 네 이미지 계약에 맞는 검증된 baseline을 준비하기 전까지 rollback에 사용할 수 없습니다. 현재 single-host Compose 자동화에는 weighted 5%/25% traffic splitting이 없으므로 아래 canary 관찰은 staging ingress/orchestrator에서 별도로 수행하고 증거를 남겨야 합니다.
 
 순서:
 
@@ -138,7 +143,7 @@ make deploy-staging
 5. API 100% 전환 후 새 Web image 배포.
 6. synthetic smoke와 GraphQL SDL domain contract/OpenAPI HTTP edge contract test.
 7. 30분 Phase 3 load test와 지정 fault/security subset.
-8. rollback rehearsal로 직전 API/Web image를 배포했다가 다시 candidate로 복귀.
+8. rollback rehearsal로 직전 API/worker/maintenance/web 및 restore-tools 참조를 복원했다가 다시 candidate로 복귀.
 9. evidence와 승인 기록 후에만 production promotion 가능.
 
 ## 7. Smoke 및 migration 호환성 검증
@@ -199,7 +204,10 @@ contract 적용 후 old image는 의도적으로 지원하지 않을 수 있으�
 
 ```sh
 API_IMAGE="$PREVIOUS_API_IMAGE_DIGEST" \
+WORKER_IMAGE="$PREVIOUS_WORKER_IMAGE_DIGEST" \
+MAINTENANCE_IMAGE="$PREVIOUS_MAINTENANCE_IMAGE_DIGEST" \
 WEB_IMAGE="$PREVIOUS_WEB_IMAGE_DIGEST" \
+RESTORE_TOOLS_IMAGE="$PREVIOUS_RESTORE_TOOLS_IMAGE_DIGEST" \
 BUILD_SHA="$PREVIOUS_RELEASE_SHA" \
 REGION="$STAGING_REGION" \
 STAGING_ENV_FILE="$PWD/deploy/staging/.env.staging" \
@@ -232,7 +240,7 @@ Production도 migration verify/apply/verify → API canary → API promotion →
 
 `docs/evidence/staging/README.md` 템플릿에 다음을 기록합니다.
 
-- commit SHA, API/Web digest, SBOM/provenance/scan 링크.
+- commit SHA, 네 workload와 restore-tools digest, 같은 digest를 가리키는 SPDX/Syft/Grype 링크, archive/image ID/manifest 매핑과 Linux 재빌드·runtime 로그.
 - Cockroach exact version, migration 전후 version/checksum.
 - backup/restore evidence.
 - 각 deploy/canary/rollback 명령의 UTC 시각, exit code, CI/run URL.

@@ -8,8 +8,12 @@ services:
     entrypoint: ["/bin/sh", "/workspace/scripts/db-migrate-url.sh"]
     environment:
       COCKROACH_DATABASE: jandibat
-      DATABASE_URL: ${MIGRATION_DATABASE_URL:?MIGRATION_DATABASE_URL is required}
+      MIGRATION_DATABASE_URL: ${MIGRATION_DATABASE_URL:?MIGRATION_DATABASE_URL is required}
       MIGRATIONS_DIR: /workspace/db/migrations
+      TMPDIR: /tmp
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
     volumes:
       - ../../db:/workspace/db:ro
       - ../../scripts:/workspace/scripts:ro
@@ -35,6 +39,19 @@ services:
     environment:
       COCKROACH_DATABASE: jandibat
       MIGRATION_DATABASE_URL: ${MIGRATION_DATABASE_URL:?MIGRATION_DATABASE_URL is required}
+    volumes:
+      - ../../scripts:/workspace/scripts:ro
+
+  verify-runtime-roles:
+    profiles: [tools]
+    image: cockroachdb/cockroach:v26.2.5@sha256:771325a0586bf61d53322d24f5a6de8962568b0fc181fa45db364278e5961282
+    working_dir: /workspace
+    entrypoint: ["/bin/sh", "/workspace/scripts/db-verify-runtime-roles.sh"]
+    environment:
+      MIGRATION_DATABASE_URL: ${MIGRATION_DATABASE_URL:?MIGRATION_DATABASE_URL is required}
+      API_DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      WORKER_DATABASE_URL: ${WORKER_DATABASE_URL:?WORKER_DATABASE_URL is required}
+      MAINTENANCE_DATABASE_URL: ${MAINTENANCE_DATABASE_URL:?MAINTENANCE_DATABASE_URL is required}
     volumes:
       - ../../scripts:/workspace/scripts:ro
 
@@ -164,8 +181,7 @@ services:
     cap_drop: [ALL]
 
   worker:
-    image: ${API_IMAGE:?API_IMAGE is required}
-    entrypoint: ["/jandibat-worker"]
+    image: ${WORKER_IMAGE:?WORKER_IMAGE is required}
     restart: unless-stopped
     environment:
       APP_ENV: production
@@ -193,7 +209,7 @@ services:
     expose:
       - "8081"
     healthcheck:
-      test: ["CMD", "/busybox", "wget", "--spider", "-q", "-T", "3", "http://127.0.0.1:8081/healthz"]
+      test: ["CMD", "/busybox", "wget", "--spider", "-q", "-T", "3", "http://127.0.0.1:8081/livez"]
       interval: 30s
       timeout: 5s
       start_period: 10s
@@ -206,8 +222,7 @@ services:
     cap_drop: [ALL]
 
   maintenance:
-    image: ${API_IMAGE:?API_IMAGE is required}
-    entrypoint: ["/jandibat-maintenance"]
+    image: ${MAINTENANCE_IMAGE:?MAINTENANCE_IMAGE is required}
     restart: unless-stopped
     environment:
       APP_ENV: production
@@ -233,7 +248,7 @@ services:
     expose:
       - "8082"
     healthcheck:
-      test: ["CMD", "/busybox", "wget", "--spider", "-q", "-T", "3", "http://127.0.0.1:8082/healthz"]
+      test: ["CMD", "/busybox", "wget", "--spider", "-q", "-T", "3", "http://127.0.0.1:8082/livez"]
       interval: 30s
       timeout: 5s
       start_period: 10s
@@ -255,8 +270,6 @@ services:
     read_only: true
     tmpfs:
       - /tmp:size=16m,mode=1777
-      - /var/cache/nginx:size=16m,mode=0755
-      - /var/run:size=1m,mode=0755
     security_opt:
       - no-new-privileges:true
     cap_drop: [ALL]

@@ -6,11 +6,11 @@ COCKROACH_DATABASE ?= jandibat
 install:
 	$(YARN) install --immutable
 
-check: openapi-check graphql-check ci-version-authority-check ci-nix-gates-test secret-scan shell-check image-contract-validator-test adapter-sql-allowlist-check monitoring-check security-review-validator-test audit-verifier-test restore-verifier-test test-api test-api-race lint-api test-sdk test-web typecheck build-web
+check: openapi-check graphql-check ci-version-authority-check ci-nix-gates-test secret-scan shell-check image-contract-validator-test image-release-policy-test adapter-sql-allowlist-check monitoring-check security-review-validator-test audit-verifier-test restore-verifier-test test-api test-api-race lint-api test-sdk test-web typecheck build-web
 
 ci: nix-check install check
 
-.PHONY: images-build images-smoke image-contract-validator-test
+.PHONY: images-build images-smoke image-contract-validator-test image-release-policy-test
 images-build:
 	nix build .#packages.x86_64-linux.api-image .#packages.x86_64-linux.worker-image .#packages.x86_64-linux.maintenance-image .#packages.x86_64-linux.web-image --no-link
 
@@ -19,6 +19,9 @@ images-smoke: image-contract-validator-test
 
 image-contract-validator-test:
 	node --test scripts/test-image-contract.test.mjs
+
+image-release-policy-test:
+	node --test scripts/test-image-release-policy.mjs
 
 nix-check:
 	nix flake check --all-systems --no-build
@@ -181,7 +184,7 @@ monitoring-check:
 	@node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); console.log("Grafana dashboard JSON parsed")' deploy/monitoring/grafana-dashboard.json
 
 staging-compose-check:
-	API_IMAGE=example.invalid/jandibat/api:test WEB_IMAGE=example.invalid/jandibat/web:test RESTORE_TOOLS_IMAGE=example.invalid/jandibat/restore-tools:test BUILD_SHA=0000000000000000000000000000000000000000 REGION=local docker compose --env-file deploy/staging/.env.staging.example -f deploy/staging/compose.yaml config --quiet
+	API_IMAGE=example.invalid/api@sha256:$(shell printf '%064d' 0) WORKER_IMAGE=example.invalid/worker@sha256:$(shell printf '%064d' 0) MAINTENANCE_IMAGE=example.invalid/maintenance@sha256:$(shell printf '%064d' 0) WEB_IMAGE=example.invalid/web@sha256:$(shell printf '%064d' 0) RESTORE_TOOLS_IMAGE=example.invalid/restore-tools@sha256:$(shell printf '%064d' 0) BUILD_SHA=0000000000000000000000000000000000000000 REGION=local docker compose --env-file deploy/staging/.env.staging.example -f deploy/staging/compose.yaml config --quiet
 
 deploy-staging:
 	sh scripts/deploy-staging.sh

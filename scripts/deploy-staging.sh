@@ -2,6 +2,8 @@
 set -eu
 
 : "${API_IMAGE:?API_IMAGE is required}"
+: "${WORKER_IMAGE:?WORKER_IMAGE is required}"
+: "${MAINTENANCE_IMAGE:?MAINTENANCE_IMAGE is required}"
 : "${RESTORE_TOOLS_IMAGE:?RESTORE_TOOLS_IMAGE is required}"
 : "${WEB_IMAGE:?WEB_IMAGE is required}"
 : "${BUILD_SHA:?BUILD_SHA is required}"
@@ -24,7 +26,7 @@ case "$REGION" in
 		;;
 esac
 
-for image in "$API_IMAGE" "$WEB_IMAGE" "$RESTORE_TOOLS_IMAGE"; do
+for image in "$API_IMAGE" "$WORKER_IMAGE" "$MAINTENANCE_IMAGE" "$WEB_IMAGE" "$RESTORE_TOOLS_IMAGE"; do
 	case "$image" in
 		*[!A-Za-z0-9._:/@-]*|*@sha256:*@*)
 			echo "staging image reference contains unsupported characters" >&2
@@ -71,8 +73,25 @@ if [ ! -f "$environment_file" ]; then
 	exit 2
 fi
 
+# A partial legacy release is not a valid rollback target for split images.
+# Validate before overwriting state or touching the running application.
+if [ -f "$state_file" ]; then
+	for key in API_IMAGE WORKER_IMAGE MAINTENANCE_IMAGE WEB_IMAGE RESTORE_TOOLS_IMAGE; do
+		if [ "$(grep -c "^${key}=" "$state_file")" -ne 1 ] ||
+			! grep -Eq "^${key}=[A-Za-z0-9._:/-]+@sha256:[0-9a-f]{64}$" "$state_file"; then
+			echo "previous state requires exactly one immutable $key; prepare a complete rollback baseline" >&2
+			exit 2
+		fi
+	done
+fi
+
 compose() {
-	docker compose --env-file "$environment_file" --env-file "$state_file" -f "$compose_file" "$@"
+	# Compose gives exported variables precedence over --env-file. The release
+	# state must win, including when automatic rollback restores the old file.
+	(
+		unset API_IMAGE WORKER_IMAGE MAINTENANCE_IMAGE WEB_IMAGE RESTORE_TOOLS_IMAGE BUILD_SHA REGION API_PORT WEB_PORT
+		docker compose --env-file "$environment_file" --env-file "$state_file" -f "$compose_file" "$@"
+	)
 }
 
 deploy_candidate() {
@@ -89,14 +108,24 @@ deploy_candidate() {
 	fi
 	compose --profile tools run --rm schema-lock-verify || return
 	compose --profile tools run --rm grant-runtime-roles || return
+	compose --profile tools run --rm verify-runtime-roles || return
 	compose up -d --remove-orphans api worker maintenance web || return
 }
 
 smoke() {
+	# Rollback may restore a release with different host bindings. Read the
+	# active state instead of retaining candidate ports from the environment.
+	active_api_port=$(sed -n 's/^API_PORT=//p' "$state_file")
+	active_web_port=$(sed -n 's/^WEB_PORT=//p' "$state_file")
+	active_api_port=${active_api_port:-18081}
+	active_web_port=${active_web_port:-18080}
+	for port in "$active_api_port" "$active_web_port"; do
+		case "$port" in *[!0-9]*|'') echo 'invalid active release port' >&2; return 1;; esac
+	done
 	attempt=1
 	while [ "$attempt" -le 30 ]; do
-		if curl --fail --silent --show-error --max-time 5 "http://127.0.0.1:$api_port/healthz" >/dev/null &&
-			curl --fail --silent --show-error --max-time 5 "http://127.0.0.1:$web_port/healthz" >/dev/null &&
+		if curl --fail --silent --show-error --max-time 5 "http://127.0.0.1:$active_api_port/healthz" >/dev/null &&
+			curl --fail --silent --show-error --max-time 5 "http://127.0.0.1:$active_web_port/healthz" >/dev/null &&
 			compose exec -T worker /busybox wget --spider -q -T 3 http://127.0.0.1:8081/readyz &&
 			compose exec -T maintenance /busybox wget --spider -q -T 3 http://127.0.0.1:8082/readyz; then
 			return 0
@@ -127,6 +156,8 @@ fi
 umask 077
 {
 	printf 'API_IMAGE=%s\n' "$API_IMAGE"
+	printf 'WORKER_IMAGE=%s\n' "$WORKER_IMAGE"
+	printf 'MAINTENANCE_IMAGE=%s\n' "$MAINTENANCE_IMAGE"
 	printf 'WEB_IMAGE=%s\n' "$WEB_IMAGE"
 	printf 'RESTORE_TOOLS_IMAGE=%s\n' "$RESTORE_TOOLS_IMAGE"
 	printf 'BUILD_SHA=%s\n' "$BUILD_SHA"

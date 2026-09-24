@@ -235,6 +235,11 @@
               export YARN=yarn
             '';
           };
+        } // toolchain.pkgs.lib.optionalAttrs toolchain.pkgs.stdenv.hostPlatform.isLinux {
+          images = toolchain.pkgs.mkShell {
+            packages = toolchain.shellPackages ++ (with toolchain.pkgs; [ syft grype skopeo ruby ]);
+            shellHook = ''export YARN=yarn'';
+          };
         });
 
       checks = forAllSystems (system:

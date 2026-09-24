@@ -15,7 +15,7 @@ if [ -z "$workflow_files" ]; then
   exit 2
 fi
 
-pattern='GO_VERSION|NODE_VERSION|YARN_VERSION|setup-go|setup-node|corepack[[:space:]]+prepare'
+pattern='GO_VERSION|NODE_VERSION|YARN_VERSION|setup-go|setup-node|corepack[[:space:]]+prepare|docker[[:space:]]+(build|buildx[[:space:]]+build)([[:space:]]|$)|apps/(api|web)/Dockerfile'
 violations=0
 
 normalize_continuations() {
@@ -79,8 +79,27 @@ for workflow_file in $workflow_files; do
 done
 IFS=$old_ifs
 
+# Release helpers are part of the same policy boundary as workflow run blocks.
+# The sole Docker build exception copies already-built Nix image closures into
+# restore tooling; its Dockerfile may not RUN a compiler or installer.
+release_scripts=${2:-scripts}
+for file in "$release_scripts/build-release-images.sh" "$release_scripts/image-release.mjs"; do
+  [ -f "$file" ] || continue
+  normalized=$(normalize_continuations "$file")
+  if printf '%s\n' "$normalized" | grep -Ev '^[[:space:]]*(#|//)' | grep -En 'corepack|yarn[[:space:]]+install|npm[[:space:]]+(ci|install)|go[[:space:]]+build|apps/(api|web)/Dockerfile'; then
+    violations=1
+  fi
+  if printf '%s\n' "$normalized" | grep -E 'docker[[:space:]]+(build|buildx[[:space:]]+build)([[:space:]]|$)' | grep -Ev -- '--file deploy/restore-tools.Dockerfile'; then
+    violations=1
+  fi
+done
+restore_dockerfile=${3:-deploy/restore-tools.Dockerfile}
+if grep -Ein '^[[:space:]]*(RUN|ADD)[[:space:]]' "$restore_dockerfile"; then
+  violations=1
+fi
+
 if [ "$violations" -ne 0 ]; then
-  echo "GitHub workflows must take Go, Node.js, and Yarn versions from flake.nix only" >&2
+  echo "Workflows and release helpers must build application code with Nix only" >&2
   exit 1
 fi
 

@@ -126,7 +126,7 @@ SHA-256 manifest를 요구하므로 기존 SQL을 같은 줄에서 바꾸거나 
 1. `make test-api`: repository의 scripted SQL/CAS/transaction 테스트
 2. `make db-up db-migrate`: 실제 CockroachDB에 전체 migration 적용
 3. 별도 명령으로 `make db-migrate`를 다시 실행해 idempotency와 checksum 확인
-4. production URL 기반 적용은 `DATABASE_URL=... make db-migrate-url`
+4. production URL 기반 적용은 `MIGRATION_DATABASE_URL=... COCKROACH_DATABASE=jandibat MIGRATIONS_DIR="$PWD/db/migrations" TMPDIR=/tmp make db-migrate-url`이며 Cockroach CLI와 쓰기 가능한 임시 디렉터리가 필요합니다. `DATABASE_URL` fallback은 없습니다.
 
 ## 참고 링크
 

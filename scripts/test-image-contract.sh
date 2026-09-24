@@ -67,14 +67,16 @@ cleanup() {
 	if [ -n "$network" ]; then docker network rm "$network" >/dev/null 2>&1 || :; fi
 	rm -r "$scratch"
 }
-trap cleanup EXIT HUP INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
 
 for name in api worker maintenance web; do
 	archive=$(nix build --no-link --print-out-paths ".#${name}-image")
 	check_archive "$name" "$archive"
 	before=$(sha256sum "$archive" | cut -d ' ' -f 1)
 	# --rebuild really reruns the archive derivation instead of reusing its output.
-	nix build --rebuild --no-link ".#${name}-image"
+	nix build --offline --rebuild --option sandbox true --no-link ".#${name}-image"
 	after=$(sha256sum "$archive" | cut -d ' ' -f 1)
 	test "$before" = "$after"
 	printf '%s %s\n' "$name" "$after"

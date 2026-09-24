@@ -55,11 +55,12 @@ git rev-parse HEAD
 sh -n scripts/db-migrate-url.sh
 MIGRATION_DATABASE_URL="$STAGING_MIGRATION_DATABASE_URL" \
   COCKROACH_DATABASE=jandibat \
+  MIGRATIONS_DIR="$PWD/db/migrations" TMPDIR=/tmp \
   scripts/db-migrate-url.sh
 curl --fail --silent --show-error "$STAGING_BASE_URL/healthz"
 ```
 
-`scripts/db-migrate-url.sh`는 `MIGRATION_DATABASE_URL`(없으면 `DATABASE_URL`)의 현재 database가 `COCKROACH_DATABASE`와 일치하는지 먼저 확인합니다. 그 뒤 pending migration을 적용하고, 이미 적용된 migration은 worktree SHA-256 checksum과 비교합니다. 이 script에는 `verify` subcommand나 dry-run mode가 없으므로 실행은 staging DB를 변경할 수 있습니다. 승인된 migration window와 전용 migration credential 없이는 실행하지 않습니다. `scripts/db-migrate.sh`는 local Docker Compose 전용입니다.
+`scripts/db-migrate-url.sh`는 `MIGRATION_DATABASE_URL`, `COCKROACH_DATABASE`, `MIGRATIONS_DIR`, Cockroach CLI와 쓰기 가능한 임시 디렉터리(`TMPDIR`)를 요구하며 `DATABASE_URL` fallback은 없습니다. 현재 database가 `COCKROACH_DATABASE`와 일치하는지 먼저 확인합니다. 그 뒤 pending migration을 적용하고, 이미 적용된 migration은 worktree SHA-256 checksum과 비교합니다. 이 script에는 `verify` subcommand나 dry-run mode가 없으므로 실행은 staging DB를 변경할 수 있습니다. 승인된 migration window와 전용 migration credential 없이는 실행하지 않습니다. `scripts/db-migrate.sh`는 local Docker Compose 전용입니다.
 
 추가로 다음을 기록합니다.
 

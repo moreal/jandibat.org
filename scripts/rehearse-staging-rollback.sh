@@ -2,6 +2,8 @@
 set -eu
 
 : "${API_IMAGE:?candidate API_IMAGE is required}"
+: "${WORKER_IMAGE:?candidate WORKER_IMAGE is required}"
+: "${MAINTENANCE_IMAGE:?candidate MAINTENANCE_IMAGE is required}"
 : "${WEB_IMAGE:?candidate WEB_IMAGE is required}"
 : "${RESTORE_TOOLS_IMAGE:?candidate RESTORE_TOOLS_IMAGE is required}"
 : "${BUILD_SHA:?candidate BUILD_SHA is required}"
@@ -35,22 +37,25 @@ read_state_value() {
 }
 
 previous_api=$(read_state_value API_IMAGE "$rollback_file")
+previous_worker=$(read_state_value WORKER_IMAGE "$rollback_file")
+previous_maintenance=$(read_state_value MAINTENANCE_IMAGE "$rollback_file")
 previous_web=$(read_state_value WEB_IMAGE "$rollback_file")
+previous_restore_tools=$(read_state_value RESTORE_TOOLS_IMAGE "$rollback_file")
 previous_build_sha=$(read_state_value BUILD_SHA "$rollback_file")
 previous_region=$(read_state_value REGION "$rollback_file")
-if [ "$previous_api" = "$API_IMAGE" ] && [ "$previous_web" = "$WEB_IMAGE" ]; then
+if [ "$previous_api" = "$API_IMAGE" ] && [ "$previous_worker" = "$WORKER_IMAGE" ] && [ "$previous_maintenance" = "$MAINTENANCE_IMAGE" ] && [ "$previous_web" = "$WEB_IMAGE" ]; then
 	echo "rollback state is identical to the candidate; rehearsal would prove nothing" >&2
 	exit 2
 fi
 
 started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 echo "rehearsal: deploying recorded previous release"
-API_IMAGE=$previous_api WEB_IMAGE=$previous_web RESTORE_TOOLS_IMAGE=$RESTORE_TOOLS_IMAGE BUILD_SHA=$previous_build_sha REGION=$previous_region sh "$deploy_script"
+API_IMAGE=$previous_api WORKER_IMAGE=$previous_worker MAINTENANCE_IMAGE=$previous_maintenance WEB_IMAGE=$previous_web RESTORE_TOOLS_IMAGE=$previous_restore_tools BUILD_SHA=$previous_build_sha REGION=$previous_region sh "$deploy_script"
 rolled_back_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 echo "rehearsal: re-promoting candidate release"
-API_IMAGE=$API_IMAGE WEB_IMAGE=$WEB_IMAGE RESTORE_TOOLS_IMAGE=$RESTORE_TOOLS_IMAGE BUILD_SHA=$BUILD_SHA REGION=$REGION sh "$deploy_script"
+API_IMAGE=$API_IMAGE WORKER_IMAGE=$WORKER_IMAGE MAINTENANCE_IMAGE=$MAINTENANCE_IMAGE WEB_IMAGE=$WEB_IMAGE RESTORE_TOOLS_IMAGE=$RESTORE_TOOLS_IMAGE BUILD_SHA=$BUILD_SHA REGION=$REGION sh "$deploy_script"
 finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-printf '{"startedAt":"%s","rolledBackAt":"%s","finishedAt":"%s","previousApi":"%s","previousWeb":"%s","candidateApi":"%s","candidateWeb":"%s","result":"passed"}\n' \
-	"$started_at" "$rolled_back_at" "$finished_at" "$previous_api" "$previous_web" "$API_IMAGE" "$WEB_IMAGE"
+printf '{"startedAt":"%s","rolledBackAt":"%s","finishedAt":"%s","previousApi":"%s","previousWorker":"%s","previousMaintenance":"%s","previousWeb":"%s","previousRestoreTools":"%s","candidateApi":"%s","candidateWorker":"%s","candidateMaintenance":"%s","candidateWeb":"%s","candidateRestoreTools":"%s","result":"passed"}\n' \
+	"$started_at" "$rolled_back_at" "$finished_at" "$previous_api" "$previous_worker" "$previous_maintenance" "$previous_web" "$previous_restore_tools" "$API_IMAGE" "$WORKER_IMAGE" "$MAINTENANCE_IMAGE" "$WEB_IMAGE" "$RESTORE_TOOLS_IMAGE"

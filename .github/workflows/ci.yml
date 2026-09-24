@@ -159,7 +159,7 @@ jobs:
         run: nix develop --command make build-web
 
   images:
-    name: Production container builds
+    name: Nix image reproducibility, runtime, and security
     needs: [backend, frontend]
     runs-on: ubuntu-24.04
     steps:
@@ -167,49 +167,22 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
-      - name: Build API image
-        run: docker build --file apps/api/Dockerfile --tag jandibat-api:ci apps/api
-      - name: Build web image
-        run: docker build --file apps/web/Dockerfile --tag jandibat-web:ci .
-      - name: Assert non-root image users
-        run: |
-          test "$(docker image inspect jandibat-api:ci --format '{{.Config.User}}')" = "nonroot:nonroot"
-          test "$(docker image inspect jandibat-web:ci --format '{{.Config.User}}')" = "101:101"
-      - name: Generate API SBOM
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
-        with:
-          image: jandibat-api:ci
-          artifact-name: jandibat-api-ci.spdx.json
-          output-file: jandibat-api-ci.spdx.json
-          format: spdx-json
-      - name: Generate Web SBOM
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
-        with:
-          image: jandibat-web:ci
-          artifact-name: jandibat-web-ci.spdx.json
-          output-file: jandibat-web-ci.spdx.json
-          format: spdx-json
-      - name: Scan API image for high and critical vulnerabilities
-        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
-        with:
-          image: jandibat-api:ci
-          severity-cutoff: high
-          output-format: json
-          output-file: jandibat-api-grype.json
-      - name: Scan Web image for high and critical vulnerabilities
-        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
-        with:
-          image: jandibat-web:ci
-          severity-cutoff: high
-          output-format: json
-          output-file: jandibat-web-grype.json
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+      - name: Cache the Nix store
+        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
+      - name: Verify image release policy
+        run: nix develop --command make image-release-policy-test ci-version-authority-check
+      - name: Build twice, inspect archives, smoke read-only runtime, generate SPDX and scan exact image IDs
+        run: nix develop .#images --command sh scripts/build-release-images.sh "$RUNNER_TEMP/image-evidence"
       - name: Upload image scan evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: image-security-${{ github.sha }}
           path: |
-            jandibat-api-grype.json
-            jandibat-web-grype.json
+            ${{ runner.temp }}/image-evidence/*.json
+            ${{ runner.temp }}/image-evidence/*.txt
+            ${{ runner.temp }}/image-evidence/*.log
           if-no-files-found: error
           retention-days: 90

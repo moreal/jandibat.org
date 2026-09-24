@@ -26,12 +26,49 @@ type lazyPGXContextKey struct{}
 // or verifier network calls. It is request-scoped and must not be shared across
 // concurrent handlers.
 type LazyPGXTransaction struct {
-	pool         PGXLazyPool
-	poolIdentity uintptr
-	ctx          context.Context
-	mu           sync.Mutex
-	tx           pgx.Tx
-	closed       bool
+	pool           PGXLazyPool
+	poolIdentity   uintptr
+	ctx            context.Context
+	mu             sync.Mutex
+	tx             pgx.Tx
+	verifiedReplay bool
+	closed         bool
+}
+
+// MarkVerifiedDurableReplay permits an audit-only transaction after a store
+// has loaded and validated an already committed, same-target idempotent result.
+// The marker belongs to this request's lazy transaction, not to client input.
+func MarkVerifiedDurableReplay(ctx context.Context, pool DBTX) bool {
+	lazy, ok := ctx.Value(lazyPGXContextKey{}).(*LazyPGXTransaction)
+	if !ok || lazy == nil {
+		return false
+	}
+	identity, err := transactionPoolIdentity(pool)
+	if err != nil || lazy.poolIdentity != identity {
+		return false
+	}
+	lazy.mu.Lock()
+	defer lazy.mu.Unlock()
+	if lazy.closed || lazy.tx != nil {
+		return false
+	}
+	lazy.verifiedReplay = true
+	return true
+}
+
+// BeginVerifiedReplayAudit begins a transaction only for a store-confirmed
+// durable replay. The audit outbox is then committed by the request owner.
+func (lazy *LazyPGXTransaction) BeginVerifiedReplayAudit(ctx context.Context) (pgx.Tx, error) {
+	if lazy == nil {
+		return nil, ErrLazyPGXInactive
+	}
+	lazy.mu.Lock()
+	verified := lazy.verifiedReplay && !lazy.closed && lazy.tx == nil
+	lazy.mu.Unlock()
+	if !verified {
+		return nil, ErrLazyPGXInactive
+	}
+	return lazy.begin(ctx, pgx.TxOptions{})
 }
 
 func WithLazyPGXTransaction(ctx context.Context, pool PGXLazyPool) (context.Context, *LazyPGXTransaction) {

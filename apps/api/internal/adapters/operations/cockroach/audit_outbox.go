@@ -78,12 +78,6 @@ func (transaction *mutationAuditTransaction) Enqueue(ctx context.Context, event 
 	if transaction == nil || transaction.lazyPGX == nil {
 		return operations.ErrInvalidAuditOutbox
 	}
-	pgxTx, ok := transaction.lazyPGX.Transaction()
-	if !ok {
-		// A successful registered mutation without a participating state write is
-		// a deployment/configuration defect; never create a misleading outcome.
-		return operations.ErrInvalidAuditOutbox
-	}
 	if err := operations.ValidateAuditEvent(event); err != nil {
 		return err
 	}
@@ -114,6 +108,16 @@ func (transaction *mutationAuditTransaction) Enqueue(ctx context.Context, event 
 	eventUUID, err := uuid.Parse(event.ID)
 	if err != nil {
 		return err
+	}
+	pgxTx, ok := transaction.lazyPGX.Transaction()
+	if !ok {
+		// A successful mutation with no participating state write is normally a
+		// deployment defect. Only a store-verified durable idempotent replay may
+		// start an audit-only transaction at this final outcome boundary.
+		pgxTx, err = transaction.lazyPGX.BeginVerifiedReplayAudit(ctx)
+		if err != nil {
+			return operations.ErrInvalidAuditOutbox
+		}
 	}
 	return generated.InsertMutationAuditOutcome(ctx, pgxTx, outboxUUID, eventUUID,
 		event.RequestID, event.OccurredAt, string(event.Actor.Type), &event.Actor.ID,

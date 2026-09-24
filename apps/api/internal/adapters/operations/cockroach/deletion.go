@@ -77,6 +77,7 @@ func (store *Store) EnqueueDeletion(ctx context.Context, request operations.Dele
 	if err != nil {
 		return operations.DeletionRequest{}, fmt.Errorf("load deletion inbox: %w", err)
 	}
+	preexisting := row != nil
 	if row == nil {
 		if err := generated.InsertDeletionInboxIfAbsent(ctx, executor, request.RequestID, string(request.TargetType), request.TargetID, request.RequestedAt.UTC()); err != nil {
 			return operations.DeletionRequest{}, fmt.Errorf("enqueue deletion request: %w", err)
@@ -91,6 +92,11 @@ func (store *Store) EnqueueDeletion(ctx context.Context, request operations.Dele
 	}
 	if operations.DeletionTargetType(row.TargetType) != request.TargetType || row.TargetId != request.TargetID {
 		return operations.DeletionRequest{}, fmt.Errorf("%w: request ID is already bound to another target", operations.ErrInvalidDeletionRequest)
+	}
+	if preexisting {
+		// Only a previously committed, same-target row may complete without a
+		// state write. The request-scoped marker allows its outcome-only audit.
+		appdb.MarkVerifiedDurableReplay(ctx, store.pool)
 	}
 	return inboxDeletionFromGenerated(*row), nil
 }

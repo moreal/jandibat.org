@@ -94,14 +94,86 @@ test('publish workflow requires human review and cannot deploy', () => {
     assert.ok(steps.some(s => s.uses === 'DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d'));
     for (const step of steps) assert.doesNotMatch(JSON.stringify(step), /\bssh\b|docker\s+compose|\bkubectl\b|flux\s+reconcile/i);
   }
-  const reviewRun = review.steps.find(s => s.run?.includes('reviewed_sha'))?.run || '';
-  assert.match(reviewRun, /security-review-check/);
-  assert.match(reviewRun, /git merge-base --is-ancestor/);
-  assert.match(reviewRun, /git diff --name-only/);
+  const reviewRun = review.steps.find(s => s.name === 'Validate review evidence and reviewed code binding')?.run || '';
+  assert.equal(reviewRun, 'sh scripts/check-release-security-review.sh');
+  const staging = yaml(join(root, '.github/workflows/deploy-staging.yml'));
+  const stagingReviewRun = staging.jobs['security-review'].steps.find(s => s.name === 'Validate review evidence and reviewed code binding')?.run || '';
+  assert.equal(stagingReviewRun, reviewRun);
   assert.ok(publish.steps.some(s => s.run?.includes('build-release-images.sh')));
   assert.ok(publish.steps.some(s => s.run?.includes('docker login ghcr.io')));
   assert.ok(publish.steps.some(s => s.run?.includes('image-release.mjs publish')));
   assert.ok(publish.steps.some(s => s.uses === 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a' && s.with['if-no-files-found'] === 'error'));
+});
+
+function reviewBindingFixture(t) {
+  const dir = fixture(t);
+  const git = (...args) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' }).trim();
+  const commit = message => git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', message);
+  git('init', '-q');
+  writeFileSync(join(dir, 'code.txt'), 'initial\n');
+  git('add', 'code.txt');
+  commit('initial');
+  const beforeReview = git('rev-parse', 'HEAD');
+  writeFileSync(join(dir, 'code.txt'), 'reviewed\n');
+  git('add', 'code.txt');
+  commit('reviewed code');
+  const reviewed = git('rev-parse', 'HEAD');
+  const review = 'docs/evidence/security/review.md';
+  mkdirSync(join(dir, 'docs/evidence/security'), { recursive: true });
+  const controls = Object.entries({ COM: 8, MAG: 6, WEB: 6, OAU: 7, PRV: 6, SVG: 5, OPS: 8 })
+    .flatMap(([prefix, count]) => Array.from({ length: count }, (_, index) =>
+      `| ${prefix}-${String(index + 1).padStart(2, '0')} | PASS | command:make ci; artifact-sha256:${'b'.repeat(64)} | @security-owner | 2026-09-24T00:00:00Z |`));
+  const content = `| Metadata | Value |\n| --- | --- |\n| Commit SHA | ${reviewed} |\n| Scope | security regression |\n| Security owner | @security-owner |\n\n| Control | Status | Evidence or N/A rationale | Reviewer | Reviewed at UTC |\n| --- | --- | --- | --- | --- |\n${controls.join('\n')}\n`;
+  writeFileSync(join(dir, review), content);
+  git('add', review);
+  commit('security review');
+  const reviewedRun = git('rev-parse', 'HEAD');
+  executable(dir, 'nix', `
+const { spawnSync } = require('node:child_process');
+if (JSON.stringify(process.argv.slice(2)) !== JSON.stringify(['develop', '--command', 'make', 'security-review-check'])) process.exit(90);
+const result = spawnSync(process.execPath, [${JSON.stringify(script('validate-security-review.mjs'))}, process.env.SECURITY_REVIEW, process.env.SECURITY_REVIEW_SHA], { encoding: 'utf8' });
+process.stdout.write(result.stdout); process.stderr.write(result.stderr); process.exit(result.status ?? 91);
+`);
+  const run = (overrides = {}) => spawnSync('sh', [script('check-release-security-review.sh')], {
+    cwd: dir, encoding: 'utf8', timeout: 10000,
+    env: { ...process.env, PATH: `${join(dir, 'bin')}:${process.env.PATH}`, SECURITY_REVIEW: review, GITHUB_SHA: reviewedRun, ...overrides },
+  });
+  return { dir, git, commit, beforeReview, reviewedRun, review, content, run };
+}
+
+test('shared release review gate accepts a committed review with no later code changes', t => {
+  const f = reviewBindingFixture(t);
+  const result = f.run();
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('shared release review gate rejects paths outside committed security evidence and missing records', t => {
+  const f = reviewBindingFixture(t);
+  const invalidPath = f.run({ SECURITY_REVIEW: '../review.md' });
+  assert.equal(invalidPath.status, 2);
+  assert.match(invalidPath.stderr, /invalid security review path/);
+  assert.equal(f.run({ SECURITY_REVIEW: 'docs/evidence/security/missing.md' }).status, 1);
+});
+
+test('shared release review gate rejects incomplete evidence', t => {
+  const f = reviewBindingFixture(t);
+  writeFileSync(join(f.dir, f.review), f.content.replace('| PASS |', '| NOT RUN |'));
+  const result = f.run();
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /release-blocking status NOT RUN/);
+});
+
+test('shared release review gate rejects a run before the reviewed commit', t => {
+  const f = reviewBindingFixture(t);
+  assert.equal(f.run({ GITHUB_SHA: f.beforeReview }).status, 1);
+});
+
+test('shared release review gate rejects code changed after review', t => {
+  const f = reviewBindingFixture(t);
+  writeFileSync(join(f.dir, 'code.txt'), 'changed after review\n');
+  f.git('add', 'code.txt');
+  f.commit('later code change');
+  assert.equal(f.run({ GITHUB_SHA: f.git('rev-parse', 'HEAD') }).status, 1);
 });
 
 test('Compose gives every workload its own image and migration preflight inputs', () => {

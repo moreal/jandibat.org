@@ -64,13 +64,13 @@ if [ "$system" != x86_64-linux ]; then
 	exit
 fi
 
+phase='scratch setup'
 scratch=$(mktemp -d)
 containers=
 network=
 web=
 diagnostic_container=
 diagnostic_label=
-phase='scratch setup'
 container_failure_context() {
 	label=$1
 	target=$2
@@ -112,7 +112,9 @@ cleanup() {
 		if [ -n "$diagnostic_container" ]; then
 			container_failure_context "$diagnostic_label" "$diagnostic_container"
 		elif [ -n "$web" ]; then
-			container_failure_context web "$web"
+			case "$phase" in
+				web\ *) container_failure_context web "$web" ;;
+			esac
 		fi
 	fi
 	for container in $containers; do docker rm -f "$container" >/dev/null 2>&1 || :; done
@@ -237,7 +239,7 @@ for spec in api:8080:DATABASE_URL worker:8081:WORKER_DATABASE_URL maintenance:80
 		-e APP_ENV=development -e "$variable=postgresql://root@database:26257/image_smoke?sslmode=disable" \
 		"jandibat-$name:nix")
 	containers="$containers $container"
-	processes="$processes $container:$port"
+	processes="$processes $name:$container:$port"
 	phase="$name livez"
 	wait_http "$container" "$port" /livez "$name"
 	phase="$name readyz"
@@ -248,14 +250,17 @@ done
 phase='database fixture stop'
 docker stop -t 5 "$db" >/dev/null
 for spec in $processes; do
-	container=${spec%:*} port=${spec#*:}
-	phase="dependency loss livez: $container"
-	wait_http "$container" "$port" /livez
-	phase="dependency loss readyz: $container"
+	name=${spec%%:*} rest=${spec#*:} container=${rest%:*} port=${rest#*:}
+	phase="dependency loss livez: $name"
+	wait_http "$container" "$port" /livez "$name"
+	phase="dependency loss readyz: $name"
+	diagnostic_container=$container
+	diagnostic_label=$name
 	if docker exec "$container" /busybox wget -T 5 -S -O /dev/null "http://127.0.0.1:$port/readyz" 2>"$scratch/readiness"; then
 		echo 'readiness unexpectedly succeeded without a database' >&2
 		exit 1
 	fi
 	grep -q '503 Service Unavailable' "$scratch/readiness"
+	diagnostic_container=
 done
 echo 'image archive and runtime contracts passed'

@@ -127,9 +127,10 @@ case "$1" in
     [ ! -f "$FIXTURES/run-count" ] || count=$(cat "$FIXTURES/run-count")
     count=$((count + 1))
     echo "$count" >"$FIXTURES/run-count"
-    case "$count" in 1) echo web-fixture-id;; 2) echo readonly-fixture-id;; 3) echo db-fixture-id;; 4) echo api-fixture-id;; esac;;
+    case "$count" in 1) echo web-fixture-id;; 2) echo readonly-fixture-id;; 3) echo db-fixture-id;; 4) echo api-fixture-id;; 5) echo worker-fixture-id;; 6) echo maintenance-fixture-id;; esac;;
   exec)
     case "$*" in
+      *'CREATE DATABASE image_smoke'*) if [ "$FAIL_MODE" = db-create ]; then exit 1; fi;;
       *'/healthz'*) case "$FAIL_MODE" in health*) exit 1;; esac; echo ok;;
       *'/config.json'*)
         if [ "$FAIL_MODE" = config ]; then echo '{"apiBaseUrl":"https://wrong.example.test"}';
@@ -204,6 +205,23 @@ test('API health timeout reports safe context for the API container', () => {
   assert.match(result.stderr, /api container: status=exited exit=1/);
   assert.match(result.stderr, /api logs: failed/);
   assert.doesNotMatch(result.stderr, /SUPER_SECRET_VALUE/);
+});
+
+test('database failure does not attribute web logs to the database step', () => {
+  const result = runtimeFailure('db-create');
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /image smoke failed: database fixture create schema/);
+  assert.doesNotMatch(result.stderr, /web (container|logs|headers):/);
+  assert.doesNotMatch(result.stderr, /SUPER_SECRET_VALUE/);
+});
+
+test('dependency-loss readiness failure names the API container', () => {
+  const result = runtimeFailure('dependency-ready');
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /image smoke failed: dependency loss readyz: api/);
+  assert.match(result.stderr, /api container: status=exited exit=1/);
+  assert.match(result.stderr, /api logs: failed/);
+  assert.doesNotMatch(result.stderr, /web logs:/);
 });
 
 test('web failure context preserves a nonstandard numeric exit code', () => {

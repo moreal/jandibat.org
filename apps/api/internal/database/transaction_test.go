@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"errors"
+	"math"
 	"reflect"
 	"testing"
 	"time"
@@ -57,6 +58,20 @@ func (tx *scriptedTx) Rollback(context.Context) error {
 
 func noDelayOptions(maxAttempts int) RetryOptions {
 	return RetryOptions{MaxAttempts: maxAttempts, BackoffMin: time.Nanosecond, BackoffMax: time.Nanosecond}
+}
+
+func TestRetryDelayStaysWithinConfiguredMaximum(t *testing.T) {
+	for _, maximum := range []time.Duration{time.Nanosecond, 250 * time.Millisecond, time.Duration(math.MaxInt64)} {
+		t.Run(maximum.String(), func(t *testing.T) {
+			options := RetryOptions{BackoffMin: maximum, BackoffMax: maximum}
+			for range 100 {
+				delay := retryDelay(options, 1)
+				if delay < 0 || delay > maximum {
+					t.Fatalf("retryDelay() = %s, want [0, %s]", delay, maximum)
+				}
+			}
+		})
+	}
 }
 
 func serializationFailure() error {

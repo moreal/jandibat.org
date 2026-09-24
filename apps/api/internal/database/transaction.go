@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"math/rand"
 	"reflect"
 	"time"
@@ -210,6 +211,11 @@ func retryDelay(options RetryOptions, attempt int) time.Duration {
 	if delay <= 1 {
 		return delay
 	}
+	if delay == math.MaxInt64 {
+		// #nosec G404 -- transaction retry jitter is not a secret, nonce, or authorization value.
+		return time.Duration(rand.Int63())
+	}
+	// #nosec G404 -- transaction retry jitter is not a secret, nonce, or authorization value.
 	return time.Duration(rand.Int63n(int64(delay) + 1))
 }
 

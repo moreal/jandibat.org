@@ -270,6 +270,10 @@ func newDataAEAD(dek []byte) (cipher.AEAD, error) {
 }
 
 func marshalKeyEnvelopeV2(keyID string, wrappedDEK, plaintext []byte, dataAEAD cipher.AEAD) ([]byte, error) {
+	return marshalKeyEnvelopeV2WithNonceReader(keyID, wrappedDEK, plaintext, dataAEAD, rand.Reader)
+}
+
+func marshalKeyEnvelopeV2WithNonceReader(keyID string, wrappedDEK, plaintext []byte, dataAEAD cipher.AEAD, nonceReader io.Reader) ([]byte, error) {
 	if len(keyID) == 0 || len(keyID) > math.MaxUint16 || len(wrappedDEK) == 0 || uint64(len(wrappedDEK)) > math.MaxUint32 || dataAEAD == nil {
 		return nil, fmt.Errorf("%w: invalid key ID, wrapped key, or data cipher", ErrInvalidKeyEnvelope)
 	}
@@ -289,11 +293,12 @@ func marshalKeyEnvelopeV2(keyID string, wrappedDEK, plaintext []byte, dataAEAD c
 
 	nonceOffset := prefixLength
 	nonce := result[nonceOffset : nonceOffset+dataAEAD.NonceSize()]
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+	if _, err := io.ReadFull(nonceReader, nonce); err != nil {
 		clear(result)
 		return nil, fmt.Errorf("generate data encryption nonce: %w", err)
 	}
 	// The header, KEK ID, and wrapped DEK are authenticated as associated data.
+	// #nosec G407 -- nonce is filled from crypto/rand.Reader via io.ReadFull before Seal; read failure returns without ciphertext.
 	return dataAEAD.Seal(result, nonce, plaintext, result[:prefixLength]), nil
 }
 

@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"slices"
 	"testing"
 
@@ -57,6 +58,38 @@ func TestKeyringWritesVersion2EnvelopeWithRandomPerRecordDEK(t *testing.T) {
 	got, err := keyring.Decrypt(context.Background(), first)
 	if err != nil || !bytes.Equal(got, plaintext) {
 		t.Fatalf("Decrypt(version 2) = %q, %v", got, err)
+	}
+}
+
+func TestVersion2EnvelopeUsesProvidedNonceBytes(t *testing.T) {
+	aead, err := newDataAEAD(bytes.Repeat([]byte{'d'}, dataEncryptionKeySize))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantNonce := bytes.Repeat([]byte{0xa5}, aead.NonceSize())
+	ciphertext, err := marshalKeyEnvelopeV2WithNonceReader("key", []byte("wrapped"), []byte("secret"), aead, bytes.NewReader(wantNonce))
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope := requireVersion2Envelope(t, ciphertext, "key")
+	if !bytes.Equal(envelope.nonce, wantNonce) {
+		t.Fatalf("envelope nonce = %x, want %x", envelope.nonce, wantNonce)
+	}
+	plaintext, err := aead.Open(nil, envelope.nonce, envelope.ciphertext, envelope.aad)
+	if err != nil || !bytes.Equal(plaintext, []byte("secret")) {
+		t.Fatalf("authenticated plaintext = %q, %v", plaintext, err)
+	}
+}
+
+func TestVersion2EnvelopeNonceShortReadReturnsNoCiphertext(t *testing.T) {
+	aead, err := newDataAEAD(bytes.Repeat([]byte{'d'}, dataEncryptionKeySize))
+	if err != nil {
+		t.Fatal(err)
+	}
+	shortNonce := bytes.Repeat([]byte{0xa5}, aead.NonceSize()-1)
+	ciphertext, err := marshalKeyEnvelopeV2WithNonceReader("key", []byte("wrapped"), []byte("secret"), aead, bytes.NewReader(shortNonce))
+	if !errors.Is(err, io.ErrUnexpectedEOF) || ciphertext != nil {
+		t.Fatalf("short nonce read returned ciphertext length %d, error %v", len(ciphertext), err)
 	}
 }
 

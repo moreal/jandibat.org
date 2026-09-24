@@ -22,6 +22,16 @@ done
 printf 'call\n' >>"$TEST_CALLS"
 cat >"$TEST_SQL"
 cat "$TEST_SQL" >>"$TEST_ALL_SQL"
+if grep -q 'SELECT current_user()' "$TEST_SQL"; then
+ case "$COCKROACH_URL" in
+  *'jandibat_migrator@'*) identity=jandibat_migrator ;;
+  *'jandibat_api@'*) identity=jandibat_api ;;
+  *'jandibat_worker@'*) identity=jandibat_worker ;;
+  *'jandibat_maintenance@'*) identity=jandibat_maintenance ;;
+  *) exit 95 ;;
+ esac
+ printf 'current_user\n%s\n' "$identity"
+fi
 if [ "${TEST_FAIL_CREATE:-}" = 1 ] && grep -q 'CREATE USER' "$TEST_SQL"; then
  cat "$TEST_SQL" >&2
  exit 94
@@ -71,6 +81,11 @@ if ! run_bootstrap env; then echo 'FAIL: valid bootstrap rejected' >&2; exit 1; 
 assert_no_canary
 [ "$(wc -l <"$TEST_CALLS" | tr -d ' ')" -eq 9 ] || { echo 'FAIL: expected database, user and login calls' >&2; exit 1; }
 grep -q '^CREATE DATABASE IF NOT EXISTS jandibat;' "$TEST_ALL_SQL" || { echo 'FAIL: missing database create' >&2; exit 1; }
+
+if run_bootstrap env API_DATABASE_URL='postgresql://jandibat_migrator@localhost:26257/jandibat'; then
+ echo 'FAIL: role DSN authenticated as a different account' >&2; exit 1
+fi
+assert_no_canary
 
 : >"$TEST_CALLS"
 if run_bootstrap env TEST_FAIL_CREATE=1; then echo 'FAIL: account creation failure was accepted' >&2; exit 1; fi

@@ -31,8 +31,13 @@ trap 'exit 143' TERM HUP
 sql() {
  url=$1
  statement=$2
- if ! printf '%s\n' "$statement" | COCKROACH_URL="$url" "$sql_bin" sql --set=errexit=true >"$capture_dir/stdout" 2>"$capture_dir/stderr"; then
+ expected_user=${3:-}
+ if ! printf '%s\n' "$statement" | COCKROACH_URL="$url" "$sql_bin" sql --set=errexit=true --format=tsv >"$capture_dir/stdout" 2>"$capture_dir/stderr"; then
   echo 'database bootstrap SQL operation failed' >&2
+  exit 1
+ fi
+ if [ -n "$expected_user" ] && [ "$(tail -n 1 "$capture_dir/stdout" | tr -d '\r')" != "$expected_user" ]; then
+  echo 'database bootstrap role identity mismatch' >&2
   exit 1
  fi
 }
@@ -41,8 +46,8 @@ sql "$COCKROACH_ROOT_URL" "CREATE USER IF NOT EXISTS jandibat_migrator; ALTER US
 sql "$COCKROACH_ROOT_URL" "CREATE USER IF NOT EXISTS jandibat_api; ALTER USER jandibat_api WITH PASSWORD '$JANDIBAT_API_PASSWORD';"
 sql "$COCKROACH_ROOT_URL" "CREATE USER IF NOT EXISTS jandibat_worker; ALTER USER jandibat_worker WITH PASSWORD '$JANDIBAT_WORKER_PASSWORD';"
 sql "$COCKROACH_ROOT_URL" "CREATE USER IF NOT EXISTS jandibat_maintenance; ALTER USER jandibat_maintenance WITH PASSWORD '$JANDIBAT_MAINTENANCE_PASSWORD';"
-sql "$MIGRATION_DATABASE_URL" 'SELECT current_user();'
-sql "$API_DATABASE_URL" 'SELECT current_user();'
-sql "$WORKER_DATABASE_URL" 'SELECT current_user();'
-sql "$MAINTENANCE_DATABASE_URL" 'SELECT current_user();'
+sql "$MIGRATION_DATABASE_URL" 'SELECT current_user();' jandibat_migrator
+sql "$API_DATABASE_URL" 'SELECT current_user();' jandibat_api
+sql "$WORKER_DATABASE_URL" 'SELECT current_user();' jandibat_worker
+sql "$MAINTENANCE_DATABASE_URL" 'SELECT current_user();' jandibat_maintenance
 echo 'database accounts bootstrapped'

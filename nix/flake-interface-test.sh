@@ -31,7 +31,7 @@ if [ "$yarn_node_version" != 'v24.21.0' ]; then
 	exit 1
 fi
 
-for command_name in scythe staticcheck exhaustive go-check-sumtype; do
+for command_name in scythe staticcheck exhaustive go-check-sumtype rg; do
 	command -v "$command_name" >/dev/null 2>&1 || {
 		echo "missing required command: $command_name" >&2
 		exit 1

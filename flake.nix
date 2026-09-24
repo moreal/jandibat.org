@@ -184,6 +184,7 @@
             nodejs
             yarnBerry
             scythe
+            pkgs.ripgrep
             staticcheck
             exhaustive
             goCheckSumtype

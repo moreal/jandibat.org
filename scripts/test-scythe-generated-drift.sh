@@ -1,6 +1,11 @@
 #!/bin/sh
 set -eu
 
+command -v rg >/dev/null 2>&1 || {
+	echo "missing required command: rg" >&2
+	exit 1
+}
+
 repository_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT HUP INT TERM

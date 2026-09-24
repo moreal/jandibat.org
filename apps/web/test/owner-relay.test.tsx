@@ -1,7 +1,6 @@
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { Show } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
-import { api } from "../src/api/client";
 import { AppStateProvider } from "../src/app/state";
 import { AuthEpochContext, createAuthEpoch } from "../src/relay/auth-epoch";
 import { RelayProvider } from "../src/relay";
@@ -29,8 +28,6 @@ function mount() {
 
 it("traverses a second owner page before selecting the persisted 101st subject", async () => {
   localStorage.setItem("jandibat:owner-subject", "garden-100");
-  vi.spyOn(api, "getCurrentSession").mockRejectedValue(new Error("REST session called"));
-  vi.spyOn(api, "listSubjects").mockRejectedValue(new Error("REST subjects called"));
   const requests: Array<{ name: string; variables: Record<string, unknown> }> = [];
   vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
     const request = JSON.parse(String(init?.body)) as { operationName: string; variables: Record<string, unknown> };
@@ -62,7 +59,6 @@ it("traverses a second owner page before selecting the persisted 101st subject",
 });
 
 it("creates a first subject through GraphQL and opens the owner workspace", async () => {
-  vi.spyOn(api, "createSubject").mockRejectedValue(new Error("REST create called"));
   const requests: Array<{ operationName: string; variables: Record<string, unknown> }> = [];
   vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
     const request = JSON.parse(String(init?.body)) as typeof requests[number];

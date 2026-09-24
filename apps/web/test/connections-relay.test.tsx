@@ -2,7 +2,6 @@ import type { SubjectDto } from "@jandibat/contracts";
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, expect, it, vi } from "vitest";
 import { Environment, Network, Observable, RecordSource, Store } from "relay-runtime";
-import { api } from "../src/api/client";
 import { AppStateProvider, useAppState } from "../src/app/state";
 import { ConnectionsPage } from "../src/pages/ConnectionsPage";
 import { AuthEpochContext } from "../src/relay/auth-epoch";
@@ -34,11 +33,6 @@ function mount(
   respond: (name: string, variables: Record<string, unknown>) => ResponseFixture | Promise<ResponseFixture>,
   ownedSubjects: SubjectDto[] = [owner],
 ) {
-  vi.spyOn(api, "getCurrentSession").mockRejectedValue(new Error("REST session called"));
-  vi.spyOn(api, "listSubjects").mockRejectedValue(new Error("REST subjects called"));
-  // A route using the old REST domain client must fail this test.
-  vi.spyOn(api, "listProviderCatalog").mockRejectedValue(new Error("REST provider catalog called"));
-  vi.spyOn(api, "listConnections").mockRejectedValue(new Error("REST connections called"));
   const operations: Array<{ name: string; variables: Record<string, unknown> }> = [];
   const environment = new Environment({
     network: Network.create((operation, variables) => Observable.create((sink) => {
@@ -97,6 +91,27 @@ it("loads owner-only provider cards from a Relay catalog and connection page, no
   await waitFor(() => expect(view.getByText("GitHub")).toBeTruthy());
   expect(view.getByText("연결됨")).toBeTruthy();
   expect(operations.map(({ name }) => name)).toEqual(["ConnectionsQuery"]);
+});
+
+it("renders an untrusted catalog name as text and requires opt-in for private data", async () => {
+  const attack = `<img src=x onerror="alert(1)">\" autofocus onfocus="alert(2)`;
+  const initial = initialData();
+  const catalog = [{ ...initial.data.providerCatalog[0], name: attack }];
+  const { view } = mount(() => ({ data: { ...initial.data, providerCatalog: catalog } }));
+
+  await waitFor(() => expect(view.getByText(attack)).toBeTruthy());
+  expect(view.container.querySelector("img")).toBeNull();
+  expect(view.container.querySelector("[autofocus]")).toBeNull();
+  const consent = view.container.querySelector<HTMLInputElement>('[name="includePrivate"]');
+  expect(consent?.checked).toBe(false);
+  expect(consent?.required).toBe(false);
+  expect(consent?.closest<HTMLElement>(".private-consent-field")?.hidden).toBe(true);
+  await fireEvent.change(view.getByRole("combobox", { name: `${attack} 연결 방식` }), {
+    target: { value: "TOKEN" },
+  });
+  await waitFor(() => expect(consent?.required).toBe(true));
+  expect(consent?.checked).toBe(false);
+  expect(consent?.closest<HTMLElement>(".private-consent-field")?.hidden).toBe(false);
 });
 
 it("connects with a token outside the Node store and refreshes one connection edge", async () => {

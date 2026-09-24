@@ -8,10 +8,12 @@ COPY apps/web/package.json ./apps/web/package.json
 COPY apps/web/tools/openapi-typescript-cli/ ./apps/web/tools/openapi-typescript-cli/
 COPY packages/contracts/package.json ./packages/contracts/package.json
 COPY packages/custom-provider-sdk/package.json ./packages/custom-provider-sdk/package.json
+COPY packages/solid-relay/package.json ./packages/solid-relay/package.json
 RUN yarn install --immutable
 
 COPY apps/web/ ./apps/web/
 COPY packages/contracts/ ./packages/contracts/
+COPY packages/solid-relay/ ./packages/solid-relay/
 RUN yarn workspace @jandibat/web build
 
 FROM nginxinc/nginx-unprivileged:1.29-alpine@sha256:0c79d56aee561a1d81c63f00eee5fb5fe29279560cdc55e91425133104c7fbe6 AS runtime

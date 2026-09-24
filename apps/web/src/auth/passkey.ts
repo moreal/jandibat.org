@@ -1,5 +1,6 @@
-import type { PasskeyOptions } from "../api/client";
 import type { WebAuthnCredentialDto } from "@jandibat/contracts";
+
+type PasskeyOptions = Record<string, unknown>;
 
 const MAX_BASE64URL_LENGTH = 16_384;
 const MAX_CREDENTIAL_DESCRIPTORS = 100;

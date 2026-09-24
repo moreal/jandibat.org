@@ -1,4 +1,3 @@
-import type { SubjectDto } from "@jandibat/contracts";
 import {
   createContext,
   createSignal,
@@ -6,7 +5,6 @@ import {
   useContext,
   type Accessor,
   type ParentProps,
-  type Setter,
 } from "solid-js";
 
 const OWNER_SUBJECT_STORAGE_KEY = "jandibat:owner-subject";
@@ -23,12 +21,10 @@ export type ToastMessage = {
 export type AppState = {
   currentSubject: Accessor<string>;
   exploreSubject: Accessor<string>;
-  ownedSubjects: Accessor<readonly SubjectDto[]>;
   toast: Accessor<ToastMessage | undefined>;
-  selectOwnerSubject(subject: SubjectDto): void;
+  selectOwnerSubject(subject: { handle: string }): void;
   clearOwnerSubject(): void;
   setExploreSubject(subject: string): void;
-  setOwnedSubjects: Setter<readonly SubjectDto[]>;
   showToast(message: string, tone?: ToastTone): void;
 };
 
@@ -45,7 +41,6 @@ function createAppState(): AppState {
   const [exploreSubject, setExploreSubjectSignal] = createSignal(
     persistedValue(EXPLORE_SUBJECT_STORAGE_KEY),
   );
-  const [ownedSubjects, setOwnedSubjects] = createSignal<readonly SubjectDto[]>([]);
   const [toast, setToast] = createSignal<ToastMessage>();
   let toastSequence = 0;
   let toastTimer: number | undefined;
@@ -57,7 +52,6 @@ function createAppState(): AppState {
   return {
     currentSubject,
     exploreSubject,
-    ownedSubjects,
     toast,
     selectOwnerSubject(subject) {
       setCurrentSubject(subject.handle);
@@ -73,7 +67,6 @@ function createAppState(): AppState {
       if (normalized) localStorage.setItem(EXPLORE_SUBJECT_STORAGE_KEY, normalized);
       else localStorage.removeItem(EXPLORE_SUBJECT_STORAGE_KEY);
     },
-    setOwnedSubjects,
     showToast(message, tone = "success") {
       if (toastTimer !== undefined) window.clearTimeout(toastTimer);
       setToast({ id: ++toastSequence, message, tone });

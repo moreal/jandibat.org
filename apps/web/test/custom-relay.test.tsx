@@ -27,14 +27,19 @@ function page(edges: unknown[] = [{ cursor: "cursor-1", node: provider }], hasNe
   } } } };
 }
 
+it("renders untrusted custom-provider fields as text in the Relay card", async () => {
+  const attack = `<img src=x onerror="alert(1)">\" autofocus onfocus="alert(2)`;
+  const unsafe = { ...provider, name: attack, slug: attack, description: attack, allowedActions: [attack] };
+  const { view } = mount(() => page([{ cursor: "cursor-1", node: unsafe }]));
+
+  await waitFor(() => expect(view.getByText(attack, { selector: "h3" })).toBeTruthy());
+  expect(view.container.querySelector("img")).toBeNull();
+  expect(view.container.querySelector("[autofocus]")).toBeNull();
+  expect(view.container.querySelector(".custom-provider-card code")?.textContent).toBe(attack);
+});
+
 function mount(respond: (name: string, variables: Record<string, unknown>) => { data: Record<string, unknown> } | Error | null,
   subjects: SubjectDto[] = [owner]) {
-  vi.spyOn(api, "getCurrentSession").mockRejectedValue(new Error("REST session called"));
-  vi.spyOn(api, "listSubjects").mockRejectedValue(new Error("REST subjects called"));
-  for (const method of ["listCustomProviders", "createCustomProvider", "updateCustomProvider",
-    "rotateCustomProviderKey", "deleteCustomProvider"] as const) {
-    vi.spyOn(api, method).mockImplementation(() => { throw new Error(`REST ${method} called`); });
-  }
   const operations: Array<{ name: string; variables: Record<string, unknown> }> = [];
   const environment = new Environment({
     network: Network.create((operation, variables) => Observable.create((sink) => {

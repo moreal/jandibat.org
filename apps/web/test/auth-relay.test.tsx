@@ -2,7 +2,6 @@ import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { Show } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { Environment, Network, Observable, RecordSource, Store } from "relay-runtime";
-import { api } from "../src/api/client";
 import { createPasskey, getPasskey } from "../src/auth/passkey";
 import { AppStateProvider } from "../src/app/state";
 import { readRelayQuery } from "../src/auth/relay-query";
@@ -48,8 +47,6 @@ function mount() {
 }
 
 it("loads the authenticated account and current-session expiry from Viewer, without REST domain calls", async () => {
-  vi.spyOn(api, "getCurrentSession").mockRejectedValue(new Error("REST session called"));
-  vi.spyOn(api, "listSubjects").mockRejectedValue(new Error("REST subjects called"));
   const operations: string[] = [];
   vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
     const request = JSON.parse(String(init?.body)) as { operationName: string };
@@ -122,7 +119,6 @@ it("traverses session pages beyond 100 before returning the account session list
 });
 
 it("requests a magic link through an ephemeral mutation without storing the email", async () => {
-  vi.spyOn(api, "requestMagicLink").mockRejectedValue(new Error("REST magic link called"));
   const requests: Array<{ operationName: string; variables: Record<string, unknown> }> = [];
   vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
     const request = JSON.parse(String(init?.body)) as typeof requests[number];
@@ -272,8 +268,6 @@ it("does not finish pending passkey registration after an auth epoch switch", as
 });
 
 it("uses ephemeral passkey mutations and rotates the store before fetching a session-only sign-in result", async () => {
-  vi.spyOn(api, "beginPasskeyAuthentication").mockRejectedValue(new Error("REST passkey called"));
-  vi.spyOn(api, "finishPasskeyAuthentication").mockRejectedValue(new Error("REST passkey called"));
   let signedIn = false;
   const requests: Array<{ operationName: string; variables: Record<string, unknown> }> = [];
   vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -316,7 +310,6 @@ it("uses ephemeral passkey mutations and rotates the store before fetching a ses
 });
 
 it("signs out through Relay and drops the old normalized account store", async () => {
-  vi.spyOn(api, "signOut").mockRejectedValue(new Error("REST sign-out called"));
   let signedIn = true;
   const names: string[] = [];
   vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -389,8 +382,6 @@ it("revokes a noncurrent session by Relay ID and removes it from the account lis
 });
 
 it("registers a passkey with ephemeral ceremony and credential mutations", async () => {
-  vi.spyOn(api, "beginPasskeyRegistration").mockRejectedValue(new Error("REST registration called"));
-  vi.spyOn(api, "finishPasskeyRegistration").mockRejectedValue(new Error("REST registration called"));
   const requests: Array<{ operationName: string; variables: Record<string, unknown> }> = [];
   vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
     const request = JSON.parse(String(init?.body)) as typeof requests[number];
@@ -428,7 +419,6 @@ it("registers a passkey with ephemeral ceremony and credential mutations", async
 });
 
 it("requests selected subject deletion by Relay ID instead of a REST handle", async () => {
-  vi.spyOn(api, "requestSubjectDeletion").mockRejectedValue(new Error("REST deletion called"));
   vi.stubGlobal("confirm", () => true);
   const subjectID = "U3ViamVjdDox";
   const requests: Array<{ operationName: string; variables: Record<string, unknown> }> = [];

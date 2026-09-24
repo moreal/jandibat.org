@@ -9,7 +9,7 @@ import {
   type ParentProps,
 } from "solid-js";
 import { AppStateProvider, useAppState } from "./app/state";
-import { defaultApiBaseUrl } from "./api/client";
+import { defaultApiBaseUrl } from "./api/runtime-base";
 import { AuthEpochContext, createAuthEpoch } from "./relay/auth-epoch";
 import { RelayProvider } from "./relay";
 import { loadRuntimeConfig } from "./runtime-config";

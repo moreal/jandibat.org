@@ -46,6 +46,9 @@ sql "$COCKROACH_ROOT_URL" "CREATE USER IF NOT EXISTS jandibat_migrator; ALTER US
 sql "$COCKROACH_ROOT_URL" "CREATE USER IF NOT EXISTS jandibat_api; ALTER USER jandibat_api WITH PASSWORD '$JANDIBAT_API_PASSWORD';"
 sql "$COCKROACH_ROOT_URL" "CREATE USER IF NOT EXISTS jandibat_worker; ALTER USER jandibat_worker WITH PASSWORD '$JANDIBAT_WORKER_PASSWORD';"
 sql "$COCKROACH_ROOT_URL" "CREATE USER IF NOT EXISTS jandibat_maintenance; ALTER USER jandibat_maintenance WITH PASSWORD '$JANDIBAT_MAINTENANCE_PASSWORD';"
+sql "$COCKROACH_ROOT_URL" 'GRANT CONNECT ON DATABASE jandibat TO jandibat_migrator WITH GRANT OPTION;
+USE jandibat;
+GRANT USAGE, CREATE ON SCHEMA public TO jandibat_migrator WITH GRANT OPTION;'
 sql "$MIGRATION_DATABASE_URL" 'SELECT current_user();' jandibat_migrator
 sql "$API_DATABASE_URL" 'SELECT current_user();' jandibat_api
 sql "$WORKER_DATABASE_URL" 'SELECT current_user();' jandibat_worker

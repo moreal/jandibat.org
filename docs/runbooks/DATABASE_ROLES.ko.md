@@ -6,7 +6,7 @@ Production은 로그인 가능한 CockroachDB 사용자 `jandibat_migrator`, `ja
 
 ## 프로비저닝
 
-1. Secure CockroachDB에서 chart가 생성한 root client certificate가 포함된 `COCKROACH_ROOT_URL`, 독립된 SOPS 키에서 가져온 `JANDIBAT_MIGRATOR_PASSWORD`, `JANDIBAT_API_PASSWORD`, `JANDIBAT_WORKER_PASSWORD`, `JANDIBAT_MAINTENANCE_PASSWORD`, 그리고 각 역할의 `MIGRATION_DATABASE_URL`, `API_DATABASE_URL`, `WORKER_DATABASE_URL`, `MAINTENANCE_DATABASE_URL`을 bootstrap Job 환경에 제공합니다. Password는 서로 달라야 하며 unpadded base64url 43자 이상이어야 합니다. `make db-bootstrap-roles`는 `jandibat` 데이터베이스와 네 LOGIN 사용자를 멱등 생성하고 password를 갱신한 뒤 각각의 DSN으로 로그인을 확인합니다. 기존 schema를 변경하거나 삭제하지 않습니다. Credential을 shell history, repository, CI artifact에 기록하지 않습니다.
+1. Secure CockroachDB에서 chart가 생성한 root client certificate가 포함된 `COCKROACH_ROOT_URL`, 독립된 SOPS 키에서 가져온 `JANDIBAT_MIGRATOR_PASSWORD`, `JANDIBAT_API_PASSWORD`, `JANDIBAT_WORKER_PASSWORD`, `JANDIBAT_MAINTENANCE_PASSWORD`, 그리고 각 역할의 `MIGRATION_DATABASE_URL`, `API_DATABASE_URL`, `WORKER_DATABASE_URL`, `MAINTENANCE_DATABASE_URL`을 bootstrap Job 환경에 제공합니다. Password는 서로 달라야 하며 unpadded base64url 43자 이상이어야 합니다. `make db-bootstrap-roles`는 `jandibat` 데이터베이스와 네 LOGIN 사용자를 멱등 생성하고 password를 갱신한 뒤 각각의 DSN으로 로그인을 확인합니다. Bootstrap은 migrator에게 이 DB의 `CONNECT`와 `public` schema의 `USAGE`·`CREATE`에만 재부여 권한을 줍니다. Runtime table 권한은 부여하지 않으며 기존 schema object를 변경하거나 삭제하지 않습니다. Credential을 shell history, repository, CI artifact에 기록하지 않습니다.
 2. Bootstrap 성공 후 전용 migration Job에 `MIGRATION_DATABASE_URL`, `COCKROACH_DATABASE`, `MIGRATIONS_DIR`, Cockroach CLI, writable `/tmp`, 읽기 전용 SQL/script와 DB TLS CA를 제공해 모든 migration을 적용합니다. URL의 database와 `COCKROACH_DATABASE`가 일치해야 합니다.
 3. 같은 migration credential로 `scripts/db-configure-runtime-roles.sh`를 실행합니다. Script는 세 사용자가 존재하고 `LOGIN` 가능한지 확인한 뒤 기존 runtime table 권한을 모두 회수하고 allowlist를 다시 부여합니다. Role negative check까지 통과해야 application rollout을 시작합니다.
 4. API, worker, maintenance container에는 각각 `DATABASE_URL`, `WORKER_DATABASE_URL`, `MAINTENANCE_DATABASE_URL` 하나만 주입합니다. Migrator DSN은 어떤 application workload에도 주입하지 않습니다.
@@ -50,7 +50,7 @@ Job은 release에 고정된 SQL/script를 사용합니다. 재실행 시 적용�
 
 ## 검증과 회수
 
-Staging에서는 각 DSN으로 정상 `/readyz`를 확인한 뒤 `scripts/db-verify-runtime-roles.sh`로 다음 허용/거부를 검사합니다. Local CockroachDB/CI에서는 `make db-runtime-roles-test`가 사용자 생성, GRANT 재적용, 같은 negative test를 재현합니다.
+Staging에서는 각 DSN으로 정상 `/readyz`를 확인한 뒤 `scripts/db-verify-runtime-roles.sh`로 다음 허용/거부를 검사합니다. Local CockroachDB/CI의 `make db-runtime-roles-test`는 insecure cluster에서 root로 GRANT를 재적용하는 기존 회귀 검사입니다. Migrator의 실제 권한 경계는 x86_64 Linux의 격리된 secure fixture인 `sh scripts/test-db-bootstrap-roles-secure.sh`에서 bootstrap → migrator migration 두 번 → migrator GRANT → role별 허용/거부 검증으로 확인합니다.
 
 - API role의 `SELECT`/`DELETE FROM audit_events` 거부.
 - API role의 revoke queue `INSERT` 허용과 `SELECT` 거부.

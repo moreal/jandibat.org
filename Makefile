@@ -187,6 +187,7 @@ db-cli-secret-boundary-test:
 
 db-bootstrap-roles-test:
 	sh scripts/test-db-bootstrap-roles.sh
+	sh scripts/test-db-bootstrap-roles-secure-client.sh
 
 db-bootstrap-roles:
 	sh scripts/db-bootstrap-roles.sh

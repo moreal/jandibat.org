@@ -79,8 +79,13 @@ reject missing-role-url env -u API_DATABASE_URL
 : >"$TEST_ALL_SQL"
 if ! run_bootstrap env; then echo 'FAIL: valid bootstrap rejected' >&2; exit 1; fi
 assert_no_canary
-[ "$(wc -l <"$TEST_CALLS" | tr -d ' ')" -eq 9 ] || { echo 'FAIL: expected database, user and login calls' >&2; exit 1; }
+[ "$(wc -l <"$TEST_CALLS" | tr -d ' ')" -eq 10 ] || { echo 'FAIL: expected database, user, scoped authority and login calls' >&2; exit 1; }
 grep -q '^CREATE DATABASE IF NOT EXISTS jandibat;' "$TEST_ALL_SQL" || { echo 'FAIL: missing database create' >&2; exit 1; }
+grep -q '^GRANT CONNECT ON DATABASE jandibat TO jandibat_migrator WITH GRANT OPTION;' "$TEST_ALL_SQL" || { echo 'FAIL: migrator cannot delegate database CONNECT' >&2; exit 1; }
+grep -q '^GRANT USAGE, CREATE ON SCHEMA public TO jandibat_migrator WITH GRANT OPTION;' "$TEST_ALL_SQL" || { echo 'FAIL: migrator cannot delegate public schema privileges' >&2; exit 1; }
+if grep -Eq 'GRANT (SYSTEM|ALL)|GRANT .* ON TABLE .* TO jandibat_migrator|GRANT .* TO jandibat_(api|worker|maintenance)' "$TEST_ALL_SQL"; then
+ echo 'FAIL: bootstrap exceeded database/schema authority' >&2; exit 1
+fi
 
 if run_bootstrap env API_DATABASE_URL='postgresql://jandibat_migrator@localhost:26257/jandibat'; then
  echo 'FAIL: role DSN authenticated as a different account' >&2; exit 1

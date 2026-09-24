@@ -20,6 +20,11 @@ trap 'exit 143' TERM HUP
 mkdir "$fixture_dir/certs"
 chmod 700 "$fixture_dir"
 cp scripts/db-bootstrap-roles.sh "$fixture_dir/db-bootstrap-roles.sh"
+mkdir -p "$fixture_dir/workspace/scripts" "$fixture_dir/workspace/db/migrations"
+for script in db-migrate-url.sh db-configure-runtime-roles.sh db-verify-runtime-roles.sh; do
+ cp "scripts/$script" "$fixture_dir/workspace/scripts/$script"
+done
+cp db/migrations/*.sql "$fixture_dir/workspace/db/migrations/"
 docker container inspect "$fixture_name" >/dev/null 2>&1 && { echo 'fixture container name already exists' >&2; exit 2; }
 docker run --rm --mount "type=bind,src=$fixture_dir/certs,dst=/certs" --entrypoint /cockroach/cockroach "$image" cert create-ca --certs-dir=/certs --ca-key=/certs/ca.key >/dev/null
 docker run --rm --mount "type=bind,src=$fixture_dir/certs,dst=/certs" --entrypoint /cockroach/cockroach "$image" cert create-node localhost 127.0.0.1 --certs-dir=/certs --ca-key=/certs/ca.key >/dev/null
@@ -50,19 +55,24 @@ write_env() {
   printf 'JANDIBAT_API_PASSWORD=%s\n' "$api_password"
   printf 'JANDIBAT_WORKER_PASSWORD=%s\n' "$password_c"
   printf 'JANDIBAT_MAINTENANCE_PASSWORD=%s\n' "$password_d"
+  printf 'COCKROACH_SQL_BIN=/cockroach/cockroach\n'
+  printf 'COCKROACH_DATABASE=jandibat\n'
+  printf 'MIGRATIONS_DIR=/workspace/db/migrations\n'
  } >"$fixture_dir/roles.env"
 }
 client() {
- docker run --rm --network "container:$fixture_name" \
+ docker run --rm -i --network "container:$fixture_name" \
   --env-file "$fixture_dir/roles.env" \
   --mount "type=bind,src=$fixture_dir/certs,dst=/certs,readonly" \
   --mount "type=bind,src=$fixture_dir/db-bootstrap-roles.sh,dst=/bootstrap.sh,readonly" \
+  --mount "type=bind,src=$fixture_dir/workspace,dst=/workspace,readonly" \
   --entrypoint /bin/sh "$image" "$@"
 }
 write_env "$password_b"
 ready=false
 for attempt in 1 2 3 4 5 6 7 8 9 10; do
- if printf 'SELECT 1;\n' | client -c 'COCKROACH_URL="$COCKROACH_ROOT_URL" /cockroach/cockroach sql --set=errexit=true' >"$fixture_dir/probe" 2>&1; then ready=true; break; fi
+ if printf 'SELECT 1;\n' | client -c 'COCKROACH_URL="$COCKROACH_ROOT_URL" /cockroach/cockroach sql --format=tsv --set=errexit=true' >"$fixture_dir/probe" 2>&1 &&
+  [ "$(tail -n 1 "$fixture_dir/probe" | tr -d '\r')" = 1 ]; then ready=true; break; fi
  sleep 1
 done
 [ "$ready" = true ] || { echo 'secure fixture did not become ready' >&2; exit 1; }
@@ -75,9 +85,14 @@ printf 'SHOW USERS;\n' | client -c 'COCKROACH_URL="$COCKROACH_ROOT_URL" /cockroa
 for role in jandibat_migrator jandibat_api jandibat_worker jandibat_maintenance; do
  awk -F '\t' -v role="$role" '$1 == role && $2 !~ /NOLOGIN/ { found++ } END { exit found != 1 }' "$fixture_dir/users" || { echo 'expected one LOGIN account for each role' >&2; exit 1; }
 done
+for run in 1 2; do
+ if ! client /workspace/scripts/db-migrate-url.sh >"$fixture_dir/migration-output" 2>&1; then echo 'migrator migration failed in secure fixture (redacted)' >&2; exit 1; fi
+done
+if ! client /workspace/scripts/db-configure-runtime-roles.sh >"$fixture_dir/grant-output" 2>&1; then echo 'migrator runtime grant configuration failed in secure fixture (redacted)' >&2; exit 1; fi
+if ! client /workspace/scripts/db-verify-runtime-roles.sh >"$fixture_dir/verify-output" 2>&1; then echo 'runtime role verification failed in secure fixture (redacted)' >&2; exit 1; fi
 write_env "$password_e"
 if ! client /bootstrap.sh >"$fixture_dir/bootstrap-output" 2>&1; then echo 'password rotation failed in secure fixture (redacted)' >&2; exit 1; fi
 printf 'SELECT 1;\n' | client -c 'COCKROACH_URL="$API_DATABASE_URL" /cockroach/cockroach sql --set=errexit=true' >"$fixture_dir/probe" 2>&1 || { echo 'rotated credential rejected' >&2; exit 1; }
 write_env "$password_b"
 if printf 'SELECT 1;\n' | client -c 'COCKROACH_URL="$API_DATABASE_URL" /cockroach/cockroach sql --set=errexit=true' >"$fixture_dir/probe" 2>&1; then echo 'old credential accepted after rotation' >&2; exit 1; fi
-echo 'secure bootstrap idempotence and password rotation checks passed'
+echo 'secure bootstrap, migrator migration/grants, role verification and password rotation checks passed'

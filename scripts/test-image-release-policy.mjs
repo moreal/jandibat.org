@@ -221,6 +221,14 @@ process.exit(2);
   assert.match(result.stderr, /0001_baseline\.sql/);
 });
 
+test('restore payload validation rejects a non-hex image ID before Docker', t => {
+  const dir = fixture(t);
+  executable(dir, 'docker', 'process.exit(99);');
+  const result = invoke('test-restore-tools-payload.sh', { PATH: `${join(dir, 'bin')}:${process.env.PATH}` }, ['sha256:' + 'g'.repeat(64)]);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /expected an imported sha256 image ID/);
+});
+
 test('CI exercises runtime secrets and worker OAuth after isolated test database migrations and grants', () => {
   const steps = yaml(join(root, '.github/workflows/ci.yml')).jobs.migrations.steps;
   const runtime = steps.findIndex(s => s.run?.includes('make image-runtime-contract-test'));

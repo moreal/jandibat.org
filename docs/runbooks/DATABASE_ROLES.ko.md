@@ -1,15 +1,15 @@
 # Runtime DB 역할 Runbook
 
-기준일: 2026-09-23
+기준일: 2026-09-24
 
 Production은 로그인 가능한 CockroachDB 사용자 `jandibat_migrator`, `jandibat_api`, `jandibat_worker`, `jandibat_maintenance`와 별도 backup 사용자를 사용합니다. 세 애플리케이션 process는 자기 DSN username을 고정값과 비교하며, 다른 역할의 DSN은 환경에 주입하지 않습니다.
 
 ## 프로비저닝
 
 1. Secret manager/DB 관리 절차에서 네 사용자를 각각 독립된 password 또는 client certificate로 생성합니다. Credential을 shell history, repository, CI artifact에 기록하지 않습니다.
-2. 전용 `MIGRATION_DATABASE_URL`을 사용해 모든 migration을 적용합니다.
-3. 같은 migration credential로 `scripts/db-configure-runtime-roles.sh`를 실행합니다. Script는 세 사용자가 존재하고 `LOGIN` 가능한지 확인한 뒤 기존 runtime table 권한을 모두 회수하고 allowlist를 다시 부여합니다.
-4. API, worker, maintenance container에는 각각 `DATABASE_URL`, `WORKER_DATABASE_URL`, `MAINTENANCE_DATABASE_URL` 하나만 주입합니다.
+2. 전용 migration Job에 `MIGRATION_DATABASE_URL`, `COCKROACH_DATABASE`, `MIGRATIONS_DIR`, Cockroach CLI, writable `/tmp`, 읽기 전용 SQL/script와 DB TLS CA를 제공해 모든 migration을 적용합니다. URL의 database와 `COCKROACH_DATABASE`가 일치해야 합니다.
+3. 같은 migration credential로 `scripts/db-configure-runtime-roles.sh`를 실행합니다. Script는 세 사용자가 존재하고 `LOGIN` 가능한지 확인한 뒤 기존 runtime table 권한을 모두 회수하고 allowlist를 다시 부여합니다. Role negative check까지 통과해야 application rollout을 시작합니다.
+4. API, worker, maintenance container에는 각각 `DATABASE_URL`, `WORKER_DATABASE_URL`, `MAINTENANCE_DATABASE_URL` 하나만 주입합니다. Migrator DSN은 어떤 application workload에도 주입하지 않습니다.
 
 ```sh
 MIGRATION_DATABASE_URL="$STAGING_MIGRATION_DATABASE_URL" \
@@ -18,6 +18,8 @@ MIGRATION_DATABASE_URL="$STAGING_MIGRATION_DATABASE_URL" \
 ```
 
 Staging 배포 script는 migration 직후 이 GRANT script를 다시 실행하므로 새 table이 생긴 release에서 명시적 권한 갱신이 빠지면 runtime readiness/smoke가 실패합니다. Script는 `public`의 암묵적 schema `CREATE`를 회수하고 `jandibat_migrator`에만 명시적으로 유지합니다. Runtime 사용자에는 schema `CREATE` 권한을 주지 않습니다.
+
+Job은 release에 고정된 SQL/script를 사용합니다. 재실행 시 적용된 version의 checksum이 같으면 건너뛰며 다르면 중단합니다. Migration이나 GRANT 실패 시 세 runtime workload를 시작하지 않습니다. 정확한 image/port/probe/secret mount 계약은 [`IMAGE_RUNTIME_CONTRACT.ko.md`](../IMAGE_RUNTIME_CONTRACT.ko.md)를 따릅니다.
 
 ## 권한 행렬
 

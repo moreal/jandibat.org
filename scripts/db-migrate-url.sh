@@ -1,15 +1,24 @@
 #!/bin/sh
 set -eu
 
-database_url=${MIGRATION_DATABASE_URL:-${DATABASE_URL:-}}
+database_url=${MIGRATION_DATABASE_URL:-}
 if [ -z "$database_url" ]; then
-	echo "MIGRATION_DATABASE_URL or DATABASE_URL is required" >&2
+	echo "MIGRATION_DATABASE_URL is required" >&2
 	exit 2
 fi
 
-database=${COCKROACH_DATABASE:-jandibat}
-migrations_dir=${MIGRATIONS_DIR:-db/migrations}
+database=${COCKROACH_DATABASE:-}
+migrations_dir=${MIGRATIONS_DIR:-}
 sql_bin=${COCKROACH_SQL_BIN:-cockroach}
+
+if [ -z "$database" ]; then
+	echo "COCKROACH_DATABASE is required" >&2
+	exit 2
+fi
+if [ -z "$migrations_dir" ]; then
+	echo "MIGRATIONS_DIR is required" >&2
+	exit 2
+fi
 
 case "$database" in
 	*[!A-Za-z0-9_]*|'')
@@ -21,6 +30,12 @@ if [ ! -d "$migrations_dir" ]; then
 	echo "migration directory not found: $migrations_dir" >&2
 	exit 2
 fi
+temporary_directory=${TMPDIR:-/tmp}
+if ! temporary_probe=$(mktemp "$temporary_directory/jandibat-migration-preflight.XXXXXX" 2>/dev/null); then
+	echo "writable temporary directory is required" >&2
+	exit 2
+fi
+rm -f "$temporary_probe"
 if ! command -v "$sql_bin" >/dev/null 2>&1; then
 	echo "Cockroach SQL client not found: $sql_bin" >&2
 	exit 127
@@ -140,7 +155,7 @@ for migration in "$migrations_dir"/*.sql; do
 		sql --execute="ALTER TABLE $schema_unlock_table SET (schema_locked = false)"
 		schema_unlocked=$schema_unlock_table
 	fi
-	transaction_file=$(mktemp "${TMPDIR:-/tmp}/jandibat-migration.XXXXXX")
+	transaction_file=$(mktemp "$temporary_directory/jandibat-migration.XXXXXX")
 	chmod 600 "$transaction_file"
 	{
 		printf '%s\n' 'SET autocommit_before_ddl = off;' 'BEGIN;'

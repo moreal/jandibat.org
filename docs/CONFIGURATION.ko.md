@@ -39,7 +39,7 @@ GitHub Actions는 commit SHA로 고정한 Nix 설치 및 캐시 action을 사용
 | `MAINTENANCE_DATABASE_URL` | 빈 값 | retention/re-encryption 전용 DB 접속 문자열. Production username은 `jandibat_maintenance`로 고정 |
 | `DELETION_PSEUDONYM_KEY` | 빈 값 | account 삭제 완료 감사 대상 pseudonym용 unpadded base64url, decode 후 32바이트 이상. Maintenance에만 주입하며 `SESSION_SIGNING_KEY`와 같으면 안 됨 |
 | `DELETED_IDENTITY_HMAC_ACTIVE_KEY_ID` | 빈 값 | 삭제 identity HMAC의 active version ID. API와 maintenance에만 주입 |
-| `DELETED_IDENTITY_HMAC_KEYS` | `{}` | key ID → 32바이트 이상 unpadded base64url HMAC key JSON map. API는 전체 retention window read, maintenance는 active write/read. session/deletion pseudonym/credential key와 재사용 금지 |
+| `DELETED_IDENTITY_HMAC_KEYS` | `{}` | key ID → 정확히 32바이트의 unpadded standard base64 HMAC key JSON map. API는 전체 retention window read, maintenance는 active write/read. session/deletion pseudonym/credential key와 재사용 금지 |
 | `DEVELOPMENT_ALL_IN_ONE` | `false` | 개발에서만 API process에 background job을 함께 배선하는 compatibility flag. Production은 `true`를 거부 |
 | `SESSION_SIGNING_KEY` | 빈 값 | unpadded standard base64. production 시작 검사에서 decode 후 32바이트 이상 필요. 현재 opaque session 발급·검증에는 사용되지 않음 |
 | `CREDENTIAL_ACTIVE_KEY_ID` | 빈 값 | active credential RSA key ID. production 필수이며 public map에 존재해야 하고 worker/maintenance에서는 private map에도 존재해야 함 |
@@ -113,7 +113,7 @@ Development에서 asymmetric/legacy map과 legacy key가 모두 비어 있으면
 
 ## Production 시작 조건
 
-Production은 하나의 image에서 세 executable을 서로 다른 container와 DB role로 실행합니다. 각 process에는 자기 DSN만 주입하고 다른 process의 DSN을 전달하지 않습니다.
+Production은 API, worker, maintenance의 별도 image를 서로 다른 container와 DB role로 실행합니다. 각 process에는 자기 DSN만 주입하고 다른 process의 DSN을 전달하지 않습니다. Image별 port, probe, mount, migration Job 계약은 [`IMAGE_RUNTIME_CONTRACT.ko.md`](IMAGE_RUNTIME_CONTRACT.ko.md)를 따릅니다.
 
 | Process | 실행 파일 | DB 환경 변수와 고정 username | 비밀 범위 |
 | --- | --- | --- | --- |

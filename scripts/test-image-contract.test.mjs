@@ -11,14 +11,17 @@ const programs = { api: 'server', worker: 'worker', maintenance: 'maintenance', 
 
 // Exercise the real archive boundary: root tar entries become bin/... after
 // normalization, while a Nix store entry retains a prefix before /bin/.
-function inspectFixture(name, extraPath) {
+function inspectFixture(name, extraPath, certificatePaths = [
+  'etc/ssl/certs/ca-certificates.crt',
+  'nix/store/fixture-ca/etc/ssl/certs/ca-certificates.crt',
+]) {
   const scratch = mkdtempSync(join(tmpdir(), 'jandibat-image-contract-'));
   try {
     const root = join(scratch, 'root');
     for (const path of [
       'busybox', `bin/${programs[name]}`,
       `nix/store/fixture-payload/bin/${programs[name]}`,
-      'nix/store/fixture-ca/etc/ssl/certs/ca-certificates.crt',
+      ...certificatePaths,
       ...(extraPath ? [extraPath] : []),
     ]) {
       const target = join(root, path);
@@ -40,6 +43,19 @@ function inspectFixture(name, extraPath) {
     rmSync(scratch, { recursive: true, force: true });
   }
 }
+
+test('accepts the root-relative certificate archive member', () => {
+  const result = inspectFixture('api', undefined, ['etc/ssl/certs/ca-certificates.crt']);
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('rejects a Nix-store certificate without the root archive member', () => {
+  const result = inspectFixture('api', undefined, [
+    'nix/store/fixture-ca/etc/ssl/certs/ca-certificates.crt',
+  ]);
+  assert.equal(result.status, 1, `accepted archive without root certificate: ${result.stdout}`);
+  assert.match(result.stderr, /AssertionError/);
+});
 
 for (const name of Object.keys(programs)) {
   test(`${name} accepts its own root and Nix-store executable`, () => {

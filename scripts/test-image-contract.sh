@@ -29,7 +29,7 @@ const paths = manifest[0].Layers.flatMap(layer => execFileSync('tar', ['-tf', '-
 }).toString().split('\n').map(path => path.replace(/^\.\//, '')));
 assert.ok(paths.includes('busybox'), '/busybox supports exec health checks');
 assert.ok(paths.includes(`bin/${program}`), 'entrypoint must exist in archive');
-assert.ok(paths.some(path => path.endsWith('/etc/ssl/certs/ca-certificates.crt')));
+assert.ok(paths.includes('etc/ssl/certs/ca-certificates.crt'), 'root certificate must exist in archive');
 for (const path of paths) {
   assert.doesNotMatch(path, /(^|\/)(\.git|node_modules|go\.mod|go\.sum|package\.json|yarn\.lock|src)(\/|$)/,
     `source or dependency tree leaked: ${path}`);

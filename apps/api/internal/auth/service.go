@@ -192,11 +192,17 @@ func (s *Service) AuthenticateSession(ctx context.Context, token string) (User, 
 	}
 	session, err := s.repository.UseSession(ctx, tokenDigest(token), s.now().UTC())
 	if err != nil {
-		return User{}, ErrInvalidSession
+		if errors.Is(err, ErrNotFound) || errors.Is(err, ErrConsumed) || errors.Is(err, ErrExpired) || errors.Is(err, ErrUserDisabled) {
+			return User{}, ErrInvalidSession
+		}
+		return User{}, fmt.Errorf("use session: %w", err)
 	}
 	user, err := s.repository.GetUserByID(ctx, session.UserID)
 	if err != nil {
-		return User{}, ErrInvalidSession
+		if errors.Is(err, ErrNotFound) {
+			return User{}, ErrInvalidSession
+		}
+		return User{}, fmt.Errorf("get session user: %w", err)
 	}
 	if user.Status != UserStatusActive {
 		return User{}, ErrUserDisabled
@@ -219,7 +225,13 @@ func (s *Service) CurrentSession(ctx context.Context, token string) (Session, er
 		return Session{}, ErrInvalidSession
 	}
 	session, err := s.repository.GetSession(ctx, tokenDigest(token))
-	if err != nil || session.RevokedAt != nil || !s.now().UTC().Before(session.ExpiresAt) {
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return Session{}, ErrInvalidSession
+		}
+		return Session{}, fmt.Errorf("get current session: %w", err)
+	}
+	if session.RevokedAt != nil || !s.now().UTC().Before(session.ExpiresAt) {
 		return Session{}, ErrInvalidSession
 	}
 	return cloneSession(session), nil

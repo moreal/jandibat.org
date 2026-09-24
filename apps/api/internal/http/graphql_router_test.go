@@ -373,6 +373,155 @@ func TestGraphQLTrustedContextClearsRejectedSessionCookie(t *testing.T) {
 	}
 }
 
+type graphQLIntermittentAuth struct {
+	handlers.AuthService
+	failure *bool
+}
+
+func (stub graphQLIntermittentAuth) AuthenticateSession(context.Context, string) (auth.User, error) {
+	if *stub.failure {
+		return auth.User{}, errors.New("repository temporarily unavailable")
+	}
+	return auth.User{ID: "user-1"}, nil
+}
+
+type graphQLIntermittentSessions struct {
+	handlers.SessionService
+	failure *bool
+}
+
+func (stub graphQLIntermittentSessions) CurrentSession(context.Context, string) (auth.Session, error) {
+	if *stub.failure {
+		return auth.Session{}, errors.New("repository temporarily unavailable")
+	}
+	return auth.Session{ID: "00000000-0000-4000-8000-000000000001", UserID: "user-1"}, nil
+}
+
+// A transient session repository failure rejects this request without
+// destroying a valid browser credential. The same cookie works on retry.
+func TestGraphQLTrustedContextRetainsCookieAcrossSessionRepositoryOutage(t *testing.T) {
+	for _, failingPort := range []string{"authenticate", "current session"} {
+		t.Run(failingPort, func(t *testing.T) {
+			authFailure := failingPort == "authenticate"
+			sessionFailure := failingPort == "current session"
+			deps := Dependencies{
+				Auth: graphQLIntermittentAuth{failure: &authFailure}, Sessions: graphQLIntermittentSessions{failure: &sessionFailure},
+				RateLimiter: handlers.DefaultRateLimiter(), SecureCookies: true,
+			}
+			graphDeps := GraphQLDependencies{NodeServices: graph.NodeServices{ViewerUsers: graphQLViewerUsersStub{}}}
+			handler := graph.PreflightHTTP(graphQLTrustedContext(deps, graphDeps, graph.NewHTTPHandler(&graph.Resolver{}, graph.HTTPOptions{})), graph.HTTPOptions{})
+			request := func() *http.Request {
+				r := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{"query":"query Viewer { viewer { user { id } } }","operationName":"Viewer"}`))
+				r.Header.Set("Content-Type", "application/json")
+				r.AddCookie(&http.Cookie{Name: "jandibat_session", Value: "valid-token"})
+				return r
+			}
+			first := httptest.NewRecorder()
+			handler.ServeHTTP(first, request())
+			if first.Code != http.StatusServiceUnavailable || !strings.Contains(first.Body.String(), `"code":"service_unavailable"`) || strings.Contains(first.Body.String(), "repository temporarily unavailable") || strings.Contains(first.Body.String(), `"id":"user-1"`) {
+				t.Fatalf("outage response status=%d body=%s", first.Code, first.Body.String())
+			}
+			if first.Header().Get("Content-Type") != "application/problem+json" {
+				t.Fatalf("outage content type = %q", first.Header().Get("Content-Type"))
+			}
+			if first.Header().Get("Set-Cookie") != "" {
+				t.Fatal("an operational error must not expire the session cookie")
+			}
+			authFailure, sessionFailure = false, false
+			retry := httptest.NewRecorder()
+			handler.ServeHTTP(retry, request())
+			if retry.Code != http.StatusOK || !strings.Contains(retry.Body.String(), `"id":"user-1"`) {
+				t.Fatalf("retry response status=%d body=%s", retry.Code, retry.Body.String())
+			}
+		})
+	}
+}
+
+type graphQLMismatchedSession struct{ handlers.SessionService }
+
+func (graphQLMismatchedSession) CurrentSession(context.Context, string) (auth.Session, error) {
+	return auth.Session{ID: "00000000-0000-4000-8000-000000000001", UserID: "other-user"}, nil
+}
+
+// An inconsistent result or unavailable dependency rejects the request, but
+// neither proves the browser's credential has expired or been revoked.
+func TestGraphQLTrustedContextRetainsCookieOnUnprovenAuthenticationFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		auth     handlers.AuthService
+		sessions handlers.SessionService
+	}{
+		{"missing auth dependency", nil, graphQLSessionsStub{}},
+		{"missing session dependency", graphQLAuthStub{}, nil},
+		{"user-session mismatch", graphQLAuthStub{}, graphQLMismatchedSession{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			deps := Dependencies{Auth: tc.auth, Sessions: tc.sessions, RateLimiter: handlers.DefaultRateLimiter()}
+			graphDeps := GraphQLDependencies{NodeServices: graph.NodeServices{ViewerUsers: graphQLViewerUsersStub{}}}
+			handler := graph.PreflightHTTP(graphQLTrustedContext(deps, graphDeps, graph.NewHTTPHandler(&graph.Resolver{}, graph.HTTPOptions{})), graph.HTTPOptions{})
+			request := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{"query":"query Viewer { viewer { user { id } } }","operationName":"Viewer"}`))
+			request.Header.Set("Content-Type", "application/json")
+			request.AddCookie(&http.Cookie{Name: "jandibat_session", Value: "valid-token"})
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"errors"`) || strings.Contains(response.Body.String(), `"id":"user-1"`) {
+				t.Fatalf("unverified response status=%d body=%s", response.Code, response.Body.String())
+			}
+			if response.Header().Get("Set-Cookie") != "" {
+				t.Fatal("unproven credential failure must not expire the cookie")
+			}
+		})
+	}
+}
+
+func TestGraphQLSessionOutageKeepsMutationAuditAndSkipsVerifiedAccountQuota(t *testing.T) {
+	sink := operations.NewMemoryAuditSink()
+	recorder, err := operations.NewAuditRecorder(sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failure := true
+	limiter := &graphQLSharedAccountLimiter{accounts: make(map[string]int)}
+	deps := Dependencies{
+		Auth: graphQLIntermittentAuth{failure: &failure}, Sessions: graphQLSessionsStub{},
+		RateLimiter: limiter,
+	}
+	router := chi.NewRouter()
+	router.Use(middleware.RequestID)
+	router.Use(func(next http.Handler) http.Handler { return graph.PreflightHTTP(next, graph.HTTPOptions{}) })
+	router.Use(auditRequests(recorder, []byte(auditTestSourceKey), limiter))
+	router.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if graphQLRateLimit(w, r, limiter) {
+				next.ServeHTTP(w, r)
+			}
+		})
+	})
+	router.Method(http.MethodPost, "/graphql", graphQLTrustedContext(deps, GraphQLDependencies{}, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})))
+	request := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{"query":"mutation Change { signOut { errors { code } } }","operationName":"Change"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.AddCookie(&http.Cookie{Name: "jandibat_session", Value: "valid-token"})
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable || response.Header().Get("Set-Cookie") != "" {
+		t.Fatalf("outage status=%d headers=%v body=%s", response.Code, response.Header(), response.Body.String())
+	}
+	events, err := sink.Events(context.Background())
+	if err != nil || len(events) != 2 || events[1].Outcome != operations.AuditFailed || events[1].Actor.Type != operations.AuditActorAnonymous {
+		t.Fatalf("outage audit events=%#v err=%v", events, err)
+	}
+	if len(limiter.accounts) != 1 {
+		t.Fatalf("outage must retain only the pre-auth session quota: %#v", limiter.accounts)
+	}
+	for key := range limiter.accounts {
+		if !strings.HasPrefix(key, "session:sha256:") {
+			t.Fatalf("unverified request used account quota: %#v", limiter.accounts)
+		}
+	}
+}
+
 // The audit middleware sits outside authentication; its correlated outcome
 // must still name the server-verified actor, never a GraphQL argument.
 func TestGraphQLMutationAuditUsesVerifiedSessionActor(t *testing.T) {

@@ -136,20 +136,28 @@ func graphQLTrustedContext(deps Dependencies, graphDeps GraphQLDependencies, nex
 		cookieTransport := GraphQLCookieTransport{Writer: w, Secure: deps.SecureCookies}
 		ctx = graph.ContextWithAuthTransport(ctx, cookieTransport)
 		token, fromCookie, present, malformed := graphQLCredential(r)
-		rejected := false
+		clearInvalidCookie := fromCookie && malformed
 		if malformed {
 			ctx = graph.ContextWithFailedAuthentication(ctx)
-			rejected = true
 		} else if present {
 			if deps.Auth == nil || deps.Sessions == nil {
 				ctx = graph.ContextWithFailedAuthentication(ctx)
-				rejected = true
 			} else {
 				user, userErr := deps.Auth.AuthenticateSession(ctx, token)
 				session, sessionErr := deps.Sessions.CurrentSession(ctx, token)
+				if (userErr != nil && !errors.Is(userErr, auth.ErrInvalidSession) && !errors.Is(userErr, auth.ErrUserDisabled)) ||
+					(sessionErr != nil && !errors.Is(sessionErr, auth.ErrInvalidSession)) {
+					w.Header().Set("Retry-After", "5")
+					writeFrameworkProblem(w, r, stdhttp.StatusServiceUnavailable, "Service Unavailable", "service_unavailable", "The service cannot verify this session right now.")
+					return
+				}
 				if userErr != nil || sessionErr != nil || user.ID == "" || session.UserID != user.ID || session.ID == "" {
 					ctx = graph.ContextWithFailedAuthentication(ctx)
-					rejected = true
+					if fromCookie && (userErr != nil || sessionErr != nil) &&
+						(userErr == nil || errors.Is(userErr, auth.ErrInvalidSession)) &&
+						(sessionErr == nil || errors.Is(sessionErr, auth.ErrInvalidSession)) {
+						clearInvalidCookie = true
+					}
 				} else {
 					ctx = graph.ContextWithVerifiedViewer(ctx, user.ID)
 					publishGraphQLAuditActor(ctx, user.ID)
@@ -167,7 +175,7 @@ func graphQLTrustedContext(deps Dependencies, graphDeps GraphQLDependencies, nex
 				}
 			}
 		}
-		if fromCookie && rejected {
+		if clearInvalidCookie {
 			_ = cookieTransport.ClearSessionCookie()
 		}
 		if !fromCookie || !present || malformed {

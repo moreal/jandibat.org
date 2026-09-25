@@ -29,6 +29,7 @@ const paths = manifest[0].Layers.flatMap(layer => execFileSync('tar', ['-tf', '-
 }).toString().split('\n').map(path => path.replace(/^\.\//, '')));
 assert.ok(paths.includes('busybox'), '/busybox supports exec health checks');
 assert.ok(paths.includes(`bin/${program}`), 'entrypoint must exist in archive');
+assert.equal(paths.includes('bin/metrics-proxy'), name === 'api', 'only API carries the metrics proxy executable');
 assert.ok(paths.includes('etc/ssl/certs/ca-certificates.crt'), 'root certificate must exist in archive');
 for (const path of paths) {
   assert.doesNotMatch(path, /(^|\/)(\.git|node_modules|go\.mod|go\.sum|package\.json|yarn\.lock|src)(\/|$)/,
@@ -38,6 +39,7 @@ for (const path of paths) {
   for (const other of ['server', 'worker', 'maintenance']) {
     if (other !== program) assert.doesNotMatch(path, new RegExp(`(^|/)bin/${other}$`), `unrelated ${other} payload leaked`);
   }
+  if (name !== 'api') assert.doesNotMatch(path, /(^|\/)bin\/metrics-proxy$/, 'metrics-proxy payload leaked');
 }
 console.log(`${name}: archive contract passed`);
 NODE
@@ -140,6 +142,36 @@ for name in api worker maintenance web; do
 	phase="docker image load: $name"
 	docker load -i "$archive"
 done
+
+# The second API executable must start without the application or a database.
+# Probe only an unauthenticated denial; no token value is sent to the logger.
+phase='metrics proxy token fixture'
+node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('hex'))" >"$scratch/metrics-token"
+chmod 0444 "$scratch/metrics-token"
+phase='metrics proxy explicit start'
+proxy=$(docker run -d --read-only --tmpfs /tmp:rw,nosuid,nodev --user 65532:65532 \
+	--mount "type=bind,src=$scratch/metrics-token,dst=/run/secrets/metrics-token,readonly" \
+	-e METRICS_SOURCE=api -e METRICS_LISTEN_ADDR=127.0.0.1:9090 \
+	-e METRICS_TOKEN_FILE=/run/secrets/metrics-token \
+	--entrypoint /bin/metrics-proxy jandibat-api:nix)
+containers="$containers $proxy"
+phase='metrics proxy unauthenticated denial'
+diagnostic_container=$proxy
+diagnostic_label='metrics proxy'
+proxy_ready=false
+for attempt in $(seq 1 30); do
+	if docker exec "$proxy" /busybox wget -T 5 -S -O /dev/null http://127.0.0.1:9090/metrics 2>"$scratch/proxy-headers"; then
+		echo 'metrics proxy accepted unauthenticated scrape' >&2
+		exit 1
+	fi
+	if grep -q '403 Forbidden' "$scratch/proxy-headers"; then
+		proxy_ready=true
+		break
+	fi
+	sleep 1
+done
+test "$proxy_ready" = true
+diagnostic_container=
 
 wait_http() {
 	container=$1 port=$2 route=$3

@@ -6,11 +6,11 @@
   yarnDeps,
 }:
 let
-  mkGoPayload = name: command: buildGoModule {
+  mkGoPayload = name: commands: buildGoModule {
     pname = "jandibat-${name}-payload";
     version = "1";
     src = ../apps/api;
-    subPackages = [ "./cmd/${command}" ];
+    subPackages = map (command: "./cmd/${command}") commands;
     vendorHash = "sha256-sjRa+0G+2JM8XVJj4P8khyvUGopIo2xO//tmA+77Z2I=";
     env.CGO_ENABLED = "0";
     ldflags = [ "-buildid=" ];
@@ -35,7 +35,7 @@ let
     "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt"
   ];
 
-  mkGoImage = name: program: port: payload:
+  mkGoImage = name: program: port: payload: extraPrograms:
     pkgs.dockerTools.buildLayeredImage {
       name = "jandibat-${name}";
       tag = "nix";
@@ -43,6 +43,7 @@ let
       contents = pkgs.runCommand "${name}-image-root" { } ''
         mkdir -p "$out/bin" "$out/etc/ssl/certs" "$out/tmp"
         ln -s ${payload}/bin/${program} "$out/bin/${program}"
+        ${pkgs.lib.concatMapStringsSep "\n" (extra: ''ln -s ${payload}/bin/${extra} "$out/bin/${extra}"'') extraPrograms}
         ln -s ${pkgs.busybox}/bin/busybox "$out/busybox"
         ln -s ${pkgs.cacert}/etc/ssl/certs/ca-certificates.crt "$out/etc/ssl/certs/ca-certificates.crt"
       '';
@@ -56,9 +57,9 @@ let
     };
 in
 rec {
-  api-payload = mkGoPayload "api" "server";
-  worker-payload = mkGoPayload "worker" "worker";
-  maintenance-payload = mkGoPayload "maintenance" "maintenance";
+  api-payload = mkGoPayload "api" [ "server" "metrics-proxy" ];
+  worker-payload = mkGoPayload "worker" [ "worker" ];
+  maintenance-payload = mkGoPayload "maintenance" [ "maintenance" ];
 
   web-payload = pkgs.stdenvNoCC.mkDerivation {
     pname = "jandibat-web-payload";
@@ -90,9 +91,9 @@ rec {
     '';
   };
 
-  api-image = mkGoImage "api" "server" 8080 api-payload;
-  worker-image = mkGoImage "worker" "worker" 8081 worker-payload;
-  maintenance-image = mkGoImage "maintenance" "maintenance" 8082 maintenance-payload;
+  api-image = mkGoImage "api" "server" 8080 api-payload [ "metrics-proxy" ];
+  worker-image = mkGoImage "worker" "worker" 8081 worker-payload [ ];
+  maintenance-image = mkGoImage "maintenance" "maintenance" 8082 maintenance-payload [ ];
 
   web-image = pkgs.dockerTools.buildLayeredImage {
     name = "jandibat-web";

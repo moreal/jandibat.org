@@ -1,6 +1,8 @@
 # Immutable image 런타임 계약
 
-이 문서는 homelab 배포 manifest가 따라야 할 process별 경계입니다. 설정 값의 형식과 전체 변수 목록은 [런타임 설정](CONFIGURATION.ko.md), DB 권한은 [Runtime DB 역할](runbooks/DATABASE_ROLES.ko.md)이 기준입니다. 네 배포 image는 서로 다른 Nix output이며 모두 숫자형 non-root 사용자로 시작합니다. 환경별 URL이나 credential은 image에 넣지 않습니다.
+이 문서는 homelab 배포 manifest가 따라야 할 process별 경계입니다. 설정 값의 형식과 전체 변수 목록은 [런타임 설정](CONFIGURATION.ko.md), DB 권한은 [Runtime DB 역할](runbooks/DATABASE_ROLES.ko.md)이 기준입니다. 배포 image는 기존 다섯 개를 유지하고 모두 숫자형 non-root 사용자로 시작합니다. 환경별 URL이나 credential은 image에 넣지 않습니다.
+
+API image는 `/bin/server`를 기본 entrypoint로 유지하며 `/bin/metrics-proxy`도 포함합니다. Sidecar와 Cockroach proxy Pod는 `/bin/metrics-proxy`를 명시적으로 실행합니다. Worker, maintenance, web image에는 proxy 실행 파일이 없습니다.
 
 | Workload / 실행 파일 | Listen 및 probe | 주입할 DB 설정 | 주입할 secret 범위 |
 | --- | --- | --- | --- |

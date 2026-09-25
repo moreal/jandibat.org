@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,13 +14,14 @@ const programs = { api: 'server', worker: 'worker', maintenance: 'maintenance', 
 function inspectFixture(name, extraPath, certificatePaths = [
   'etc/ssl/certs/ca-certificates.crt',
   'nix/store/fixture-ca/etc/ssl/certs/ca-certificates.crt',
-]) {
+], includeProxy = name === 'api') {
   const scratch = mkdtempSync(join(tmpdir(), 'jandibat-image-contract-'));
   try {
     const root = join(scratch, 'root');
     for (const path of [
       'busybox', `bin/${programs[name]}`,
       `nix/store/fixture-payload/bin/${programs[name]}`,
+      ...(includeProxy ? ['bin/metrics-proxy', 'nix/store/fixture-payload/bin/metrics-proxy'] : []),
       ...certificatePaths,
       ...(extraPath ? [extraPath] : []),
     ]) {
@@ -57,6 +58,22 @@ test('rejects a Nix-store certificate without the root archive member', () => {
   assert.match(result.stderr, /AssertionError/);
 });
 
+test('API rejects an archive without its root metrics-proxy executable', () => {
+  const result = inspectFixture('api', undefined, undefined, false);
+  assert.equal(result.status, 1, `accepted API archive without proxy: ${result.stdout}`);
+  assert.match(result.stderr, /metrics proxy executable/);
+});
+
+for (const name of ['worker', 'maintenance', 'web']) {
+  for (const prefix of ['', 'nix/store/fixture-unwanted/']) {
+    test(`${name} rejects metrics-proxy leakage from ${prefix || 'root'}`, () => {
+      const result = inspectFixture(name, `${prefix}bin/metrics-proxy`);
+      assert.equal(result.status, 1, `accepted proxy in ${name}: ${result.stdout}`);
+      assert.match(result.stderr, /metrics proxy executable|metrics-proxy payload leaked/);
+    });
+  }
+}
+
 for (const name of Object.keys(programs)) {
   test(`${name} accepts its own root and Nix-store executable`, () => {
     const result = inspectFixture(name);
@@ -92,7 +109,9 @@ function runtimeFailure(mode) {
   try {
     for (const name of Object.keys(programs)) {
       const root = join(scratch, name);
-      for (const path of ['busybox', `bin/${programs[name]}`, 'etc/ssl/certs/ca-certificates.crt']) {
+      for (const path of ['busybox', `bin/${programs[name]}`,
+        ...(name === 'api' ? ['bin/metrics-proxy'] : []),
+        'etc/ssl/certs/ca-certificates.crt']) {
         const target = join(root, path);
         mkdirSync(dirname(target), { recursive: true });
         writeFileSync(target, 'fixture\n');
@@ -123,13 +142,15 @@ esac
 case "$1" in
   load) echo 'Loaded image: fixture';;
   run)
+    printf '%s\n' "$*" >>"$FIXTURES/docker-runs"
     count=0
     [ ! -f "$FIXTURES/run-count" ] || count=$(cat "$FIXTURES/run-count")
     count=$((count + 1))
     echo "$count" >"$FIXTURES/run-count"
-    case "$count" in 1) echo web-fixture-id;; 2) echo readonly-fixture-id;; 3) echo db-fixture-id;; 4) echo api-fixture-id;; 5) echo worker-fixture-id;; 6) echo maintenance-fixture-id;; esac;;
+    case "$count" in 1) echo proxy-fixture-id;; 2) echo web-fixture-id;; 3) echo readonly-fixture-id;; 4) echo db-fixture-id;; 5) echo api-fixture-id;; 6) echo worker-fixture-id;; 7) echo maintenance-fixture-id;; esac;;
   exec)
     case "$*" in
+      *'proxy-fixture-id'*'/metrics'*) echo 'HTTP/1.1 403 Forbidden' >&2; exit 1;;
       *'CREATE DATABASE image_smoke'*) if [ "$FAIL_MODE" = db-create ]; then exit 1; fi;;
       *'/healthz'*) case "$FAIL_MODE" in health*) exit 1;; esac; echo ok;;
       *'/config.json'*)
@@ -163,14 +184,27 @@ esac
       writeFileSync(path, contents);
       chmodSync(path, 0o755);
     }
-    return spawnSync('sh', [validator], {
+    const result = spawnSync('sh', [validator], {
       cwd: scratch, encoding: 'utf8',
       env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, FIXTURES: scratch, FAIL_MODE: mode },
     });
+    return { ...result, dockerRuns: readFileSync(join(scratch, 'docker-runs'), 'utf8') };
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
 }
+
+test('API proxy launches explicitly with only metrics configuration before the DB fixture starts', () => {
+  const result = runtimeFailure('db-create');
+  const lines = result.dockerRuns.trim().split('\n');
+  const proxy = lines.find(line => line.includes('--entrypoint /bin/metrics-proxy'));
+  assert.ok(proxy, 'API image was never run as /bin/metrics-proxy');
+  assert.match(proxy, /-e METRICS_SOURCE=api/);
+  assert.match(proxy, /-e METRICS_LISTEN_ADDR=127\.0\.0\.1:9090/);
+  assert.match(proxy, /-e METRICS_TOKEN_FILE=\/run\/secrets\/metrics-token/);
+  assert.doesNotMatch(proxy, /DATABASE_URL|COCKROACH_METRICS_|APP_ENV/);
+  assert.ok(lines.indexOf(proxy) < lines.findIndex(line => line.includes('cockroach-fixture')));
+});
 
 test('failed web health probe reports its phase and safe container context', () => {
   const result = runtimeFailure('health');

@@ -164,14 +164,21 @@ case "$1" in
     esac ;;
   inspect)
     case "$*" in
-      *State.Status*State.ExitCode*) if [ "$FAIL_MODE" = health127 ]; then echo 'exited 127'; else echo 'exited 1'; fi;;
+      *State.Status*State.ExitCode*)
+        if [ "$FAIL_MODE" = readonly-marker ]; then
+          case "$*" in *readonly-fixture-id*) echo 'exited 1';; *web-fixture-id*) echo 'running 0';; esac
+        elif [ "$FAIL_MODE" = health127 ]; then echo 'exited 127'
+        else echo 'exited 1'; fi;;
       *State.Running*) echo false;;
       *State.ExitCode*) echo 1;;
     esac;;
   logs)
     case "$*" in
       *api-fixture-id*) echo 'api: connection failed token=SUPER_SECRET_VALUE' >&2;;
-      *readonly-fixture-id*) echo 'runtime output directory must exist and be writable' >&2;;
+      *readonly-fixture-id*)
+        if [ "$FAIL_MODE" = readonly-marker ]; then
+          echo "sh: can't create /tmp/runtime-config.json: Read-only file system token=SUPER_SECRET_VALUE" >&2
+        else echo 'runtime output directory must exist and be writable' >&2; fi;;
       *) echo 'nginx: permission denied token=SUPER_SECRET_VALUE' >&2;;
     esac;;
   compose) echo '{"services":{"cockroach":{"image":"cockroach-fixture"}}}';;
@@ -222,6 +229,16 @@ test('failed CSP assertion reports the phase and bounded header context', () => 
   assert.match(result.stderr, /web headers:.*Content-Security-Policy/);
   assert.match(result.stderr, /web CSP: connect-src mismatch/);
   assert.doesNotMatch(result.stderr, /SUPER_SECRET_VALUE/);
+});
+
+test('missing no-tmpfs marker reports the stopped negative web container only', () => {
+  const result = runtimeFailure('readonly-marker');
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /image smoke failed: web read-only without tmpfs required marker/);
+  assert.match(result.stderr, /web read-only without tmpfs container: status=exited exit=1/);
+  assert.match(result.stderr, /web read-only without tmpfs logs:.*read-only file system.*can't create/);
+  assert.doesNotMatch(result.stderr, /^web (?:container|logs|headers):/m);
+  assert.doesNotMatch(result.stderr, /SUPER_SECRET_VALUE|runtime-config\.json/);
 });
 
 test('failed web config assertion reports a fixed reason without the response body', () => {

@@ -93,7 +93,9 @@ container_failure_context() {
 let data = "";
 process.stdin.on("data", chunk => { data += chunk.toString().slice(0, Math.max(0, 16384 - data.length)); });
 process.stdin.on("end", () => {
-  const markers = ["permission denied", "runtime output directory must exist and be writable", "address already in use", "no such file", "host not found", "emerg", "failed"];
+  const markers = process.argv[1] === "web read-only without tmpfs"
+    ? ["runtime output directory must exist and be writable", "read-only file system", "can\x27t create"]
+    : ["permission denied", "runtime output directory must exist and be writable", "address already in use", "no such file", "host not found", "emerg", "failed"];
   const found = markers.filter(marker => data.toLowerCase().includes(marker));
   console.error(`${process.argv[1]} logs: ${found.length ? found.join(", ") : "no recognized error markers"}`);
 });' "$label" || :
@@ -227,14 +229,19 @@ phase='web read-only without tmpfs start'
 readonly=$(docker run -d --read-only --user 101:101 \
 	-e JANDIBAT_API_BASE_URL=https://api.example.test jandibat-web:nix)
 containers="$containers $readonly"
-phase='web read-only without tmpfs exit'
+diagnostic_container=$readonly
+diagnostic_label='web read-only without tmpfs'
+phase='web read-only without tmpfs stop'
 for attempt in $(seq 1 15); do
 	[ "$(docker inspect -f '{{.State.Running}}' "$readonly")" = true ] || break
 	sleep 1
 done
 test "$(docker inspect -f '{{.State.Running}}' "$readonly")" = false
+phase='web read-only without tmpfs nonzero exit'
 test "$(docker inspect -f '{{.State.ExitCode}}' "$readonly")" -ne 0
-docker logs "$readonly" 2>&1 | grep -q 'runtime output directory must exist and be writable'
+phase='web read-only without tmpfs required marker'
+docker logs "$readonly" 2>&1 | grep -Fq 'runtime output directory must exist and be writable'
+diagnostic_container=
 
 # Use only an isolated, disposable in-memory DB: no existing service or volume.
 # Read the already pinned fixture image rather than introduce a version authority.

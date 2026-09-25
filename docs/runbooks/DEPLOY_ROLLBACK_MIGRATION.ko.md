@@ -53,7 +53,7 @@ CI에서 다음이 모두 green이어야 합니다.
 nix develop .#images --command sh scripts/build-release-images.sh /tmp/jandibat-image-evidence
 ```
 
-`api-image`, `worker-image`, `maintenance-image`, `web-image`는 각각 `/bin/server`, `/bin/worker`, `/bin/maintenance`, `/bin/web-start`를 entrypoint로 갖는 별도 Nix archive입니다. 실제 import한 config hash(image ID)를 inspect하고 바로 그 ID로 SPDX SBOM과 high/critical Grype 검사를 수행합니다. restore-tools Dockerfile은 digest 고정 Cockroach base에 API/maintenance archive의 완성된 바이너리와 Nix runtime closure를 복사만 하며 production code를 컴파일하지 않습니다. restore-tools도 동일한 scan gate를 통과해야 합니다.
+`api-image`, `worker-image`, `maintenance-image`, `web-image`는 각각 `/bin/server`, `/bin/worker`, `/bin/maintenance`, `/bin/web-start`를 entrypoint로 갖는 별도 Nix archive입니다. 실제 import한 config hash(image ID)를 inspect하고 바로 그 ID로 SPDX SBOM과 high/critical Grype 검사를 수행합니다. restore-tools 빌드는 정확히 import·스캔한 API/maintenance image ID에서 `/bin/server`·`/bin/maintenance`를 symlink 해제해 추출하고 별도 Nix 정적 BusyBox와 함께 digest 고정 Cockroach base에 복사하며, `/nix/store` closure를 포함하거나 production code를 컴파일하지 않습니다. restore-tools도 동일한 scan gate를 통과해야 합니다.
 
 각 runtime container에는 자기 DSN만 주입하고 numeric non-root user, read-only root filesystem, capability drop, `no-new-privileges`를 적용합니다. web의 runtime 출력과 Nginx 임시 파일은 writable `/tmp`에 둡니다. `/livez`는 DB와 독립적인 liveness, `/readyz`와 API `/healthz`는 dependency readiness입니다. API `/metrics`는 loopback 수집이 필요합니다.
 

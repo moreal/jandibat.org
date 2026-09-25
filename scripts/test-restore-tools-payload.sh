@@ -11,6 +11,15 @@ case "$image_id" in
 	*) echo 'expected an imported sha256 image ID' >&2; exit 2 ;;
 esac
 
+# The fifth image must not inherit the API store closure (and its proxy).
+docker run --rm --entrypoint /busybox "$image_id" test ! -e /nix/store
+docker run --rm --entrypoint /busybox "$image_id" test ! -e /bin/metrics-proxy
+for binary in /jandibat-api /jandibat-maintenance /busybox; do
+	docker run --rm --entrypoint /busybox "$image_id" test -f "$binary"
+	docker run --rm --entrypoint /busybox "$image_id" test ! -L "$binary"
+	docker run --rm --entrypoint /busybox "$image_id" test -x "$binary"
+done
+
 # Match the complete image inventory so a missing or extra file cannot hide
 # behind a successful digest check of the files that happen to be present.
 expected=''

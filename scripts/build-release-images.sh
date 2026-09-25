@@ -29,15 +29,18 @@ for name in api worker maintenance web; do
 	node scripts/image-release.mjs import "$name" "$archive" "$evidence"
 done
 
-# Packaging only: Nix-built API/maintenance and their runtime closure are copied
-# into the pinned Cockroach tool image. No application source is in this context.
-# BuildKit named contexts bind FROM to exact local archive contents, not tags.
-api_archive=$(nix build --no-link --print-out-paths .#api-image)
-maintenance_archive=$(nix build --no-link --print-out-paths .#maintenance-image)
+# Packaging only: extract static executables from exact imported Nix image IDs.
+# The pinned Cockroach tool image must not inherit either Nix store closure.
+api_image_id=$(node -e 'process.stdout.write(require(process.argv[1]).imageId)' "$evidence/api.json")
+maintenance_image_id=$(node -e 'process.stdout.write(require(process.argv[1]).imageId)' "$evidence/maintenance.json")
 restore_context=$(mktemp -d)
 restore_builder="jandibat-restore-$(basename "$restore_context")"
 builder_created=false
+api_extract_container=
+maintenance_extract_container=
 cleanup() {
+	if [ -n "$api_extract_container" ]; then docker rm -f "$api_extract_container" >/dev/null || :; fi
+	if [ -n "$maintenance_extract_container" ]; then docker rm -f "$maintenance_extract_container" >/dev/null || :; fi
 	if [ "$builder_created" = true ]; then
 		docker buildx rm "$restore_builder" >/dev/null || :
 	fi
@@ -79,8 +82,15 @@ else
 fi
 docker buildx inspect "$restore_builder" --bootstrap --format '{{.Driver}}' >"$evidence/buildx-driver.txt"
 test "$(cat "$evidence/buildx-driver.txt")" = docker-container
-skopeo copy "docker-archive:$api_archive" "oci:$restore_context/api:release"
-skopeo copy "docker-archive:$maintenance_archive" "oci:$restore_context/maintenance:release"
+api_extract_container=$(docker create --entrypoint /busybox "$api_image_id")
+maintenance_extract_container=$(docker create --entrypoint /busybox "$maintenance_image_id")
+docker cp -L "$api_extract_container:/bin/server" "$restore_context/jandibat-api"
+docker cp -L "$maintenance_extract_container:/bin/maintenance" "$restore_context/jandibat-maintenance"
+docker cp -L "$api_extract_container:/busybox" "$restore_context/busybox"
+for binary in jandibat-api jandibat-maintenance busybox; do
+	test -s "$restore_context/$binary" && test -f "$restore_context/$binary" && test ! -L "$restore_context/$binary"
+	chmod 0555 "$restore_context/$binary"
+done
 mkdir -p "$restore_context/db/migrations" "$restore_context/scripts"
 cp db/migrations/*.sql "$restore_context/db/migrations/"
 chmod 444 "$restore_context"/db/migrations/*.sql
@@ -91,8 +101,6 @@ done
 chmod 555 "$restore_context/db/migrations" "$restore_context/scripts"
 docker buildx build --file deploy/restore-tools.Dockerfile --platform linux/amd64 \
 	--builder "$restore_builder" \
-	--build-context "api=oci-layout://$restore_context/api:release" \
-	--build-context "maintenance=oci-layout://$restore_context/maintenance:release" \
 	--build-arg SOURCE_DATE_EPOCH=1 --provenance=false \
 	--output "type=docker,dest=$restore_context/restore-tools.tar,rewrite-timestamp=true" \
 	"$restore_context"

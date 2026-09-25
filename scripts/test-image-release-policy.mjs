@@ -213,6 +213,7 @@ test('restore payload validation rejects an archive missing the baseline migrati
   const dir = fixture(t);
   executable(dir, 'docker', `
 const args = process.argv.slice(2);
+if (args.includes('test')) process.exit(0);
 if (args.includes('find')) { console.log('/workspace/db/migrations/0002_ingest_reservation_token.sql'); process.exit(0); }
 process.exit(2);
 `);
@@ -228,6 +229,39 @@ test('restore payload validation rejects a non-hex image ID before Docker', t =>
   assert.equal(result.status, 2);
   assert.match(result.stderr, /expected an imported sha256 image ID/);
 });
+
+for (const mode of ['store', 'symlink']) {
+  test(`restore payload validation rejects ${mode === 'store' ? 'a copied Nix store' : 'a linked API executable'}`, t => {
+    const dir = fixture(t);
+    executable(dir, 'docker', `
+const fs = require('node:fs');
+const { createHash } = require('node:crypto');
+const a = process.argv.slice(2);
+if (a.includes('find')) {
+  for (const f of fs.readdirSync('db/migrations').filter(f => f.endsWith('.sql')))
+    console.log('/workspace/db/migrations/' + f);
+  for (const f of ['db-migrate-url.sh','db-configure-runtime-roles.sh','db-verify-runtime-roles.sh','db-bootstrap-roles.sh'])
+    console.log('/workspace/scripts/' + f);
+  process.exit(0);
+}
+if (a.includes('sha256sum')) {
+  const imagePath = a.at(-1);
+  console.log(createHash('sha256').update(fs.readFileSync(imagePath.replace(/^\\/workspace\\//, ''))).digest('hex') + '  ' + imagePath);
+  process.exit(0);
+}
+if (a.includes('test')) {
+  const expression = a.slice(a.indexOf('test') + 1).join(' ');
+  if (process.env.LEAK_MODE === 'store' && expression === '! -e /nix/store') process.exit(1);
+  if (process.env.LEAK_MODE === 'symlink' && expression === '! -L /jandibat-api') process.exit(1);
+}
+process.exit(0);
+`);
+    const result = invoke('test-restore-tools-payload.sh', {
+      PATH: `${join(dir, 'bin')}:${process.env.PATH}`, LEAK_MODE: mode,
+    }, ['sha256:' + 'b'.repeat(64)]);
+    assert.equal(result.status, 1, `accepted restore-tools ${mode}: ${result.stdout}`);
+  });
+}
 
 test('CI exercises runtime secrets and worker OAuth after isolated test database migrations and grants', () => {
   const steps = yaml(join(root, '.github/workflows/ci.yml')).jobs.migrations.steps;
@@ -603,7 +637,7 @@ test(`release packaging ${uncertainOwnership ? 'preserves uncertain builder afte
   executable(dir, 'make', '');
   // Image import/scan has its own real-program fixture; this shell fixture
   // isolates builder lifecycle from Nix build, image import and payload checks.
-  executable(dir, 'node', '');
+  executable(dir, 'node', `if (process.argv[2] === '-e') process.stdout.write('sha256:' + 'a'.repeat(64));`);
   executable(dir, 'sh', `
 const {spawnSync} = require('node:child_process');
 const args = process.argv.slice(2);
@@ -615,6 +649,12 @@ process.exit(result.status ?? 1);
   executable(dir, 'docker', `
 const fs = require('node:fs'); const a = process.argv.slice(2);
 fs.appendFileSync(process.env.TRACE, JSON.stringify(a)+'\\n');
+if (a[0] === 'create') { console.log('extract-' + (fs.existsSync(process.env.TRACE + '.extract') ? 'maintenance' : 'api')); fs.writeFileSync(process.env.TRACE + '.extract', 'created'); process.exit(0); }
+if (a[0] === 'cp') {
+ if (a[1] !== '-L' || !/^extract-(api|maintenance):\\/(bin\\/(server|maintenance)|busybox)$/.test(a[2])) process.exit(17);
+ fs.writeFileSync(a.at(-1), 'static fixture executable'); fs.chmodSync(a.at(-1), 0o555); process.exit(0);
+}
+if (a[0] === 'rm') process.exit(0);
 if (a[0] !== 'buildx') process.exit(2);
 if (a[1] === 'version') { console.log('github.com/docker/buildx v0.33.0 fixture'); process.exit(0); }
 if (a[1] === 'create') {
@@ -634,6 +674,11 @@ if (a[1] === 'build') {
  for (const file of scripts) if (!(fs.statSync(context + '/scripts/' + file).mode & 0o111)) process.exit(12);
  for (const file of migrations) if (fs.statSync(context + '/db/migrations/' + file).mode & 0o222) process.exit(13);
  for (const path of ['/db/migrations','/scripts']) if (fs.statSync(context + path).mode & 0o222) process.exit(14);
+ for (const binary of ['jandibat-api', 'jandibat-maintenance', 'busybox']) {
+   const path = context + '/' + binary;
+   if (!fs.existsSync(path) || !fs.statSync(path).isFile() || fs.lstatSync(path).isSymbolicLink()) process.exit(15);
+ }
+ if (fs.existsSync(context + '/nix/store')) process.exit(16);
  if (process.env.FAILURE === 'build') process.exit(9);
  process.exit(0);
 }

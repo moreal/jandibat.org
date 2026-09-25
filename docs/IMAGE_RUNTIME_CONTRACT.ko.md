@@ -4,6 +4,8 @@
 
 API image는 `/bin/server`를 기본 entrypoint로 유지하며 `/bin/metrics-proxy`도 포함합니다. Sidecar와 Cockroach proxy Pod는 `/bin/metrics-proxy`를 명시적으로 실행합니다. Worker, maintenance, web image에는 proxy 실행 파일이 없습니다.
 
+다섯 번째 restore-tools image는 스캔·영수증이 확인된 API/maintenance image ID에서 `/bin/server`, `/bin/maintenance`, `/busybox`의 symlink를 실제 실행 파일로 풀어 복사합니다. 최종 image에는 API Nix store closure나 `/bin/metrics-proxy`를 복사하지 않습니다. 릴리스 검사는 이 세 실행 파일이 일반 파일이고 `/nix/store`가 없는지 확인합니다.
+
 | Workload / 실행 파일 | Listen 및 probe | 주입할 DB 설정 | 주입할 secret 범위 |
 | --- | --- | --- | --- |
 | API `/bin/server` | `API_ADDR=:8080`; `GET /livez` liveness, `GET /readyz` readiness | `DATABASE_URL`의 username `jandibat_api` | `SESSION_SIGNING_KEY`, credential RSA public map과 active ID, identity HMAC active ID와 key map, GitHub/GitLab/Codeberg OAuth client ID와 secret. Private/legacy credential key 및 SMTP secret 금지 |

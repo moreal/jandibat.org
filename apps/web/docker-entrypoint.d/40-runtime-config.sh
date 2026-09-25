@@ -60,7 +60,9 @@ fi
 # policy is relaxed independently in the future.
 escaped_api_base_url=$(printf '%s' "$api_base_url" | sed 's/\\/\\\\/g; s/"/\\"/g')
 umask 022
-printf '{"apiBaseUrl":"%s"}\n' "$escaped_api_base_url" > "$runtime_dir/config.json"
+if ! { printf '{"apiBaseUrl":"%s"}\n' "$escaped_api_base_url" > "$runtime_dir/config.json"; } 2>/dev/null; then
+  fail "runtime output directory must exist and be writable"
+fi
 
 csp_connect_sources="'self'"
 csp_img_sources="'self' data:"
@@ -68,6 +70,10 @@ if [ -n "$api_origin" ]; then
   csp_connect_sources="'self' $api_origin"
   csp_img_sources="'self' data: $api_origin"
 fi
-printf '%s\n' \
-  "add_header Content-Security-Policy \"default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; img-src $csp_img_sources; font-src 'self'; connect-src $csp_connect_sources; manifest-src 'self'; worker-src 'self'; upgrade-insecure-requests\" always;" \
-  > "$runtime_dir/security-headers.conf"
+if ! {
+  printf '%s\n' \
+    "add_header Content-Security-Policy \"default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; img-src $csp_img_sources; font-src 'self'; connect-src $csp_connect_sources; manifest-src 'self'; worker-src 'self'; upgrade-insecure-requests\" always;" \
+    > "$runtime_dir/security-headers.conf"
+} 2>/dev/null; then
+  fail "runtime output directory must exist and be writable"
+fi

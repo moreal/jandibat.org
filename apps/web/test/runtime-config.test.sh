@@ -53,6 +53,33 @@ if grep -F 'X-Injected' "$encoded_dir/security-headers.conf" >/dev/null; then
 fi
 grep -F "img-src 'self' data: https://api.example.test;" "$encoded_dir/security-headers.conf" >/dev/null
 
+# A writable parent does not guarantee either output can actually be written.
+blocked_config_dir="$test_dir/blocked-config"
+mkdir "$blocked_config_dir" "$blocked_config_dir/config.json"
+if [ ! -w "$blocked_config_dir" ]; then
+  fail "blocked-config fixture parent is not writable"
+fi
+if JANDIBAT_API_BASE_URL='https://secret.example.test/private' sh "$entrypoint" "$blocked_config_dir" >"$test_dir/blocked-config.log" 2>&1; then
+  fail "a blocked config.json write was accepted"
+fi
+grep -F 'runtime output directory must exist and be writable' "$test_dir/blocked-config.log" >/dev/null || fail "blocked config.json write missed the fixed error"
+if grep -F 'secret.example.test' "$test_dir/blocked-config.log" >/dev/null; then
+  fail "blocked config.json write leaked the URL"
+fi
+
+blocked_headers_dir="$test_dir/blocked-headers"
+mkdir "$blocked_headers_dir" "$blocked_headers_dir/security-headers.conf"
+if [ ! -w "$blocked_headers_dir" ]; then
+  fail "blocked-headers fixture parent is not writable"
+fi
+if JANDIBAT_API_BASE_URL='https://secret.example.test/private' sh "$entrypoint" "$blocked_headers_dir" >"$test_dir/blocked-headers.log" 2>&1; then
+  fail "a blocked security-headers.conf write was accepted"
+fi
+grep -F 'runtime output directory must exist and be writable' "$test_dir/blocked-headers.log" >/dev/null || fail "blocked security-headers.conf write missed the fixed error"
+if grep -F 'secret.example.test' "$test_dir/blocked-headers.log" >/dev/null; then
+  fail "blocked security-headers.conf write leaked the URL"
+fi
+
 newline_attack='https://api.example.test
 add_header X-Injected yes;'
 if JANDIBAT_API_BASE_URL="$newline_attack" sh "$entrypoint" "$test_dir" >/dev/null 2>&1; then

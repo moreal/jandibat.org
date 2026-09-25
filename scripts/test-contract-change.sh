@@ -54,25 +54,56 @@ require_section_terms() {
   shift
   if ! section "$heading" >"$scratch/section"; then
     echo "missing operational interface section: $heading" >&2
-    exit 1
+    return 1
   fi
   for term do
     if ! grep -Fq -- "$term" "$scratch/section"; then
       echo "operational interface $heading lacks: $term" >&2
-      exit 1
+      return 1
     fi
   done
 }
 
-require_section_terms '## 2026-09-25 — 내부 metrics-only scrape 계약' \
-  'METRICS_SOURCE' 'METRICS_LISTEN_ADDR' 'METRICS_TOKEN_FILE' \
-  'COCKROACH_METRICS_HOST' 'COCKROACH_METRICS_CA_FILE' \
-  'COCKROACH_METRICS_SERVER_NAME' 'GET /metrics' 'Bearer' \
-  '403' '404' '405' '502' 'OpenAPI' 'GraphQL'
-require_section_terms '## 2026-09-25 — 백업 검증 기록·보존 계획 운영 계약' \
-  'collectionId' 'linkedScheduleIds' 'chainId' 'checkedAt' \
-  'verifiedRecoveryAt' 'outcome' 'catalogDigest' 'objectKey' \
-  'versionId' 'coverage' 'expiresAt' 'approvalHash' \
-  '403' '404' '405' '200' 'OpenAPI' 'GraphQL'
+check_operational_sections() {
+  require_section_terms '## 2026-09-25 — 내부 metrics-only scrape 계약' \
+    'METRICS_SOURCE' 'METRICS_LISTEN_ADDR' 'METRICS_TOKEN_FILE' \
+    'COCKROACH_METRICS_HOST' 'COCKROACH_METRICS_CA_FILE' \
+    'COCKROACH_METRICS_SERVER_NAME' 'GET /metrics' 'Bearer' \
+    '403' '404' '405' '502' \
+    'GraphQL 필드도 공개 OpenAPI 경로도 아닙니다' || return 1
+  require_section_terms '## 2026-09-25 — 백업 검증 기록·보존 계획 운영 계약' \
+    'collectionId' 'linkedScheduleIds' 'chainId' 'checkedAt' \
+    'verifiedRecoveryAt' 'outcome' 'catalogDigest' 'objectKey' \
+    'versionId' 'coverage' 'expiresAt' 'approvalHash' \
+    '403' '404' '405' '200' \
+    'GraphQL 도메인 필드나 공개 OpenAPI HTTP edge endpoint가 아닙니다'
+}
+
+check_operational_sections
+
+original_log=$interface_log
+sed 's/GraphQL 필드도 공개 OpenAPI 경로도 아닙니다/GraphQL 필드이며 공개 OpenAPI 경로입니다/' \
+  "$original_log" >"$scratch/public-proxy.md"
+if cmp -s "$original_log" "$scratch/public-proxy.md"; then
+  echo 'metrics-only public-contract mutation did not apply' >&2
+  exit 1
+fi
+interface_log="$scratch/public-proxy.md"
+if check_operational_sections >"$scratch/public-proxy.log" 2>&1; then
+  echo 'public metrics-only OpenAPI/GraphQL contract was accepted' >&2
+  exit 1
+fi
+
+sed 's/GraphQL 도메인 필드나 공개 OpenAPI HTTP edge endpoint가 아닙니다/GraphQL 도메인 필드이며 공개 OpenAPI HTTP edge endpoint입니다/' \
+  "$original_log" >"$scratch/public-backup.md"
+if cmp -s "$original_log" "$scratch/public-backup.md"; then
+  echo 'backup public-contract mutation did not apply' >&2
+  exit 1
+fi
+interface_log="$scratch/public-backup.md"
+if check_operational_sections >"$scratch/public-backup.log" 2>&1; then
+  echo 'public backup OpenAPI/GraphQL contract was accepted' >&2
+  exit 1
+fi
 
 echo 'GraphQL and OpenAPI contract changes require their change log and generated artifacts'

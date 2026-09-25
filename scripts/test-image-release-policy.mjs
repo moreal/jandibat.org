@@ -71,6 +71,38 @@ test('workflows build Nix archives and gate release on local and registry eviden
   }
 });
 
+test('payload reproducibility rebuild keeps sandboxing and compares store paths with substituters available', t => {
+  const dir = fixture(t);
+  const trace = join(dir, 'nix-trace');
+  const makeTrace = join(dir, 'make-trace');
+  executable(dir, 'nix', `
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+if (args[0] === 'eval') { console.log('x86_64-linux'); process.exit(0); }
+if (args[0] !== 'build') process.exit(2);
+fs.appendFileSync(process.env.NIX_TRACE, JSON.stringify(args) + '\\n');
+const name = args.at(-1).slice(2, -'-payload'.length);
+console.log('/nix/store/' + name + (process.env.DIVERGE === name && args.includes('--rebuild') ? '-different' : ''));
+`);
+  executable(dir, 'make', `require('node:fs').writeFileSync(process.env.MAKE_TRACE, 'images-smoke'); process.exit(23);`);
+  const env = { PATH: `${join(dir, 'bin')}:${process.env.PATH}`, NIX_TRACE: trace, MAKE_TRACE: makeTrace };
+  const result = invoke('build-release-images.sh', env, [join(dir, 'matching')]);
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(readFileSync(makeTrace, 'utf8'), 'images-smoke');
+  const builds = readFileSync(trace, 'utf8').trim().split('\n').map(JSON.parse);
+  for (const [index, name] of ['api', 'worker', 'maintenance', 'web'].entries()) {
+    assert.deepEqual(builds[index * 2], ['build', '--no-link', '--print-out-paths', `.#${name}-payload`]);
+    assert.deepEqual(builds[index * 2 + 1], ['build', '--rebuild', '--option', 'sandbox', 'true', '--no-link', '--print-out-paths', `.#${name}-payload`]);
+  }
+  assert.equal(builds.length, 8);
+  assert.equal(readFileSync(join(dir, 'matching', 'payload-rebuilds.txt'), 'utf8'),
+    ['api', 'worker', 'maintenance', 'web'].map(name => `${name} /nix/store/${name} /nix/store/${name}\n`).join(''));
+
+  const mismatched = invoke('build-release-images.sh', { ...env, DIVERGE: 'api' }, [join(dir, 'mismatched')]);
+  assert.equal(mismatched.status, 1, mismatched.stderr);
+  assert.equal(existsSync(join(dir, 'mismatched', 'payload-rebuilds.txt')), false);
+});
+
 test('publish workflow requires human review and cannot deploy', () => {
   const workflow = yaml(join(root, '.github/workflows/publish-images.yml'));
   const events = workflow.true; // Ruby YAML parses unquoted `on` as boolean true.

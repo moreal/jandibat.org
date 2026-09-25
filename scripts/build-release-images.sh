@@ -9,11 +9,11 @@ test "$(nix eval --impure --raw --expr builtins.currentSystem)" = x86_64-linux |
 mkdir -p "$evidence"
 evidence=$(CDPATH='' cd "$evidence" && pwd)
 
-# Rebuild payload derivations (not cache lookups) with sandbox networking denied.
-# --offline also forbids fetching a dependency omitted from the first closure.
+# Rebuild payload derivations (not cache lookups) in the sandbox.
+# Keep substituters available to realize build inputs missing from the first closure.
 for name in api worker maintenance web; do
 	first=$(nix build --no-link --print-out-paths ".#${name}-payload")
-	second=$(nix build --offline --rebuild --option sandbox true --no-link --print-out-paths ".#${name}-payload")
+	second=$(nix build --rebuild --option sandbox true --no-link --print-out-paths ".#${name}-payload")
 	test "$first" = "$second"
 	printf '%s %s %s\n' "$name" "$first" "$second" >>"$evidence/payload-rebuilds.txt"
 done

@@ -42,7 +42,7 @@ CI에서 다음이 모두 green이어야 합니다.
 - frontend typecheck/build/test.
 - 실제 CockroachDB v26.2에서 migration apply/verify/reapply.
 - dependency, code, secret, container scan에서 신규 high/critical 0건.
-- 네 Nix payload의 offline 재빌드/store path 일치, archive 재빌드/hash 일치와 non-root/read-only runtime 검증.
+- 네 Nix payload의 sandbox 재빌드(고정 의존성은 substituter에서 가져올 수 있음)와 store path 일치, archive 재빌드/hash 일치와 non-root/read-only runtime 검증.
 - workload 네 개와 restore-tools의 exact image ID 및 registry digest에 대한 SPDX SBOM/high·critical scan 생성과 identity 일치.
 
 ## 3. Immutable image build

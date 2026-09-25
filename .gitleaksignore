@@ -1,0 +1,2 @@
+# Synthetic test fixture introduced in the metrics proxy commit; scope this exception to that exact finding.
+f3d55b04f49ec9d1bfa822fb33dc8a7222732ab6:apps/api/internal/metricsproxy/proxy_test.go:generic-api-key:23

@@ -46,7 +46,7 @@ function auth(userID: string): AuthResultDto {
       userId: userID,
       current: true,
       createdAt: "2026-09-24T00:00:00Z",
-      expiresAt: "2026-09-25T00:00:00Z",
+      expiresAt: "2099-09-25T00:00:00Z",
     },
   };
 }

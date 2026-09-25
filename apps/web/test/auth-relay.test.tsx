@@ -55,7 +55,7 @@ it("loads the authenticated account and current-session expiry from Viewer, with
       user: { id: "user-1", primaryEmail: "owner@example.test", status: "active",
         emailVerifiedAt: "2026-09-24T00:00:00Z" },
       currentSession: { __typename: "Session", id: "U2Vzc2lvbjox",
-        createdAt: "2026-09-24T00:00:00Z", expiresAt: "2026-09-25T00:00:00Z",
+        createdAt: "2026-09-24T00:00:00Z", expiresAt: "2099-09-25T00:00:00Z",
         revokedAt: null },
       subjects: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } },
       sessions: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } },
@@ -64,7 +64,7 @@ it("loads the authenticated account and current-session expiry from Viewer, with
 
   const view = mount();
   await waitFor(() => expect(view.getByText("owner@example.test")).toBeTruthy());
-  expect(view.getByText(/2026/)).toBeTruthy();
+  expect(view.getByText(/2099/)).toBeTruthy();
   expect(operations).toContain("AuthViewerQuery");
 });
 

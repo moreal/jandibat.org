@@ -8,7 +8,7 @@ const authResult = {
   },
   session: {
     id: "session-1", userId: "user-1", current: true,
-    createdAt: "2026-09-24T00:00:00Z", expiresAt: "2026-09-25T00:00:00Z",
+    createdAt: "2026-09-24T00:00:00Z", expiresAt: "2099-09-25T00:00:00Z",
     lastSeenAt: null, revokedAt: null, userAgent: null, ipAddress: null,
   },
 };

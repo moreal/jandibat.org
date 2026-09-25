@@ -137,7 +137,7 @@ for name in api worker maintenance web; do
 	phase="archive rebuild: $name"
 	before=$(sha256sum "$archive" | cut -d ' ' -f 1)
 	# --rebuild really reruns the archive derivation instead of reusing its output.
-	nix build --offline --rebuild --option sandbox true --no-link ".#${name}-image"
+	nix build --rebuild --option sandbox true --no-link ".#${name}-image"
 	after=$(sha256sum "$archive" | cut -d ' ' -f 1)
 	test "$before" = "$after"
 	printf '%s %s\n' "$name" "$after"

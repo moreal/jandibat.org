@@ -129,14 +129,38 @@ function runtimeFailure(mode) {
     }
     const bin = join(scratch, 'bin');
     mkdirSync(bin);
+    writeFileSync(join(scratch, 'docker-runs'), '');
+    writeFileSync(join(scratch, 'nix-builds'), '');
     const commands = {
       nix: `#!/bin/sh
 case "$1" in
   eval) case "$*" in *builtins.currentSystem*) echo x86_64-linux;; esac ;;
-  build) for arg do case "$arg" in .#*-image) name=\${arg#.#}; name=\${name%-image}; echo "$FIXTURES/$name.tar";; esac; done ;;
+  build)
+    printf '%s\n' "$*" >>"$FIXTURES/nix-builds"
+    offline=false rebuild=false
+    for arg do
+      case "$arg" in
+        --offline) offline=true;;
+        --rebuild) rebuild=true;;
+        .#*-image) name=\${arg#.#}; name=\${name%-image}; echo "$FIXTURES/$name.tar";;
+      esac
+    done
+    if [ "$FAIL_MODE" = archive-cache-miss ] && [ "$offline" = true ] && [ "$rebuild" = true ]; then
+      echo 'GNU Bash source unavailable without substituters' >&2
+      exit 88
+    fi ;;
 esac
 `,
-      sha256sum: '#!/bin/sh\necho "abc  $1"\n',
+      sha256sum: `#!/bin/sh
+if [ "$FAIL_MODE" = archive-hash-mismatch ]; then
+  count=0
+  [ ! -f "$FIXTURES/hash-count" ] || count=$(cat "$FIXTURES/hash-count")
+  count=$((count + 1))
+  echo "$count" >"$FIXTURES/hash-count"
+  if [ "$count" -eq 2 ]; then echo "def  $1"; exit; fi
+fi
+echo "abc  $1"
+`,
       sleep: '#!/bin/sh\nexit 0\n',
       docker: `#!/bin/sh
 case "$1" in
@@ -151,7 +175,7 @@ case "$1" in
   exec)
     case "$*" in
       *'proxy-fixture-id'*'/metrics'*) echo 'HTTP/1.1 403 Forbidden' >&2; exit 1;;
-      *'CREATE DATABASE image_smoke'*) if [ "$FAIL_MODE" = db-create ]; then exit 1; fi;;
+      *'CREATE DATABASE image_smoke'*) if [ "$FAIL_MODE" = db-create ] || [ "$FAIL_MODE" = archive-cache-miss ]; then exit 1; fi;;
       *'/healthz'*) case "$FAIL_MODE" in health*) exit 1;; esac; echo ok;;
       *'/config.json'*)
         if [ "$FAIL_MODE" = config ]; then echo '{"apiBaseUrl":"https://wrong.example.test"}';
@@ -195,11 +219,34 @@ esac
       cwd: scratch, encoding: 'utf8',
       env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, FIXTURES: scratch, FAIL_MODE: mode },
     });
-    return { ...result, dockerRuns: readFileSync(join(scratch, 'docker-runs'), 'utf8') };
+    return { ...result,
+      dockerRuns: readFileSync(join(scratch, 'docker-runs'), 'utf8'),
+      nixBuilds: readFileSync(join(scratch, 'nix-builds'), 'utf8').trim().split('\n'),
+    };
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
 }
+
+test('archive rebuild can realize a missing input and reaches container smoke', () => {
+  const result = runtimeFailure('archive-cache-miss');
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /image smoke failed: database fixture create schema/);
+  assert.doesNotMatch(result.stderr, /GNU Bash source unavailable/);
+  assert.match(result.dockerRuns, /cockroach-fixture/);
+  for (const [index, name] of Object.keys(programs).entries()) {
+    assert.equal(result.nixBuilds[index * 2], `build --no-link --print-out-paths .#${name}-image`);
+    assert.equal(result.nixBuilds[index * 2 + 1], `build --rebuild --option sandbox true --no-link .#${name}-image`);
+  }
+  assert.equal(result.nixBuilds.length, 8);
+});
+
+test('archive rebuild rejects a changed SHA before Docker load', () => {
+  const result = runtimeFailure('archive-hash-mismatch');
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /image smoke failed: archive rebuild: api/);
+  assert.equal(result.dockerRuns, '');
+});
 
 test('API proxy launches explicitly with only metrics configuration before the DB fixture starts', () => {
   const result = runtimeFailure('db-create');

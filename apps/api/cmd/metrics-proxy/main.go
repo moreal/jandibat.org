@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -14,19 +13,37 @@ import (
 	"time"
 
 	"github.com/moreal/jandibat.org/apps/api/internal/metricsproxy"
+	"github.com/moreal/jandibat.org/apps/api/internal/observability"
+	"go.uber.org/zap"
 )
 
 func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	if err := Run(ctx, os.Getenv, slog.Default()); err != nil {
-		slog.Error("metrics proxy stopped", "error", err)
+	if run() != nil {
 		os.Exit(1)
 	}
 }
 
+func run() (resultErr error) {
+	resource := observability.ResourceFromEnvironment("")
+	logger, syncLogger, err := observability.NewLogger(observability.Config{
+		Service: "metrics-proxy", Resource: resource, Development: resource.Environment != "production",
+	})
+	if err != nil {
+		return errors.New("metrics proxy logger initialization failed")
+	}
+	defer func() { resultErr = errors.Join(resultErr, syncLogger()) }()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return Run(ctx, os.Getenv, logger)
+}
+
 // Run starts only the metrics handler. It does not initialize the API application.
-func Run(ctx context.Context, getenv func(string) string, logger *slog.Logger) error {
+func Run(ctx context.Context, getenv func(string) string, logger *zap.Logger) (resultErr error) {
+	defer func() {
+		if resultErr != nil {
+			observability.Log(logger, "metrics_proxy.process_stopped", observability.SafeError(resultErr))
+		}
+	}()
 	if getenv == nil {
 		return errors.New("missing environment reader")
 	}
@@ -67,11 +84,8 @@ func Run(ctx context.Context, getenv func(string) string, logger *slog.Logger) e
 		return errors.New("metrics proxy listen failed")
 	}
 	defer listener.Close()
-	server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second,
-		WriteTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
-	if logger != nil {
-		logger.Info("metrics proxy listening", "address", address, "source", cfg.Source)
-	}
+	server := newHTTPServer(address, handler, logger)
+	observability.Log(logger, "metrics_proxy.listening", zap.String("address", address), zap.String("source", cfg.Source))
 	serverErrors := make(chan error, 1)
 	go func() { serverErrors <- server.Serve(listener) }()
 	select {
@@ -88,4 +102,10 @@ func Run(ctx context.Context, getenv func(string) string, logger *slog.Logger) e
 		}
 		return nil
 	}
+}
+
+func newHTTPServer(address string, handler http.Handler, logger *zap.Logger) *http.Server {
+	return &http.Server{Addr: address, Handler: handler, ErrorLog: observability.NewHTTPServerErrorLog(logger),
+		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second,
+		WriteTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 }

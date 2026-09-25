@@ -230,6 +230,18 @@ test('restore payload validation rejects a non-hex image ID before Docker', t =>
   assert.match(result.stderr, /expected an imported sha256 image ID/);
 });
 
+test('restore-tools BusyBox derivation enables a static Linux executable', () => {
+  const drv = execFileSync('nix', ['eval', '--raw', '.#packages.x86_64-linux.restore-tools-busybox.drvPath'], {
+    cwd: root, encoding: 'utf8',
+  }).trim();
+  const derivations = JSON.parse(execFileSync('nix', ['derivation', 'show', drv], {
+    cwd: root, encoding: 'utf8',
+  })).derivations;
+  const config = Object.values(derivations)[0].env;
+  assert.match(config.configurePhase, /CONFIG_STATIC y/);
+  assert.match(config.NIX_CFLAGS_LINK, /(?:^|\s)-static(?:\s|$)/);
+});
+
 for (const mode of ['store', 'symlink']) {
   test(`restore payload validation rejects ${mode === 'store' ? 'a copied Nix store' : 'a linked API executable'}`, t => {
     const dir = fixture(t);
@@ -633,7 +645,14 @@ const uncertainOwnership = ['create', 'collision'].includes(failure);
 test(`release packaging ${uncertainOwnership ? 'preserves uncertain builder after' : 'cleans owned builder after'} ${failure === 'none' ? 'success' : failure + ' failure'}`, t => {
   const dir = fixture(t);
   const env = { PATH: `${join(dir, 'bin')}:${process.env.PATH}`, TRACE: join(dir, 'trace'), BUILDER_STATE: join(dir,'builder'), FIXTURE_ARCHIVE: join(dir,'archive.tar'), FAILURE: failure };
-  executable(dir, 'nix', `console.log(process.argv[2] === 'eval' ? 'x86_64-linux' : process.env.FIXTURE_ARCHIVE);`);
+  const staticBusybox = join(dir, 'static-busybox');
+  mkdirSync(join(staticBusybox, 'bin'), { recursive: true });
+  writeFileSync(join(staticBusybox, 'bin/busybox'), 'static fixture executable', { mode: 0o555 });
+  env.STATIC_BUSYBOX = staticBusybox;
+  executable(dir, 'nix', `
+const a = process.argv.slice(2);
+console.log(a[0] === 'eval' ? 'x86_64-linux' : a.includes('.#restore-tools-busybox') ? process.env.STATIC_BUSYBOX : process.env.FIXTURE_ARCHIVE);
+`);
   executable(dir, 'make', '');
   // Image import/scan has its own real-program fixture; this shell fixture
   // isolates builder lifecycle from Nix build, image import and payload checks.
@@ -651,7 +670,7 @@ const fs = require('node:fs'); const a = process.argv.slice(2);
 fs.appendFileSync(process.env.TRACE, JSON.stringify(a)+'\\n');
 if (a[0] === 'create') { console.log('extract-' + (fs.existsSync(process.env.TRACE + '.extract') ? 'maintenance' : 'api')); fs.writeFileSync(process.env.TRACE + '.extract', 'created'); process.exit(0); }
 if (a[0] === 'cp') {
- if (a[1] !== '-L' || !/^extract-(api|maintenance):\\/(bin\\/(server|maintenance)|busybox)$/.test(a[2])) process.exit(17);
+ if (a[1] !== '-L' || !/^extract-(api|maintenance):\\/bin\\/(server|maintenance)$/.test(a[2])) process.exit(17);
  fs.writeFileSync(a.at(-1), 'static fixture executable'); fs.chmodSync(a.at(-1), 0o555); process.exit(0);
 }
 if (a[0] === 'rm') process.exit(0);
@@ -678,6 +697,7 @@ if (a[1] === 'build') {
    const path = context + '/' + binary;
    if (!fs.existsSync(path) || !fs.statSync(path).isFile() || fs.lstatSync(path).isSymbolicLink()) process.exit(15);
  }
+ if (fs.readFileSync(context + '/busybox', 'utf8') !== 'static fixture executable') process.exit(18);
  if (fs.existsSync(context + '/nix/store')) process.exit(16);
  if (process.env.FAILURE === 'build') process.exit(9);
  process.exit(0);

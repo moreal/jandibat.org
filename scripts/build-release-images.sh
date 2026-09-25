@@ -86,7 +86,8 @@ api_extract_container=$(docker create --entrypoint /busybox "$api_image_id")
 maintenance_extract_container=$(docker create --entrypoint /busybox "$maintenance_image_id")
 docker cp -L "$api_extract_container:/bin/server" "$restore_context/jandibat-api"
 docker cp -L "$maintenance_extract_container:/bin/maintenance" "$restore_context/jandibat-maintenance"
-docker cp -L "$api_extract_container:/busybox" "$restore_context/busybox"
+static_busybox=$(nix build --no-link --print-out-paths .#restore-tools-busybox)
+cp "$static_busybox/bin/busybox" "$restore_context/busybox"
 for binary in jandibat-api jandibat-maintenance busybox; do
 	test -s "$restore_context/$binary" && test -f "$restore_context/$binary" && test ! -L "$restore_context/$binary"
 	chmod 0555 "$restore_context/$binary"

@@ -57,6 +57,9 @@ let
     };
 in
 rec {
+  # Copied into restore-tools without a Nix store closure.
+  restore-tools-busybox = pkgs.pkgsStatic.busybox;
+
   api-payload = mkGoPayload "api" [ "server" "metrics-proxy" ];
   worker-payload = mkGoPayload "worker" [ "worker" ];
   maintenance-payload = mkGoPayload "maintenance" [ "maintenance" ];

@@ -1,2 +1,4 @@
 # Synthetic test fixture introduced in the metrics proxy commit; scope this exception to that exact finding.
 f3d55b04f49ec9d1bfa822fb33dc8a7222732ab6:apps/api/internal/metricsproxy/proxy_test.go:generic-api-key:23
+# Synthetic public passkey SessionID test fixture; scope this exception to its introducing commit.
+10c31ba0336664764edaa2871980e4a4184ba47d:apps/api/internal/graphql/auth_passkey_mutations_test.go:generic-api-key:21

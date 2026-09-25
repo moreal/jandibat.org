@@ -238,6 +238,9 @@
             '';
           };
         } // toolchain.pkgs.lib.optionalAttrs toolchain.pkgs.stdenv.hostPlatform.isLinux {
+          backup-fixture = toolchain.pkgs.mkShell {
+            packages = with toolchain.pkgs; [ s3proxy minio-client openssl ];
+          };
           images = toolchain.pkgs.mkShell {
             packages = toolchain.shellPackages ++ (with toolchain.pkgs; [ syft grype skopeo ruby ]);
             shellHook = ''export YARN=yarn'';

@@ -40,4 +40,39 @@ check 'openapi/jandibat.yaml
 apps/web/src/generated/api.ts
 docs/interface-change-log.md' >/dev/null
 
+interface_log="$script_dir/../docs/interface-change-log.md"
+section() {
+  awk -v heading="$1" '
+    $0 == heading { found = 1; next }
+    found && /^## / { exit }
+    found { print }
+    END { if (!found) exit 1 }
+  ' "$interface_log"
+}
+require_section_terms() {
+  heading=$1
+  shift
+  if ! section "$heading" >"$scratch/section"; then
+    echo "missing operational interface section: $heading" >&2
+    exit 1
+  fi
+  for term do
+    if ! grep -Fq -- "$term" "$scratch/section"; then
+      echo "operational interface $heading lacks: $term" >&2
+      exit 1
+    fi
+  done
+}
+
+require_section_terms '## 2026-09-25 — 내부 metrics-only scrape 계약' \
+  'METRICS_SOURCE' 'METRICS_LISTEN_ADDR' 'METRICS_TOKEN_FILE' \
+  'COCKROACH_METRICS_HOST' 'COCKROACH_METRICS_CA_FILE' \
+  'COCKROACH_METRICS_SERVER_NAME' 'GET /metrics' 'Bearer' \
+  '403' '404' '405' '502' 'OpenAPI' 'GraphQL'
+require_section_terms '## 2026-09-25 — 백업 검증 기록·보존 계획 운영 계약' \
+  'collectionId' 'linkedScheduleIds' 'chainId' 'checkedAt' \
+  'verifiedRecoveryAt' 'outcome' 'catalogDigest' 'objectKey' \
+  'versionId' 'coverage' 'expiresAt' 'approvalHash' \
+  '403' '404' '405' '200' 'OpenAPI' 'GraphQL'
+
 echo 'GraphQL and OpenAPI contract changes require their change log and generated artifacts'

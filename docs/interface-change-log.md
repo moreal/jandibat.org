@@ -3,6 +3,63 @@
 API 계약 변경 시 이 파일과 GraphQL SDL(도메인) 또는 `openapi/jandibat.yaml`(HTTP edge)을 같은 변경에 포함합니다.
 각 항목에는 날짜, 호환성, 영향받는 operation/schema, 백엔드·프론트엔드 후속 작업을 기록합니다.
 
+## 2026-09-25 — 내부 metrics-only scrape 계약
+
+호환성: 내부 운영 인터페이스를 추가하는 additive 변경입니다. GraphQL SDL은 도메인 API
+계약으로 유지하고 OpenAPI는 합의된 공개 HTTP edge 경로에 한정합니다. 이 내부
+`GET /metrics` scrape endpoint는 GraphQL 필드도 공개 OpenAPI 경로도 아닙니다.
+
+- 독립 실행 명령은 `METRICS_SOURCE=api|cockroach`, `METRICS_LISTEN_ADDR`,
+  `METRICS_TOKEN_FILE`을 요구합니다. 토큰은 파일에서 읽는 최소 32바이트의 무작위
+  값이며 환경 변수 값이나 명령행 인자로 전달하지 않습니다. `cockroach` 소스에만
+  `COCKROACH_METRICS_HOST`, `COCKROACH_METRICS_CA_FILE`,
+  `COCKROACH_METRICS_SERVER_NAME`을 추가로 요구합니다. HOST는 scheme, path,
+  query, port가 없는 호스트 이름입니다. CA 파일은 읽기 전용 mount입니다.
+- 리스너의 유일한 경로는 정확한 `GET /metrics`입니다. 다른 경로는 `404`, 다른
+  method는 `405`(Allow: GET), 누락·잘못된 `Authorization: Bearer <token>`이나
+  모든 forwarding header가 있는 요청은 `403`이며 upstream에 닿지 않습니다.
+  비교는 constant-time으로 수행합니다. 성공은 `200` Prometheus text payload만
+  반환합니다. upstream 오류·redirect·과대 응답·TLS 검증 실패는 `502`, 5초
+  deadline 초과는 `504`로 응답하고 upstream body를 반환하지 않습니다. 응답은
+  최대 8 MiB이며 caller header를 upstream으로 전달하지 않습니다.
+- `api`는 고정 `http://127.0.0.1:8080/metrics`를 사용합니다. `cockroach`는
+  `https://<COCKROACH_METRICS_HOST>:8080/_status/vars`에만 접속하고 지정 CA와
+  server name으로 TLS를 검증합니다. 리스너는 내부 주소에만 묶으며 공개 Service나
+  Cockroach Console 8080을 scrape 대상으로 노출하지 않습니다. 토큰, URL query,
+  Authorization header, upstream error body는 로그에 남기지 않습니다.
+- Backend는 `apps/api/**`의 handler와 독립 명령 구현을 소유합니다.
+  Coordination은 image, 배포 manifest, Secret mount, NetworkPolicy, CI 배선을
+  소유합니다. Frontend 도메인 계약·생성 타입 변경은 없습니다.
+
+## 2026-09-25 — 백업 검증 기록·보존 계획 운영 계약
+
+호환성: 내부 운영 JSON 계약을 추가하는 additive 변경입니다. 이 검증 기록과 보존
+계획은 GraphQL 도메인 필드나 공개 OpenAPI HTTP edge endpoint가 아닙니다. 검증기
+scrape의 `GET /metrics`도 별도 인증된 내부 경로이며 공개 계약에 게시하지 않습니다.
+
+- 검증기의 유일한 HTTP route는 정확한 `GET /metrics`입니다. 다른 path는 `404`,
+  다른 method는 `405`(Allow: GET), 누락·오류 Bearer token은 `403`으로 검사 전에
+  거부합니다. 정상 scrape는 검사 실패·stale 상태에서도 `200`으로 응답하되 건강
+  metric을 0/unknown으로 표시하고 복구 시각을 전진시키지 않습니다. 전용 token은
+  파일에서 읽으며 오류 응답·로그·metric label에 credential을 싣지 않습니다.
+- 검증기의 안전한 JSON 기록은 `collectionId`(수집 컬렉션 ID),
+  `linkedScheduleIds`(서로 연결된 full·incremental schedule ID 두 개),
+  `chainId`(검증한 체인 ID), `checkedAt`(UTC RFC 3339 파일 검사 시각),
+  `verifiedRecoveryAt`(마지막으로 파일까지 확인된 복구 가능 UTC 시각 또는 null),
+  `outcome`(`pass`·`fail`·`unknown`)을 포함합니다. schedule 완료만으로
+  `verifiedRecoveryAt`을 앞당기지 않습니다. 실패·누락·15분 초과 검사에서도
+  이전 복구 시각은 유지하되 건강 상태는 0/unknown으로 처리합니다. 저장 파일은
+  `/var/run/jandibat-backup/verified.json`이며 새 emptyDir에서는 unknown으로 시작합니다.
+- 승인 전 보존 계획 JSON은 `bucket`, `prefix`, `chainRange`(보존·삭제 경계),
+  `targets` 배열의 각 `objectKey`와 `versionId`(삭제할 정확한 객체 버전) 및
+  `expectedBytes`, `catalogDigest`(계획 시점 목록 digest), `coverage`(삭제 후
+  복구 가능한 35일 이상 범위), `expiresAt`(UTC RFC 3339 계획 만료 시각),
+  `approvalHash`(승인한 정확한 계획의 hash)를 포함합니다. 서명 URL과 credential은
+  기록·계획에 넣지 않습니다. 실행 시 목록 digest, 파일 검사 증거, Object Lock,
+  겹치는 체인과 만료·승인 hash를 다시 검증한 뒤 정확한 key+version만 대상으로 합니다.
+- Backend는 `apps/api/**`의 검증기·보존 계획 및 실행 의미를 소유합니다.
+  Coordination은 image, manifest, 권한 경계와 CI·운영 wiring을 소유합니다.
+
 ## 2026-09-24 — OpenAPI HTTP edge 한정 cutover
 
 호환성: breaking change입니다. REST 도메인 하위 호환성은 제공하지 않습니다.

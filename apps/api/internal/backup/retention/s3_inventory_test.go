@@ -6,8 +6,56 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
+
+func TestS3InventoryRejectsRedirectBeforeSecondRequest(t *testing.T) {
+	for _, status := range []int{http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {
+		for _, destination := range []string{"same host changed key", "http downgrade"} {
+			t.Run(fmt.Sprintf("%d %s", status, destination), func(t *testing.T) {
+				var original, redirected atomic.Int32
+				downgrade := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					redirected.Add(1)
+					w.WriteHeader(http.StatusOK)
+				}))
+				defer downgrade.Close()
+				var source *httptest.Server
+				source = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.URL.Path != "/bucket" || !r.URL.Query().Has("versioning") {
+						redirected.Add(1)
+						w.WriteHeader(http.StatusOK)
+						return
+					}
+					if !strings.Contains(r.Header.Get("Authorization"), "Credential=inventory-access-sentinel/") {
+						t.Error("original inventory request was not signed with the explicit identity")
+					}
+					original.Add(1)
+					location := downgrade.URL + "/bucket/k/secret-key?versioning&token=secret-url"
+					if destination == "same host changed key" {
+						location = source.URL + "/bucket/k/secret-key?versioning&token=secret-url"
+					}
+					w.Header().Set("Location", location)
+					w.WriteHeader(status)
+				}))
+				defer source.Close()
+				client, err := NewS3InventoryClient(S3InventoryConfig{Endpoint: source.URL, Region: "us-east-1", AccessKeyID: "inventory-access-sentinel", SecretAccessKey: "inventory-secret-sentinel", HTTPClient: source.Client()})
+				if err != nil {
+					t.Fatal("could not construct inventory client")
+				}
+				listing, err := client.ListVersions(context.Background(), StorageNamespace{Bucket: "bucket", Prefix: "k/"})
+				if err == nil || len(listing.Versions) != 0 || original.Load() != 1 || redirected.Load() != 0 {
+					t.Fatalf("unsafe redirect handling: error=%t versions=%d original=%d redirected=%d", err != nil, len(listing.Versions), original.Load(), redirected.Load())
+				}
+				for _, secret := range []string{"inventory-access-sentinel", "inventory-secret-sentinel", "secret-key", "secret-url", source.URL, downgrade.URL} {
+					if strings.Contains(err.Error(), secret) {
+						t.Fatal("inventory error leaked credentials or URL")
+					}
+				}
+			})
+		}
+	}
+}
 
 // A key-marker alone drops the second version of k/0500 at the page boundary.
 func TestS3InventoryTraversesBothVersionMarkersAndChecksEachVersion(t *testing.T) {

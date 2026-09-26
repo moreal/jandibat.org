@@ -79,12 +79,18 @@ func NewS3InventoryClient(c S3InventoryConfig) (*S3InventoryClient, error) {
 	if transport == nil {
 		transport = &http.Client{Timeout: 10 * time.Second}
 	}
+	// Clone the injected client so its redirect policy cannot replay signed
+	// inventory requests to another key, host, or an HTTP endpoint.
+	noRedirect := *transport
+	noRedirect.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return errors.New("s3 inventory redirect refused")
+	}
 	config := aws.Config{
 		Region: c.Region,
 		Credentials: aws.CredentialsProviderFunc(func(context.Context) (aws.Credentials, error) {
 			return aws.Credentials{AccessKeyID: c.AccessKeyID, SecretAccessKey: c.SecretAccessKey, SessionToken: c.SessionToken, Source: "explicit-static"}, nil
 		}),
-		HTTPClient:       limitedS3Client{inner: transport},
+		HTTPClient:       limitedS3Client{inner: &noRedirect},
 		RetryMaxAttempts: 1,
 	}
 	return &S3InventoryClient{client: s3.NewFromConfig(config, func(o *s3.Options) {
@@ -96,7 +102,7 @@ func NewS3InventoryClient(c S3InventoryConfig) (*S3InventoryClient, error) {
 type limitedS3Client struct{ inner *http.Client }
 
 func (c limitedS3Client) Do(req *http.Request) (*http.Response, error) {
-	response, err := c.inner.Do(req)
+	response, err := c.inner.Do(req) // #nosec G704 -- S3 uses the validated HTTPS endpoint and a cloned HTTP client that refuses all redirects before replaying signed requests.
 	if err != nil {
 		return nil, err
 	}

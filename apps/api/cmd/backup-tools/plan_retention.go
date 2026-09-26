@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/moreal/jandibat.org/apps/api/internal/backup/retention"
@@ -90,10 +91,11 @@ func scanUniqueJSONValue(decoder *json.Decoder, depth int) bool {
 		for decoder.More() {
 			keyToken, err := decoder.Token()
 			key, ok := keyToken.(string)
-			if err != nil || !ok || seen[key] || !scanUniqueJSONValue(decoder, depth+1) {
+			canonicalKey := strings.ToLower(key)
+			if err != nil || !ok || seen[canonicalKey] || !scanUniqueJSONValue(decoder, depth+1) {
 				return false
 			}
-			seen[key] = true
+			seen[canonicalKey] = true
 		}
 	case '[':
 		for decoder.More() {

@@ -108,7 +108,7 @@ done
 mkdir -p "$restore_context/db/migrations" "$restore_context/scripts"
 cp db/migrations/*.sql "$restore_context/db/migrations/"
 chmod 444 "$restore_context"/db/migrations/*.sql
-for file in db-migrate-url.sh db-configure-runtime-roles.sh db-verify-runtime-roles.sh db-bootstrap-roles.sh db-verify-backup-chain.sh; do
+for file in db-migrate-url.sh db-configure-runtime-roles.sh db-verify-runtime-roles.sh db-bootstrap-roles.sh db-verify-backup-chain.sh db-bootstrap-backup-connection.sh db-configure-backup-schedule.sh; do
 	cp "scripts/$file" "$restore_context/scripts/$file"
 	chmod 555 "$restore_context/scripts/$file"
 done

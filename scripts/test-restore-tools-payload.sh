@@ -39,8 +39,12 @@ for file in db/migrations/*.sql; do
 	expected="$expected/workspace/$file
 "
 done
-for file in db-migrate-url.sh db-configure-runtime-roles.sh db-verify-runtime-roles.sh db-bootstrap-roles.sh db-verify-backup-chain.sh; do
+for file in db-migrate-url.sh db-configure-runtime-roles.sh db-verify-runtime-roles.sh db-bootstrap-roles.sh db-verify-backup-chain.sh db-bootstrap-backup-connection.sh db-configure-backup-schedule.sh; do
 	test -f "scripts/$file" || { echo "missing source script: $file" >&2; exit 1; }
+	if ! docker run --rm --entrypoint /busybox "$image_id" test -f "/workspace/scripts/$file"; then
+		echo "restore-tools payload is missing /workspace/scripts/$file" >&2
+		exit 1
+	fi
 	expected="$expected/workspace/scripts/$file
 "
 done
@@ -54,7 +58,7 @@ if [ "$actual" != "$expected" ]; then
 	exit 1
 fi
 
-for file in db/migrations/*.sql scripts/db-migrate-url.sh scripts/db-configure-runtime-roles.sh scripts/db-verify-runtime-roles.sh scripts/db-bootstrap-roles.sh scripts/db-verify-backup-chain.sh; do
+for file in db/migrations/*.sql scripts/db-migrate-url.sh scripts/db-configure-runtime-roles.sh scripts/db-verify-runtime-roles.sh scripts/db-bootstrap-roles.sh scripts/db-verify-backup-chain.sh scripts/db-bootstrap-backup-connection.sh scripts/db-configure-backup-schedule.sh; do
 	source_hash=$(sha256sum "$file" | cut -d ' ' -f 1)
 	image_hash=$(docker run --rm --entrypoint /busybox "$image_id" sha256sum "/workspace/$file" | cut -d ' ' -f 1)
 	if [ "$source_hash" != "$image_hash" ]; then
@@ -62,7 +66,7 @@ for file in db/migrations/*.sql scripts/db-migrate-url.sh scripts/db-configure-r
 		exit 1
 	fi
 done
-for file in db-migrate-url.sh db-configure-runtime-roles.sh db-verify-runtime-roles.sh db-bootstrap-roles.sh db-verify-backup-chain.sh; do
+for file in db-migrate-url.sh db-configure-runtime-roles.sh db-verify-runtime-roles.sh db-bootstrap-roles.sh db-verify-backup-chain.sh db-bootstrap-backup-connection.sh db-configure-backup-schedule.sh; do
 	docker run --rm --user 65532:65532 --read-only --entrypoint /busybox "$image_id" test -x "/workspace/scripts/$file"
 done
 docker run --rm --user 65532:65532 --read-only --entrypoint /busybox "$image_id" test ! -w /workspace/db/migrations

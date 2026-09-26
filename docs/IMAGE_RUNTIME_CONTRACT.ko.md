@@ -4,7 +4,7 @@
 
 API image는 `/bin/server`를 기본 entrypoint로 유지하며 `/bin/metrics-proxy`도 포함합니다. Sidecar와 Cockroach proxy Pod는 `/bin/metrics-proxy`를 명시적으로 실행합니다. Worker, maintenance, web image에는 proxy 실행 파일이 없습니다.
 
-다섯 번째 restore-tools image는 스캔·영수증이 확인된 API/maintenance image ID에서 `/bin/server`, `/bin/maintenance`의 symlink를 실제 실행 파일로 풀어 복사하고, 별도 Nix `restore-tools-busybox` 출력의 정적 BusyBox를 포함합니다. 독립된 Nix `backup-tools-payload`의 `/bin/backup-tools`는 `/workspace/bin/backup-tools`로만 복사합니다. 검토된 백업 스크립트 `/workspace/scripts/db-bootstrap-backup-connection.sh`, `/workspace/scripts/db-configure-backup-schedule.sh`, `/workspace/scripts/db-verify-backup-chain.sh`와 기존 migration payload만 포함하며, 전체 소스 트리·API Nix store closure·`/bin/metrics-proxy`는 복사하지 않습니다. 최종 image는 UID/GID `65532:65532`로 시작합니다. 릴리스 검사는 실행 파일이 일반 파일이고 `/nix/store`가 없는지 확인합니다.
+다섯 번째 restore-tools image는 스캔·영수증이 확인된 API/maintenance image ID에서 `/bin/server`, `/bin/maintenance`의 symlink를 실제 실행 파일로 풀어 복사하고, 별도 Nix `restore-tools-busybox` 출력의 정적 BusyBox를 포함합니다. 독립된 Nix `backup-tools-payload`의 `/bin/backup-tools`는 `/workspace/bin/backup-tools`로만 복사합니다. 검토된 백업 스크립트 `/workspace/scripts/db-bootstrap-backup-connection.sh`, `/workspace/scripts/db-configure-backup-schedule.sh`, `/workspace/scripts/db-verify-backup-roles.sh`, `/workspace/scripts/db-verify-backup-chain.sh`와 기존 migration payload만 포함하며, 전체 소스 트리·API Nix store closure·`/bin/metrics-proxy`는 복사하지 않습니다. 최종 image는 UID/GID `65532:65532`로 시작합니다. 릴리스 검사는 실행 파일이 일반 파일이고 `/nix/store`가 없는지 확인합니다.
 
 | Workload / 실행 파일 | Listen 및 probe | 주입할 DB 설정 | 주입할 secret 범위 |
 | --- | --- | --- | --- |

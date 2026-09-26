@@ -79,7 +79,9 @@ for script in db-bootstrap-roles.sh db-bootstrap-backup-connection.sh db-verify-
 done
 
 # The only container image is the repository-pinned secure Cockroach release.
-docker image inspect "$cockroach_image" >/dev/null 2>&1 || docker pull "$cockroach_image" >/dev/null
+echo 'PHASE: Cockroach image availability' >&2
+docker image inspect "$cockroach_image" >/dev/null 2>&1 ||
+ docker pull "$cockroach_image" >/dev/null 2>&1 || fail 'Cockroach image availability'
 
 echo 'PHASE: certificate generation' >&2
 docker run --rm --mount "type=bind,src=$fixture_dir/certs,dst=/certs" \
@@ -92,7 +94,8 @@ docker run --rm --mount "type=bind,src=$fixture_dir/certs,dst=/certs" \
  --certs-dir=/certs --ca-key=/certs/ca.key >/dev/null 2>&1 || fail 'certificate generation'
 echo 'PHASE: host node key readability' >&2
 [ -r "$fixture_dir/certs/node.key" ] || fail 'host node key unreadable'
-cp "$fixture_dir/certs/ca.crt" "$fixture_dir/ca-only/ca.crt"
+echo 'PHASE: CA certificate copy' >&2
+cp "$fixture_dir/certs/ca.crt" "$fixture_dir/ca-only/ca.crt" >/dev/null 2>&1 || fail 'CA certificate copy'
 keystore_password=$(awk 'BEGIN { for (i=0;i<44;i++) printf "P" }')
 export KEYSTORE_PASSWORD="$keystore_password"
 echo 'PHASE: PKCS#12 creation' >&2

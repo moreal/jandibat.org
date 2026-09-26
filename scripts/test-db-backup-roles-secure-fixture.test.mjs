@@ -61,6 +61,10 @@ test('fixture startup failures report ordered fixed phases without leaking detai
     const fake = {
       uname: '#!/bin/sh\ncase "$1" in -s) echo Linux;; -m) echo x86_64;; esac\n',
       docker: `#!/bin/sh
+if [ "$TEST_FAILURE" = image ]; then
+  [ "$1 $2" = 'image inspect' ] && exit 1
+  if [ "$1" = pull ]; then echo 'synthetic-secret /synthetic/private/path' >&2; exit 99; fi
+fi
 case "$*" in
   *"cert create-ca"*|*"cert create-node"*|*"cert create-client"*)
     if [ "$TEST_FAILURE" = certificate ] && [ "$1" = run ]; then
@@ -70,7 +74,7 @@ case "$*" in
       case "$arg" in type=bind,src=*,dst=/certs) cert_dir=\${arg#type=bind,src=}; cert_dir=\${cert_dir%,dst=/certs};; esac
     done
     case "$*" in
-      *"cert create-ca"*) printf 'ca' >"$cert_dir/ca.crt";;
+      *"cert create-ca"*) [ "$TEST_FAILURE" = ca ] || printf 'ca' >"$cert_dir/ca.crt";;
       *"cert create-node"*)
         printf 'node' >"$cert_dir/node.crt"
         [ "$TEST_FAILURE" = key ] || printf 'key' >"$cert_dir/node.key";;
@@ -91,10 +95,12 @@ exit 0
       chmodSync(join(dir, name), 0o700);
     }
     for (const [failure, reason, phases] of [
-      ['certificate', 'certificate generation', ['certificate generation']],
-      ['key', 'host node key unreadable', ['certificate generation', 'host node key readability']],
-      ['pkcs', 'PKCS#12 creation', ['certificate generation', 'host node key readability', 'PKCS#12 creation']],
-      ['db', 'DB start', ['certificate generation', 'host node key readability', 'PKCS#12 creation', 'S3Proxy startup', 'DB start']],
+      ['image', 'Cockroach image availability', ['Cockroach image availability']],
+      ['certificate', 'certificate generation', ['Cockroach image availability', 'certificate generation']],
+      ['key', 'host node key unreadable', ['Cockroach image availability', 'certificate generation', 'host node key readability']],
+      ['ca', 'CA certificate copy', ['Cockroach image availability', 'certificate generation', 'host node key readability', 'CA certificate copy']],
+      ['pkcs', 'PKCS#12 creation', ['Cockroach image availability', 'certificate generation', 'host node key readability', 'CA certificate copy', 'PKCS#12 creation']],
+      ['db', 'DB start', ['Cockroach image availability', 'certificate generation', 'host node key readability', 'CA certificate copy', 'PKCS#12 creation', 'S3Proxy startup', 'DB start']],
     ]) {
       const result = spawnSync('sh', ['scripts/test-db-backup-roles-secure.sh'], {
         encoding: 'utf8', env: { ...process.env, TEST_FAILURE: failure, PATH: `${dir}:${process.env.PATH}` },
@@ -102,7 +108,7 @@ exit 0
       assert.equal(result.status, 1, failure);
       assert.ok(result.stderr.includes(`RED: ${reason} (details redacted)`), failure);
       assert.deepEqual([...result.stderr.matchAll(/PHASE: ([^\n]+)/g)].map((match) => match[1]), phases, failure);
-      assert.doesNotMatch(result.stderr, /synthetic-secret|\/synthetic\/private\/path|backup-fixture-key-/, failure);
+      assert.doesNotMatch(result.stderr, /synthetic-secret|\/synthetic\/private\/path|\/certs\/|\/ca-only\/|backup-fixture-key-/, failure);
       assert.equal(result.stdout, '', failure);
     }
   } finally { rmSync(dir, { recursive: true, force: true }); }

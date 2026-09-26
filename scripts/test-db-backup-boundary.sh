@@ -50,7 +50,6 @@ run_retired() {
 }
 
 run_retired backup sh "$root/scripts/db-backup.sh"
-run_retired schedule sh "$root/scripts/db-configure-backup-schedule.sh"
 run_retired restore sh "$root/scripts/db-restore-verify.sh"
 run_retired restore-explicit env RESTORE_TARGET_DATABASE=isolated_fixture \
 	RESTORE_TARGET_DISPOSITION=preserve sh "$root/scripts/db-restore-verify.sh"
@@ -69,6 +68,16 @@ if [ -s "$TEST_CLI_ARGS" ] || [ -s "$TEST_CLI_ENV_KEYS" ]; then
  echo 'FAIL: active verifier reached SQL without DSN' >&2; exit 1
 fi
 
+: >"$TEST_CLI_ARGS"
+: >"$TEST_CLI_ENV_KEYS"
+if env -u BACKUP_RUNNER_DATABASE_URL COCKROACH_SQL_BIN="$test_dir/cockroach" \
+ sh "$root/scripts/db-configure-backup-schedule.sh" >"$test_dir/output" 2>&1; then
+ echo 'FAIL: active schedule accepted missing runner DSN' >&2; exit 1
+fi
+if [ -s "$TEST_CLI_ARGS" ] || [ -s "$TEST_CLI_ENV_KEYS" ]; then
+ echo 'FAIL: active schedule reached SQL without runner DSN' >&2; exit 1
+fi
+
 if rg -q -- '--url=|ignore_existing_backups|AS OF SYSTEM TIME|jandibat_backup([^_A-Za-z0-9]|$)' \
 	"$root/scripts/db-backup.sh" "$root/scripts/db-configure-backup-schedule.sh" \
 	"$root/scripts/db-restore-verify.sh"; then
@@ -76,4 +85,4 @@ if rg -q -- '--url=|ignore_existing_backups|AS OF SYSTEM TIME|jandibat_backup([^
 	exit 1
 fi
 
-echo 'retired backup/restore entry points fail closed without SQL or credential output'
+echo 'retired backup/restore entry points and active preflight fail closed without SQL or credential output'

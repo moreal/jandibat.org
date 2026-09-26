@@ -17,14 +17,15 @@ printf '%s\n' '#!/bin/sh' \
  'statement=$(cat)' \
  'case "$statement" in' \
  ' *"SELECT current_user() AS actor"*) printf "actor\njandibat_backup_verifier\n";;' \
- ' *"system.scheduled_jobs"*)' \
- '  if [ "${CHAIN_CASE:-pass}" = raw_allowed ]; then printf "id\n"; else printf "SQLSTATE: 42501\n" >&2; exit 1; fi;;' \
- ' *"information_schema.views"*"schedule_policy_v1"*) printf "SET\naudit_ok\n1\n";;' \
+ ' *"system.scheduled_jobs"*) printf "SQLSTATE: 42501\n" >&2; exit 1;;' \
+ ' *"information_schema.views"*"schedule_policy_v1"*)' \
+ '  if [ "${CHAIN_CASE:-pass}" = schedule_view_denied ]; then printf "SQLSTATE: 42501\n" >&2; exit 1; fi' \
+ '  printf "SET\naudit_ok\n1\n";;' \
  ' *"schedule_policy_v1"*)' \
  '  printf "schedule_id\tdependent_id\tunpause_id\tlabel_ok\towner_ok\tactive_ok\tinitial_pause_ok\tincremental_cron_ok\tfull_cron_ok\toverlap_wait\tretry_soon\tmetric_disabled\tincremental_command_ok\tfull_command_ok\n"' \
  '  case "${CHAIN_CASE:-pass}" in' \
  '   wrong_pair) printf "9007199254740993\t9007199254740994\t\ttrue\ttrue\ttrue\tfalse\ttrue\tfalse\ttrue\ttrue\ttrue\ttrue\tfalse\n9007199254740994\t\t9007199254740995\ttrue\ttrue\ttrue\tfalse\tfalse\ttrue\ttrue\ttrue\ttrue\tfalse\ttrue\n";;' \
- '   paused) printf "9007199254740993\t9007199254740994\t\ttrue\ttrue\tfalse\ttrue\ttrue\tfalse\ttrue\ttrue\ttrue\ttrue\tfalse\n9007199254740994\t\t9007199254740993\ttrue\ttrue\ttrue\tfalse\tfalse\ttrue\ttrue\ttrue\ttrue\tfalse\ttrue\n";;' \
+ '   schedule_bad_status) printf "9007199254740993\t9007199254740994\t\ttrue\ttrue\tfalse\ttrue\ttrue\tfalse\ttrue\ttrue\ttrue\ttrue\tfalse\n9007199254740994\t\t9007199254740993\ttrue\ttrue\ttrue\tfalse\tfalse\ttrue\ttrue\ttrue\ttrue\tfalse\ttrue\n";;' \
  '   *) printf "9007199254740993\t9007199254740994\t\ttrue\ttrue\ttrue\tfalse\ttrue\tfalse\ttrue\ttrue\ttrue\ttrue\tfalse\n9007199254740994\t\t9007199254740993\ttrue\ttrue\ttrue\tfalse\tfalse\ttrue\ttrue\ttrue\ttrue\tfalse\ttrue\n";;' \
  '  esac;;' \
  ' *"SHOW BACKUPS IN"*)' \
@@ -35,8 +36,9 @@ printf '%s\n' '#!/bin/sh' \
  '  esac;;' \
  ' *"SHOW BACKUP FROM"*"check_files"*)' \
  '  case "${CHAIN_CASE:-pass}" in' \
- '   missing_file) printf "synthetic secret in raw SQL error" >&2; exit 1;;' \
+ '   missing_file|healthy_schedule_missing_file) printf "synthetic secret in raw SQL error" >&2; exit 1;;' \
  '   no_full) printf "backup_type\tstart_time\tend_time\tnot_future\nincremental\t2026-09-26 00:00:00\t2026-09-26 01:00:00\ttrue\n";;' \
+ '   no_incremental) printf "backup_type\tstart_time\tend_time\tnot_future\nfull\tNULL\t2026-09-26 00:00:00\ttrue\n";;' \
  '   future) printf "backup_type\tstart_time\tend_time\tnot_future\nfull\tNULL\t2027-09-26 00:00:00\tfalse\n";;' \
  '   unverified_incremental) printf "backup_type\tstart_time\tend_time\tnot_future\nfull\tNULL\t2026-09-26 00:00:00\ttrue\nincremental\t2026-09-26 00:00:00\tNULL\tfalse\n";;' \
  '   gap) printf "backup_type\tstart_time\tend_time\tnot_future\nfull\tNULL\t2026-09-26 00:00:00\ttrue\nincremental\t2026-09-26 00:10:00\t2026-09-26 01:00:00\ttrue\n";;' \
@@ -60,13 +62,16 @@ run_case() {
  fi
 }
 
-run_case pass
-[ "$status" -eq 0 ] || fail "valid checked chain refused ($(sed -n '1p' "$test_dir/stderr"))"
-[ "$(wc -l <"$test_dir/stdout")" -eq 1 ] || fail 'success is not one line'
-grep -Eq '"schemaVersion":1.*"chainId":"2026\.09\.26-010000\.00".*"collectionId":"jandibat_backup_v1".*"fullScheduleId":"9007199254740994".*"incrementalScheduleId":"9007199254740993".*"recoveryTimestamp":"2026-09-26T01:00:00Z".*"checkedAt":"2026-09-26T01:01:00Z".*"fileChecked":true.*"passed":true' "$test_dir/stdout" || fail 'safe result contract'
-[ ! -s "$test_dir/stderr" ] || fail 'success emitted stderr'
+expected='{"schemaVersion":1,"chainId":"2026.09.26-010000.00","collectionId":"jandibat_backup_v1","checkedAt":"2026-09-26T01:01:00Z","recoveryTimestamp":"2026-09-26T01:00:00Z","fileChecked":true,"passed":true}'
+for scenario in pass schedule_view_denied schedule_bad_status; do
+ run_case "$scenario"
+ [ "$status" -eq 0 ] || fail "$scenario valid checked chain refused ($(sed -n '1p' "$test_dir/stderr"))"
+ [ "$(wc -l <"$test_dir/stdout")" -eq 1 ] || fail "$scenario success is not one line"
+ [ "$(sed -n '1p' "$test_dir/stdout")" = "$expected" ] || fail "$scenario seven-field result contract"
+ [ ! -s "$test_dir/stderr" ] || fail "$scenario success emitted stderr"
+done
 
-for scenario in wrong_pair paused empty paginated missing_file no_full future unverified_incremental gap raw_allowed fractional_future; do
+for scenario in empty paginated missing_file healthy_schedule_missing_file no_full no_incremental future unverified_incremental gap fractional_future; do
  run_case "$scenario"
  [ "$status" -ne 0 ] || fail "$scenario accepted"
  [ ! -s "$test_dir/stdout" ] || fail "$scenario emitted stdout"

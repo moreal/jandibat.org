@@ -72,11 +72,15 @@ check_operational_sections() {
     '403' '404' '405' '502' \
     'GraphQL 필드도 공개 OpenAPI 경로도 아닙니다' || return 1
   require_section_terms '## 2026-09-25 — 백업 검증 기록·보존 계획 운영 계약' \
-    'collectionId' 'linkedScheduleIds' 'chainId' 'checkedAt' \
+    'collectionId' 'chainId' 'checkedAt' \
     'verifiedRecoveryAt' 'outcome' 'catalogDigest' 'objectKey' \
     'versionId' 'coverage' 'expiresAt' 'approvalHash' \
     '403' '404' '405' '200' \
-    'GraphQL 도메인 필드나 공개 OpenAPI HTTP edge endpoint가 아닙니다'
+    'GraphQL 도메인 필드나 공개 OpenAPI HTTP edge endpoint가 아닙니다' || return 1
+  require_section_terms '## 2026-09-26 — 파일 검사 기반 복구 시각과 스케줄 신호 분리' \
+    'schemaVersion' 'chainId' 'collectionId' 'checkedAt' \
+    'recoveryTimestamp' 'fileChecked' 'passed' \
+    '스케줄 상태' '별도' 'HTTP edge' || return 1
 }
 
 check_operational_sections

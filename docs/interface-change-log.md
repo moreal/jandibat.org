@@ -3,6 +3,26 @@
 API 계약 변경 시 이 파일과 GraphQL SDL(도메인) 또는 `openapi/jandibat.yaml`(HTTP edge)을 같은 변경에 포함합니다.
 각 항목에는 날짜, 호환성, 영향받는 operation/schema, 백엔드·프론트엔드 후속 작업을 기록합니다.
 
+## 2026-09-26 — 파일 검사 기반 복구 시각과 스케줄 신호 분리
+
+호환성: 내부 백업 checker의 성공 JSON을 7개 필드로 축소하는 변경입니다. 공개
+GraphQL 도메인 API와 OpenAPI HTTP edge 계약은 바뀌지 않습니다.
+
+- 읽기 전용 verifier는 고정 외부 연결의 전체 백업 경로를 조회하고 선택한 최신
+  full·incremental 체인을 `SHOW BACKUP ... WITH check_files`로 검사합니다. full이나
+  incremental이 없거나 시각이 불연속·미래이고, 파일이 누락됐거나 검사에 실패하면
+  stdout에 성공 결과를 내지 않습니다. 스케줄 뷰 조회·스케줄 ID·완료 작업의
+  출처 증명은 이 파일 검사 경로의 선행 조건이 아닙니다.
+- 성공 출력은 정확히 `schemaVersion`(1), `chainId`, `collectionId`, `checkedAt`,
+  `recoveryTimestamp`, `fileChecked`(true), `passed`(true)인 단일 JSON 객체입니다.
+  실패 시 성공 JSON은 없고 상세 SQL 오류·저장소 주소·비밀값은 출력하지 않습니다.
+  Backend 검증기는 이 출력만 복구 시각의 근거로 기록하고, 이전에 검증된 시각을
+  검사 실패 때문에 전진시키지 않습니다.
+- RPO는 마지막 파일 검사 성공의 `recoveryTimestamp`로 계산합니다. 스케줄 상태와
+  실패는 별도 감시 신호이며, 양호한 스케줄만으로 복구 가능 시각을 선언하지 않습니다.
+  Coordination은 SQL 스크립트·계약 fixture, Backend는 JSON 소비와 건강 metric을
+  소유합니다. 이 로컬 계약만으로 secure x86_64/S3 또는 운영 RPO를 증명하지 않습니다.
+
 ## 2026-09-26 — 백업 스케줄 정책의 읽기 전용 투영
 
 호환성: 백업 계정 opt-in 경로에 내부 뷰를 추가합니다. 애플리케이션 계정만 설정하는
@@ -20,8 +40,8 @@ API 계약 변경 시 이 파일과 GraphQL SDL(도메인) 또는 `openapi/jandi
 - runner와 verifier는 private schema USAGE와 이 뷰의 SELECT만 받습니다.
   `system.scheduled_jobs` 직접 SELECT나 admin/root 권한을 받지 않습니다.
   verifier는 뷰 정의·소유권·권한을 재검사하고 원본 테이블 접근 거부를 확인합니다.
-- Coordination은 이 뷰와 역할 검증을 소유합니다. 스케줄 생성과 백업 체인
-  검증의 소비 계약은 별도 단계에서 이 안전한 투영을 사용합니다. 이 변경만으로
+- Coordination은 이 뷰와 역할 검증을 소유합니다. 스케줄 생성은 이 투영을
+  사용하지만, 위 파일 검사 경로는 스케줄 뷰와 독립적입니다. 이 변경만으로
   실제 복구 가능 시각이나 배포 준비 상태를 선언하지 않습니다.
   Linux x86_64 CI의 `db-backup-schedule-view-native-test`는 실제 행이 채워진
   로컬 Cockroach를 검사합니다. ARM64 수동 실행은 명시적 보조 실험이며
@@ -106,7 +126,6 @@ scrape의 `GET /metrics`도 별도 인증된 내부 경로이며 공개 계약�
   metric을 0/unknown으로 표시하고 복구 시각을 전진시키지 않습니다. 전용 token은
   파일에서 읽으며 오류 응답·로그·metric label에 credential을 싣지 않습니다.
 - 검증기의 안전한 JSON 기록은 `collectionId`(수집 컬렉션 ID),
-  `linkedScheduleIds`(서로 연결된 full·incremental schedule ID 두 개),
   `chainId`(검증한 체인 ID), `checkedAt`(UTC RFC 3339 파일 검사 시각),
   `verifiedRecoveryAt`(마지막으로 파일까지 확인된 복구 가능 UTC 시각 또는 null),
   `outcome`(`pass`·`fail`·`unknown`)을 포함합니다. schedule 완료만으로

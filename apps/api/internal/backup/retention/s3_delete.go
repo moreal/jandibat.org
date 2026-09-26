@@ -2,6 +2,7 @@ package retention
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
@@ -49,12 +50,18 @@ func NewS3DeleteClient(c S3DeleteConfig) (*S3DeleteClient, error) {
 	if transport == nil {
 		transport = &http.Client{Timeout: timeout}
 	}
+	// Clone even an injected client: changing its policy in place would affect
+	// other callers, while its default policy replays 307/308 DELETE requests.
+	noRedirect := *transport
+	noRedirect.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return errors.New("s3 delete redirect refused")
+	}
 	config := aws.Config{
 		Region: c.Region,
 		Credentials: aws.CredentialsProviderFunc(func(context.Context) (aws.Credentials, error) {
 			return aws.Credentials{AccessKeyID: c.AccessKeyID, SecretAccessKey: c.SecretAccessKey, SessionToken: c.SessionToken, Source: "explicit-delete-scoped"}, nil
 		}),
-		HTTPClient:       limitedS3Client{inner: transport},
+		HTTPClient:       limitedS3Client{inner: &noRedirect},
 		RetryMaxAttempts: 1,
 	}
 	client := s3.NewFromConfig(config, func(o *s3.Options) {

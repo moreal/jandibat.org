@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -17,7 +18,7 @@ func TestS3DeleteRemovesOnlyExactVersionInScopedBucket(t *testing.T) {
 	var calls int
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
-		if r.Method != http.MethodDelete || r.URL.EscapedPath() != "/bucket/k/object" || r.URL.Query().Get("versionId") != "old" || r.URL.Query().Get("x-id") != "DeleteObject" || len(r.URL.Query()) != 2 || !strings.Contains(r.Header.Get("Authorization"), "Credential=delete-only/") {
+		if r.Method != http.MethodDelete || r.URL.EscapedPath() != "/bucket/k/object" || r.URL.Query().Get("versionId") != "old" || r.URL.Query().Get("x-id") != "DeleteObject" || len(r.URL.Query()) != 2 || !strings.Contains(r.Header.Get("Authorization"), "Credential=delete-only/") || len(r.Header.Values("x-amz-bypass-governance-retention")) != 0 {
 			t.Errorf("unexpected deletion request: method=%s path=%s query=%s", r.Method, r.URL.EscapedPath(), r.URL.RawQuery)
 			w.WriteHeader(http.StatusBadRequest)
 			return
@@ -40,6 +41,45 @@ func TestS3DeleteRemovesOnlyExactVersionInScopedBucket(t *testing.T) {
 	}
 	if calls != 1 || versions["old"] || !versions["new"] {
 		t.Fatalf("unexpected state: calls=%d versions=%v", calls, versions)
+	}
+}
+
+func TestS3DeleteRejectsEveryRedirectBeforeSecondRequest(t *testing.T) {
+	for _, status := range []int{http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther, http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {
+		for _, destination := range []string{"http downgrade", "same host changed key"} {
+			t.Run(fmt.Sprintf("%d %s", status, destination), func(t *testing.T) {
+				var original, redirected atomic.Int32
+				downgrade := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					redirected.Add(1)
+					w.WriteHeader(http.StatusNoContent)
+				}))
+				defer downgrade.Close()
+				var source *httptest.Server
+				source = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.URL.Path != "/bucket/k/object" {
+						redirected.Add(1)
+						w.WriteHeader(http.StatusNoContent)
+						return
+					}
+					original.Add(1)
+					location := downgrade.URL + "/bucket/k/object?versionId=v1"
+					if destination == "same host changed key" {
+						location = source.URL + "/bucket/k/other?versionId=v1"
+					}
+					w.Header().Set("Location", location)
+					w.WriteHeader(status)
+				}))
+				defer source.Close()
+				client, err := NewS3DeleteClient(S3DeleteConfig{Endpoint: source.URL, Region: "us-east-1", AccessKeyID: "delete-only", SecretAccessKey: "fake-secret", Namespace: StorageNamespace{Bucket: "bucket", Prefix: "k/"}, HTTPClient: source.Client()})
+				if err != nil {
+					t.Fatal(err)
+				}
+				err = client.DeleteVersion(context.Background(), TargetVersion{Bucket: "bucket", Key: "k/object", VersionID: "v1"})
+				if err == nil || original.Load() != 1 || redirected.Load() != 0 {
+					t.Fatalf("redirect followed: err=%v original=%d redirected=%d", err, original.Load(), redirected.Load())
+				}
+			})
+		}
 	}
 }
 

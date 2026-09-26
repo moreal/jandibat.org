@@ -92,6 +92,8 @@ jobs:
         run: nix develop --command make db-backup-roles-test
       - name: Verify linked backup schedule fail-closed preflight
         run: nix develop --command make db-backup-schedule-test
+      - name: Verify read-only backup schedule observation
+        run: nix develop --command make db-backup-schedule-observe-test
       - name: Verify file-checked backup chain fail-closed preflight
         run: nix develop --command make db-backup-chain-test
       - name: Verify populated schedule view on native x86_64 CockroachDB

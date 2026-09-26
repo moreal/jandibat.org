@@ -11,7 +11,7 @@ let
     version = "1";
     src = ../apps/api;
     subPackages = map (command: "./cmd/${command}") commands;
-    vendorHash = "sha256-sjRa+0G+2JM8XVJj4P8khyvUGopIo2xO//tmA+77Z2I=";
+    vendorHash = "sha256-bo5Mnm6anRfnthp/vsz9grMrO+PuCw7YZUNipGsKb1w=";
     env.CGO_ENABLED = "0";
     ldflags = [ "-buildid=" ];
     doCheck = false;

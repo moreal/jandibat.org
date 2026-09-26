@@ -20,6 +20,8 @@ func TestS3InventoryTraversesBothVersionMarkersAndChecksEachVersion(t *testing.T
 		switch {
 		case query.Has("versioning"):
 			fmt.Fprint(w, `<VersioningConfiguration><Status>Enabled</Status></VersioningConfiguration>`)
+		case query.Has("object-lock"):
+			fmt.Fprint(w, `<ObjectLockConfiguration><ObjectLockEnabled>Enabled</ObjectLockEnabled><Rule><DefaultRetention><Mode>COMPLIANCE</Mode><Days>35</Days></DefaultRetention></Rule></ObjectLockConfiguration>`)
 		case query.Has("versions"):
 			listings++
 			if listings == 1 {
@@ -31,7 +33,7 @@ func TestS3InventoryTraversesBothVersionMarkersAndChecksEachVersion(t *testing.T
 				if query.Get("key-marker") != "k/0500" || query.Get("version-id-marker") != "v1" {
 					t.Errorf("missing compound cursor: %q", r.URL.RawQuery)
 				}
-				fmt.Fprint(w, `<ListVersionsResult><Name>bucket</Name><Prefix>k/</Prefix><IsTruncated>false</IsTruncated><Version><Key>k/0500</Key><VersionId>v0</VersionId><IsLatest>false</IsLatest><Size>9</Size></Version><DeleteMarker><Key>k/tombstone</Key><VersionId>d1</VersionId><IsLatest>true</IsLatest></DeleteMarker></ListVersionsResult>`)
+				fmt.Fprint(w, `<ListVersionsResult><Name>bucket</Name><Prefix>k/</Prefix><IsTruncated>false</IsTruncated><Version><Key>k/0500</Key><VersionId>v0</VersionId><IsLatest>false</IsLatest><Size>9</Size></Version></ListVersionsResult>`)
 			}
 		case query.Has("retention"):
 			retentionReads++
@@ -59,10 +61,10 @@ func TestS3InventoryTraversesBothVersionMarkersAndChecksEachVersion(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if listings != 2 || retentionReads != 3 || holdReads != 3 || len(got.Versions) != 3 {
+	if listings != 2 || retentionReads != 2 || holdReads != 2 || len(got.Versions) != 2 {
 		t.Fatalf("incomplete inventory: pages=%d retention=%d hold=%d versions=%d", listings, retentionReads, holdReads, len(got.Versions))
 	}
-	if got.Versions[0].VersionID != "v1" || got.Versions[1].VersionID != "v0" || !got.Versions[2].DeleteMarker || !got.Versions[0].Locked {
+	if got.Versions[0].VersionID != "v1" || got.Versions[1].VersionID != "v0" || !got.Versions[0].Locked {
 		t.Fatalf("incorrect version/lock mapping: %+v", got)
 	}
 }
@@ -79,6 +81,7 @@ func TestS3InventoryRejectsAmbiguousPagesAndUncertainProtection(t *testing.T) {
 		{name: "repeating cursor", first: first, next: first, want: "duplicate_version"},
 		{name: "foreign prefix", first: strings.Replace(first, "<Key>k/a</Key>", "<Key>other/a</Key>", 1), next: last, want: "invalid_version"},
 		{name: "null version", first: strings.Replace(first, "<VersionId>v1</VersionId>", "<VersionId>null</VersionId>", 1), next: last, want: "invalid_version"},
+		{name: "no latest version", first: `<ListVersionsResult><Name>bucket</Name><Prefix>k/</Prefix><IsTruncated>false</IsTruncated><Version><Key>k/a</Key><VersionId>v0</VersionId><IsLatest>false</IsLatest><Size>1</Size></Version></ListVersionsResult>`, want: "invalid_version"},
 		{name: "malformed XML", first: `<ListVersionsResult><Version>`, next: last, want: "list_failed"},
 		{name: "retention forbidden", first: first, next: last, protection: "retention_403", want: "retention_read_failed"},
 		{name: "retention missing version", first: first, next: last, protection: "retention_404", want: "retention_read_failed"},
@@ -99,6 +102,8 @@ func TestS3InventoryRejectsAmbiguousPagesAndUncertainProtection(t *testing.T) {
 						state = "Enabled"
 					}
 					fmt.Fprintf(w, `<VersioningConfiguration><Status>%s</Status></VersioningConfiguration>`, state)
+				case query.Has("object-lock"):
+					fmt.Fprint(w, `<ObjectLockConfiguration><ObjectLockEnabled>Enabled</ObjectLockEnabled><Rule><DefaultRetention><Mode>COMPLIANCE</Mode><Days>35</Days></DefaultRetention></Rule></ObjectLockConfiguration>`)
 				case query.Has("versions"):
 					pages++
 					if pages == 1 {
@@ -157,6 +162,8 @@ func TestS3InventoryPreservesOverThousandVersionsAcrossSplitKey(t *testing.T) {
 		switch {
 		case q.Has("versioning"):
 			fmt.Fprint(w, `<VersioningConfiguration><Status>Enabled</Status></VersioningConfiguration>`)
+		case q.Has("object-lock"):
+			fmt.Fprint(w, `<ObjectLockConfiguration><ObjectLockEnabled>Enabled</ObjectLockEnabled><Rule><DefaultRetention><Mode>COMPLIANCE</Mode><Days>35</Days></DefaultRetention></Rule></ObjectLockConfiguration>`)
 		case q.Has("versions"):
 			pages++
 			if pages == 1 {
@@ -201,6 +208,8 @@ func TestS3InventoryKeepsLegalHoldSeparateFromRetention(t *testing.T) {
 		switch {
 		case q.Has("versioning"):
 			fmt.Fprint(w, `<VersioningConfiguration><Status>Enabled</Status></VersioningConfiguration>`)
+		case q.Has("object-lock"):
+			fmt.Fprint(w, `<ObjectLockConfiguration><ObjectLockEnabled>Enabled</ObjectLockEnabled><Rule><DefaultRetention><Mode>COMPLIANCE</Mode><Days>35</Days></DefaultRetention></Rule></ObjectLockConfiguration>`)
 		case q.Has("versions"):
 			fmt.Fprint(w, `<ListVersionsResult><Name>bucket</Name><Prefix>k/</Prefix><IsTruncated>false</IsTruncated><Version><Key>k/held</Key><VersionId>v1</VersionId><IsLatest>true</IsLatest><Size>2</Size></Version></ListVersionsResult>`)
 		case q.Has("retention"):
@@ -221,5 +230,114 @@ func TestS3InventoryKeepsLegalHoldSeparateFromRetention(t *testing.T) {
 	}
 	if len(got.Versions) != 1 || !got.Versions[0].LegalHold || !got.Versions[0].Locked || got.Versions[0].Retention != nil {
 		t.Fatalf("legal hold must be explicit and blocking: %+v", got)
+	}
+}
+
+func TestS3InventoryRequiresReadableEnabledBucketObjectLock(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		switch {
+		case q.Has("versioning"):
+			fmt.Fprint(w, `<VersioningConfiguration><Status>Enabled</Status></VersioningConfiguration>`)
+		case q.Has("object-lock"):
+			w.WriteHeader(http.StatusNotFound)
+			fmt.Fprint(w, `<Error><Code>NoSuchObjectLockConfiguration</Code></Error>`)
+		case q.Has("versions"):
+			fmt.Fprint(w, `<ListVersionsResult><Name>bucket</Name><Prefix>k/</Prefix><IsTruncated>false</IsTruncated></ListVersionsResult>`)
+		}
+	}))
+	defer server.Close()
+	client, err := NewS3InventoryClient(S3InventoryConfig{Endpoint: server.URL, Region: "us-east-1", AccessKeyID: "fake", SecretAccessKey: "fake", HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listing, err := client.ListVersions(context.Background(), StorageNamespace{Bucket: "bucket", Prefix: "k/"})
+	if err == nil || !strings.Contains(err.Error(), "bucket_lock_read_failed") || len(listing.Versions) != 0 {
+		t.Fatalf("missing bucket Object Lock must refuse before listing: err=%v count=%d", err, len(listing.Versions))
+	}
+}
+
+func TestS3InventoryRefusesDeleteMarkerWithUnverifiableProtection(t *testing.T) {
+	var checkedMarker bool
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		switch {
+		case q.Has("versioning"):
+			fmt.Fprint(w, `<VersioningConfiguration><Status>Enabled</Status></VersioningConfiguration>`)
+		case q.Has("object-lock"):
+			fmt.Fprint(w, `<ObjectLockConfiguration><ObjectLockEnabled>Enabled</ObjectLockEnabled><Rule><DefaultRetention><Mode>COMPLIANCE</Mode><Days>35</Days></DefaultRetention></Rule></ObjectLockConfiguration>`)
+		case q.Has("versions"):
+			fmt.Fprint(w, `<ListVersionsResult><Name>bucket</Name><Prefix>k/</Prefix><IsTruncated>false</IsTruncated><DeleteMarker><Key>k/tombstone</Key><VersionId>d1</VersionId><IsLatest>true</IsLatest></DeleteMarker></ListVersionsResult>`)
+		case q.Has("retention"):
+			checkedMarker = q.Get("versionId") == "d1"
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			fmt.Fprint(w, `<Error><Code>MethodNotAllowed</Code></Error>`)
+		}
+	}))
+	defer server.Close()
+	client, err := NewS3InventoryClient(S3InventoryConfig{Endpoint: server.URL, Region: "us-east-1", AccessKeyID: "fake", SecretAccessKey: "fake", HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := client.ListVersions(context.Background(), StorageNamespace{Bucket: "bucket", Prefix: "k/"})
+	if err == nil || !strings.Contains(err.Error(), "retention_read_failed") || !checkedMarker || len(got.Versions) != 0 {
+		t.Fatalf("unverifiable delete marker must refuse with no partial inventory: err=%v checked=%v count=%d", err, checkedMarker, len(got.Versions))
+	}
+}
+
+func TestS3InventoryReportsBucketDefaultWithoutImposingChainAge(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch q := r.URL.Query(); {
+		case q.Has("versioning"):
+			fmt.Fprint(w, `<VersioningConfiguration><Status>Enabled</Status></VersioningConfiguration>`)
+		case q.Has("object-lock"):
+			fmt.Fprint(w, `<ObjectLockConfiguration><ObjectLockEnabled>Enabled</ObjectLockEnabled><Rule><DefaultRetention><Mode>GOVERNANCE</Mode><Days>1</Days></DefaultRetention></Rule></ObjectLockConfiguration>`)
+		case q.Has("versions"):
+			fmt.Fprint(w, `<ListVersionsResult><Name>bucket</Name><Prefix>k/</Prefix><IsTruncated>false</IsTruncated></ListVersionsResult>`)
+		}
+	}))
+	defer server.Close()
+	client, err := NewS3InventoryClient(S3InventoryConfig{Endpoint: server.URL, Region: "us-east-1", AccessKeyID: "fake", SecretAccessKey: "fake", HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := client.ListVersions(context.Background(), StorageNamespace{Bucket: "bucket", Prefix: "k/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.BucketLock != (S3BucketLockPolicy{Mode: "GOVERNANCE", Days: 1}) {
+		t.Fatalf("observed policy must be reported for separate operator gate: %+v", got.BucketLock)
+	}
+}
+
+func TestS3InventoryRejectsUnknownBucketLockRules(t *testing.T) {
+	cases := []struct{ name, xml string }{
+		{"disabled", `<ObjectLockConfiguration><ObjectLockEnabled>Disabled</ObjectLockEnabled></ObjectLockConfiguration>`},
+		{"missing default", `<ObjectLockConfiguration><ObjectLockEnabled>Enabled</ObjectLockEnabled></ObjectLockConfiguration>`},
+		{"unknown mode", `<ObjectLockConfiguration><ObjectLockEnabled>Enabled</ObjectLockEnabled><Rule><DefaultRetention><Mode>UNKNOWN</Mode><Days>35</Days></DefaultRetention></Rule></ObjectLockConfiguration>`},
+		{"two periods", `<ObjectLockConfiguration><ObjectLockEnabled>Enabled</ObjectLockEnabled><Rule><DefaultRetention><Mode>COMPLIANCE</Mode><Days>35</Days><Years>1</Years></DefaultRetention></Rule></ObjectLockConfiguration>`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch q := r.URL.Query(); {
+				case q.Has("versioning"):
+					fmt.Fprint(w, `<VersioningConfiguration><Status>Enabled</Status></VersioningConfiguration>`)
+				case q.Has("object-lock"):
+					fmt.Fprint(w, tc.xml)
+				case q.Has("versions"):
+					t.Error("list must not run without a known lock policy")
+				}
+			}))
+			defer server.Close()
+			client, err := NewS3InventoryClient(S3InventoryConfig{Endpoint: server.URL, Region: "us-east-1", AccessKeyID: "fake", SecretAccessKey: "fake", HTTPClient: server.Client()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := client.ListVersions(context.Background(), StorageNamespace{Bucket: "bucket", Prefix: "k/"})
+			if err == nil || !strings.HasPrefix(err.Error(), "s3 inventory: bucket_lock_") || len(got.Versions) != 0 {
+				t.Fatalf("unknown bucket lock must refuse: err=%v count=%d", err, len(got.Versions))
+			}
+		})
 	}
 }

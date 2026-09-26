@@ -50,8 +50,18 @@ type S3ListedVersion struct {
 }
 
 type S3VersionListing struct {
-	Namespace StorageNamespace
-	Versions  []S3ListedVersion
+	Namespace  StorageNamespace
+	BucketLock S3BucketLockPolicy
+	Versions   []S3ListedVersion
+}
+
+// S3BucketLockPolicy is observed provider configuration, not approval to
+// delete. A separate operator policy gate must compare this exact value with
+// the approved bucket default; this adapter does not impose a blanket age.
+type S3BucketLockPolicy struct {
+	Mode  string
+	Days  int32
+	Years int32
 }
 
 // S3InventoryError carries only a fixed category; SDK errors may include
@@ -120,8 +130,27 @@ func (c *S3InventoryClient) ListVersions(parent context.Context, ns StorageNames
 	if status.Status != types.BucketVersioningStatusEnabled {
 		return S3VersionListing{}, S3InventoryError("versioning_not_enabled")
 	}
+	lock, err := c.client.GetObjectLockConfiguration(ctx, &s3.GetObjectLockConfigurationInput{Bucket: aws.String(ns.Bucket)})
+	if err != nil {
+		return S3VersionListing{}, S3InventoryError("bucket_lock_read_failed")
+	}
+	if lock == nil || lock.ObjectLockConfiguration == nil || lock.ObjectLockConfiguration.ObjectLockEnabled != types.ObjectLockEnabledEnabled || lock.ObjectLockConfiguration.Rule == nil || lock.ObjectLockConfiguration.Rule.DefaultRetention == nil {
+		return S3VersionListing{}, S3InventoryError("bucket_lock_not_configured")
+	}
+	defaultRetention := lock.ObjectLockConfiguration.Rule.DefaultRetention
+	if defaultRetention.Mode != types.ObjectLockRetentionModeCompliance && defaultRetention.Mode != types.ObjectLockRetentionModeGovernance {
+		return S3VersionListing{}, S3InventoryError("bucket_lock_invalid_policy")
+	}
+	policy := S3BucketLockPolicy{Mode: string(defaultRetention.Mode)}
+	if defaultRetention.Days != nil && defaultRetention.Years == nil && *defaultRetention.Days > 0 {
+		policy.Days = *defaultRetention.Days
+	} else if defaultRetention.Years != nil && defaultRetention.Days == nil && *defaultRetention.Years > 0 {
+		policy.Years = *defaultRetention.Years
+	} else {
+		return S3VersionListing{}, S3InventoryError("bucket_lock_invalid_policy")
+	}
 
-	result := S3VersionListing{Namespace: ns, Versions: []S3ListedVersion{}}
+	result := S3VersionListing{Namespace: ns, BucketLock: policy, Versions: []S3ListedVersion{}}
 	seenVersions := map[string]bool{}
 	seenCurrent := map[string]bool{}
 	seenCursors := map[string]bool{}
@@ -161,6 +190,11 @@ func (c *S3InventoryClient) ListVersions(parent context.Context, ns StorageNames
 		if !*output.IsTruncated {
 			if output.NextKeyMarker != nil || output.NextVersionIdMarker != nil {
 				return S3VersionListing{}, S3InventoryError("invalid_page")
+			}
+			for _, version := range result.Versions {
+				if !seenCurrent[version.Key] {
+					return S3VersionListing{}, S3InventoryError("invalid_version")
+				}
 			}
 			for i := range result.Versions {
 				if err := c.readProtection(ctx, ns.Bucket, &result.Versions[i]); err != nil {

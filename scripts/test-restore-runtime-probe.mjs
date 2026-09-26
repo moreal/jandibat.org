@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync, execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -63,6 +64,40 @@ function validate(value) {
 test('accepts a complete candidate dossier', () => {
   const result = validate(evidence());
   assert.equal(result.status, 0, result.stderr);
+});
+
+test('accepts a root-level Cockroach third-party notice as donor licensing evidence', () => {
+  const value = evidence();
+  const notice = { path: '/cockroach/THIRD-PARTY-NOTICES.txt', sha256: '4'.repeat(64) };
+  value.donor.licenses = [notice];
+  value.donor.nativeDecisions[2] = { ...notice, decision: 'exclude', reason: 'license-copied-separately' };
+  const result = validate(value);
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('donor notice inventory hashes conventional root-level files and skips unrelated text', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'jandibat-probe-licenses-'));
+  try {
+    const files = {
+      'cockroach/LICENSE': 'license bytes\n',
+      'cockroach/THIRD-PARTY-NOTICES.txt': 'third party notices\n',
+      'cockroach/NOTICES': 'additional notices\n',
+      'cockroach/README.md': 'unrelated instructions\n',
+      'licenses/MIT': 'MIT text\n',
+    };
+    for (const [name, content] of Object.entries(files)) {
+      const path = join(dir, name);
+      mkdirSync(join(path, '..'), { recursive: true });
+      writeFileSync(path, content);
+    }
+    const result = spawnSync('sh', [script, '--inspect-donor-licenses', dir], { cwd: root, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    const got = JSON.parse(result.stdout);
+    const expected = ['cockroach/LICENSE', 'cockroach/THIRD-PARTY-NOTICES.txt', 'cockroach/NOTICES', 'licenses/MIT']
+      .map(name => ({ path: `/${name}`, sha256: createHash('sha256').update(files[name]).digest('hex') }))
+      .sort((a, b) => a.path.localeCompare(b.path));
+    assert.deepEqual(got.sort((a, b) => a.path.localeCompare(b.path)), expected);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 for (const [name, mutate] of [

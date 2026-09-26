@@ -125,6 +125,18 @@ function inventory(rootfs, directories) {
     .filter(path => regular(rootfs, path)).map(path => hashPath(rootfs, path));
 }
 
+function isDonorLicensePath(path) {
+  if (/^\/(cockroach\/licenses|licenses)\//i.test(path) || /^\/usr\/share\/licenses\/cockroach[^/]*\//i.test(path)) return true;
+  if (!path.startsWith('/cockroach/')) return false;
+  const name = path.split('/').at(-1);
+  return /^(?:licen[sc]es?|copying|notices?|third[-_]party[-_](?:licen[sc]es?|notices?))(?:[._-].*)?$/i.test(name);
+}
+
+function donorLicenseInventory(rootfs, files) {
+  return files.filter(path => isDonorLicensePath(path) && regular(rootfs, path))
+    .map(path => hashPath(rootfs, path));
+}
+
 function validate(evidence, sourceSha) {
   assert.deepEqual(Object.keys(evidence).sort(), ['applets', 'baseLicenses', 'donor', 'ownership', 'packages', 'rpmdb', 'runtime', 'scan', 'schema', 'sourceSha', 'status', 'toolVersions', 'trust']);
   assert.equal(evidence.schema, 1);
@@ -145,8 +157,8 @@ function validate(evidence, sourceSha) {
     for (const item of evidence.donor[key]) required(absolute(item.path) && hex(item.sha256), `donor ${key} hash`);
   }
   required(evidence.donor.nativeFiles.some(item => item.path === '/cockroach/cockroach'), 'Cockroach executable');
-  required(evidence.donor.licenses.some(item => /^(\/cockroach\/|\/licenses\/|\/usr\/share\/licenses\/cockroach)/i.test(item.path)
-    && /\/(LICENSE|NOTICE|COPYING)([.-]|$)/i.test(item.path)), 'Cockroach license or notice');
+  required(evidence.donor.licenses.every(item => isDonorLicensePath(item.path)), 'Cockroach license paths');
+  required(evidence.donor.licenses.some(item => /(?:licen[sc]es?|copying|notices?|third[-_]party[-_](?:licen[sc]es?|notices?))(?:[._-].*)?$/i.test(item.path.split('/').at(-1))), 'Cockroach license or notice');
   const nativePaths = evidence.donor.nativeFiles.map(item => item.path);
   assert.equal(new Set(nativePaths).size, nativePaths.length, 'duplicate vendor native path');
   for (const path of nativePaths) required(path === '/cockroach/cockroach' || /^\/cockroach\/.+\.so(\.[A-Za-z0-9._-]+)?$/.test(path), 'vendor native path');
@@ -249,9 +261,8 @@ function probe() {
     const basePaths = [donorElf.interpreter, ...baseNeeded.map(name => runtimeFiles.find(path => path.endsWith(`/${name}`)))];
     required(basePaths.every(Boolean), 'base native dependency');
     const ownership = basePaths.map(path => ({ path, package: owner(runtimeRoot, path) }));
-    const licensePaths = donorFiles.filter(path => regular(donorRoot, path) &&
-      (/^\/(cockroach\/licenses|licenses)\//.test(path) ||
-       (/^(\/cockroach\/|\/usr\/share\/licenses\/cockroach)/i.test(path) && /\/(LICENSE|NOTICE|COPYING)([.-]|$)/i.test(path))));
+    const donorLicenses = donorLicenseInventory(donorRoot, donorFiles);
+    const licensePaths = donorLicenses.map(item => item.path);
     const nativeDecisions = vendorPaths.map(path => ({ ...hashPath(donorRoot, path),
       decision: nativePaths.includes(path) ? 'include' : 'exclude',
       reason: path === '/cockroach/cockroach' ? 'main-executable' : nativePaths.includes(path) ? 'vendor-elf-library'
@@ -264,7 +275,7 @@ function probe() {
       schema: 1, sourceSha, status: 'candidate',
       runtime: { source: runtimeSource, ...runtime, os: 'linux', architecture: 'amd64', osRelease: parseOsRelease(runtimeRoot) },
       donor: { source: donorSource, amd64Digest: donor.amd64Digest, ...donorElf, elfClosure, nativeFiles, nativeDecisions,
-        licenses: licensePaths.map(path => hashPath(donorRoot, path)) },
+        licenses: donorLicenses },
       packages: catalog.artifacts.filter(pkg => pkg.type === 'rpm').map(pkg => ({ name: pkg.name, version: pkg.version, type: 'rpm' })),
       rpmdb: inventory(runtimeRoot, ['usr/lib/sysimage/rpm', 'var/lib/rpm']), ownership,
       trust: ['/etc/ssl/certs/ca-certificates.crt', '/etc/pki/tls/certs/ca-bundle.crt', '/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem']
@@ -284,7 +295,16 @@ function probe() {
   } finally { rmSync(scratch, { recursive: true, force: true }); }
 }
 
-if (process.argv[2] === '--validate-evidence') {
+if (process.argv[2] === '--inspect-donor-licenses') {
+  try {
+    assert.equal(process.argv.length, 4);
+    const rootfs = resolve(process.argv[3]);
+    process.stdout.write(JSON.stringify(donorLicenseInventory(rootfs, pathsUnder(rootfs))) + '\n');
+  } catch {
+    process.stderr.write('restore runtime probe rejected: invalid donor inventory\n');
+    process.exitCode = 1;
+  }
+} else if (process.argv[2] === '--validate-evidence') {
   try {
     assert.equal(process.argv.length, 4);
     const sourceSha = command('git', ['rev-parse', 'HEAD']).stdout.trim();

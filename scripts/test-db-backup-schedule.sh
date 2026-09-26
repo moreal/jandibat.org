@@ -25,7 +25,18 @@ case "$sql" in
  *'SELECT current_user() AS actor;'*) printf 'actor\njandibat_backup_runner\n';;
  *'sha256(view_definition)'*)
   case "$sql" in *'USE defaultdb;'*'schedule_policy_v1'*) :;; *) exit 92;; esac
+  if [ "${TEST_AUDIT_MODE:-}" = wrong_schema ] &&
+   case "$sql" in *'SHOW GRANTS ON SCHEMA defaultdb.jandibat_backup_admin'*) true;; *) false;; esac; then
+   printf 'SET\nvalid\n0\n'
+   exit 0
+  fi
   printf 'SET\nvalid\n1\n';;
+ *'SELECT id FROM system.scheduled_jobs WHERE false;'*)
+  case "${TEST_AUDIT_MODE:-}" in
+   underlying_allowed) printf 'SET\nid\n'; exit 0;;
+   wrong_denial) printf 'secret-sentinel\nSQLSTATE: 28P01\n' >&2; exit 1;;
+   *) printf 'secret-sentinel\nSQLSTATE: 42501\n' >&2; exit 1;;
+  esac;;
  *'CREATE SCHEDULE IF NOT EXISTS '*)
   case "$sql" in
    *'BEGIN;'*'SELECT count(*) AS candidate_count FROM defaultdb.jandibat_backup_admin.schedule_policy_v1;'*"CREATE SCHEDULE IF NOT EXISTS jandibat_backup_schedule_v1"*"FOR BACKUP DATABASE jandibat INTO 'external://jandibat_backup_v1'"*"WITH revision_history"*"RECURRING '10 * * * *'"*"FULL BACKUP '10 0 * * *'"*"first_run = 'now'"*"on_execution_failure = 'retry'"*"on_previous_running = 'wait'"*'COMMIT;'*) :;;
@@ -109,6 +120,14 @@ accept 'fresh transaction and independent post-commit pair'
 [ "$(grep -c 'CREATE SCHEDULE IF NOT EXISTS' "$TEST_SQL_LOG")" -eq 1 ] || { echo 'FAIL: fresh create count' >&2; exit 1; }
 accept 'linked initial pair rerun'
 [ "$(grep -c 'CREATE SCHEDULE IF NOT EXISTS' "$TEST_SQL_LOG")" -eq 1 ] || { echo 'FAIL: rerun created a duplicate' >&2; exit 1; }
+for mode in wrong_schema underlying_allowed wrong_denial; do
+ TEST_AUDIT_MODE=$mode; export TEST_AUDIT_MODE
+ before=$(grep -c 'CREATE SCHEDULE IF NOT EXISTS' "$TEST_SQL_LOG" || true)
+ reject "$mode audit"
+ after=$(grep -c 'CREATE SCHEDULE IF NOT EXISTS' "$TEST_SQL_LOG" || true)
+ [ "$before" -eq "$after" ] || { echo "FAIL: $mode audit wrote schedule SQL" >&2; exit 1; }
+done
+unset TEST_AUDIT_MODE
 
 printf '%s\n' "$inc" "$(printf '%s\n' "$full" | sed "s/	$inc_id	/	$full_id	/")" >"$TEST_STATE"
 reject 'one-off native-sized full dependent link'

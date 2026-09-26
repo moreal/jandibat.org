@@ -92,13 +92,14 @@ CREATE SCHEMA defaultdb.jandibat_backup_admin AUTHORIZATION root;
 SET CLUSTER SETTING jobs.scheduler.enabled = false;
 CREATE USER jandibat_backup_runner;
 CREATE USER jandibat_backup_verifier;
+CREATE USER jandibat_backup_bootstrap;
 CREATE EXTERNAL CONNECTION jandibat_backup_v1 AS 'nodelocal://1/h2-view-probe';
 GRANT BACKUP ON DATABASE jandibat TO jandibat_backup_runner;
 GRANT SYSTEM EXTERNALIOIMPLICITACCESS TO jandibat_backup_runner;
 GRANT USAGE ON EXTERNAL CONNECTION jandibat_backup_v1 TO jandibat_backup_runner;
 SET allow_unsafe_internals = true;
 $view_sql
-GRANT USAGE ON SCHEMA defaultdb.jandibat_backup_admin TO jandibat_backup_runner, jandibat_backup_verifier;
+GRANT USAGE ON SCHEMA defaultdb.jandibat_backup_admin TO jandibat_backup_bootstrap, jandibat_backup_runner, jandibat_backup_verifier;
 GRANT SELECT ON TABLE defaultdb.jandibat_backup_admin.schedule_policy_v1 TO jandibat_backup_runner, jandibat_backup_verifier;"
 
 cat >"$test_dir/cockroach-wrapper" <<'WRAPPER'

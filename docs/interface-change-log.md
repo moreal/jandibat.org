@@ -32,7 +32,9 @@ API 계약 변경 시 이 파일과 GraphQL SDL(도메인) 또는 `openapi/jandi
 호환성: 내부 runner 스크립트가 위 `schedule_policy_v1` 투영만 읽도록 변경합니다.
 공개 GraphQL/OpenAPI 계약은 바뀌지 않습니다.
 
-- runner는 root 소유 뷰의 정의·소유권·SELECT 권한을 확인한 뒤, 10진 문자열 ID의
+- runner는 root 소유 뷰의 정의·소유권·정확한 뷰 SELECT 및 private schema USAGE
+  권한을 확인하고 `system.scheduled_jobs` 직접 SELECT가 42501로 거부되는지
+  확인한 뒤, 10진 문자열 ID의
   두 방향 연결, 고정 label/owner/cron/명령/상태/실패·중복 실행 정책과
   `metric_disabled=true`를 정확히 검사합니다. 첫 전체 백업 전의 연결된 증분
   PAUSED 상태만 허용하며 이를 복구 가능 증거로 다루지 않습니다.

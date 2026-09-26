@@ -48,9 +48,25 @@ SELECT IF(
   WHERE NOT ((grantee IN ('root','admin') AND privilege_type = 'ALL' AND is_grantable)
    OR (grantee IN ('jandibat_backup_runner','jandibat_backup_verifier')
     AND privilege_type = 'SELECT' AND NOT is_grantable))) = 0
- AND (SELECT count(*) FROM [SHOW GRANTS ON TABLE defaultdb.jandibat_backup_admin.schedule_policy_v1]) = 4,
+ AND (SELECT count(*) FROM [SHOW GRANTS ON TABLE defaultdb.jandibat_backup_admin.schedule_policy_v1]) = 4
+ AND (SELECT count(*) FROM [SHOW GRANTS ON SCHEMA defaultdb.jandibat_backup_admin]
+  WHERE NOT ((grantee IN ('root','admin') AND privilege_type = 'ALL' AND is_grantable)
+   OR (grantee IN ('jandibat_backup_bootstrap','jandibat_backup_runner','jandibat_backup_verifier')
+    AND privilege_type = 'USAGE' AND NOT is_grantable))) = 0
+ AND (SELECT count(*) FROM [SHOW GRANTS ON SCHEMA defaultdb.jandibat_backup_admin]) = 5,
  1, 0) AS valid;"
 awk 'NR==1 {if ($0!="SET") bad=1;next} NR==2 {if ($0!="valid") bad=1;next} NR==3 {if ($0!="1") bad=1;next} {bad=1} END {exit bad || NR!=3}' "$capture_dir/stdout" || invalid
+
+phase=raw-table-denial
+if printf '%s\n' 'SET allow_unsafe_internals = true; SELECT id FROM system.scheduled_jobs WHERE false;' |
+ (ulimit -f 128 || exit 1
+  COCKROACH_URL="$BACKUP_RUNNER_DATABASE_URL" \
+  "$sql_bin" sql --set=errexit=true --format=tsv) >"$capture_dir/stdout" 2>"$capture_dir/stderr"; then
+ invalid
+fi
+[ "$(wc -c <"$capture_dir/stdout")" -le 65536 ] || invalid
+[ "$(wc -c <"$capture_dir/stderr")" -le 65536 ] || invalid
+grep -qx 'SQLSTATE: 42501' "$capture_dir/stderr" || invalid
 
 view_sql='SELECT * FROM defaultdb.jandibat_backup_admin.schedule_policy_v1 ORDER BY schedule_id;'
 read_state() {

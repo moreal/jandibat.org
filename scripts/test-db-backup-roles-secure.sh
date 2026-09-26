@@ -7,6 +7,7 @@ if [ "$(uname -s)" != Linux ] || [ "$(uname -m)" != x86_64 ]; then
  echo 'SKIP 77: backup-role fixture requires native x86_64 Linux' >&2
  exit 77
 fi
+. scripts/backup-fixture-client.sh
 command -v docker >/dev/null 2>&1 || { echo 'Docker is required for backup-role fixture' >&2; exit 2; }
 command -v s3proxy >/dev/null 2>&1 || { echo 'Nix-pinned S3Proxy is required for backup-role fixture' >&2; exit 2; }
 command -v mc >/dev/null 2>&1 || { echo 'Nix-pinned S3 client is required for backup-role fixture' >&2; exit 2; }
@@ -18,40 +19,36 @@ fixture_id=$(basename "$fixture_dir")
 db="jandibat-backup-db-$fixture_id"
 db_created=false
 s3proxy_pid=
+audit_expected=false
 fail() { echo "RED: $1 (details redacted)" >&2; exit 1; }
-has_sentinel() {
- for sentinel in "${synthetic_secret:-}" "${synthetic_access:-}" "${rotated_secret:-}" "${keystore_password:-}" \
-  "${password_a:-}" "${password_b:-}" "${password_c:-}" "${password_d:-}" \
-  "${password_e:-}" "${password_f:-}" "${password_g:-}"; do
-  [ -n "$sentinel" ] || continue
-  if [ -d "$1" ]; then
-   grep -R -Fq "$sentinel" "$1" && return 0
-  else
-   grep -Fq "$sentinel" "$1" && return 0
-  fi
- done
- return 1
+scan_capture() {
+ target=$1
+ label=$2
+ fixture_has_sentinel "$target" && scan_result=0 || scan_result=$?
+ if [ "$scan_result" -eq 0 ]; then
+  echo "RED: $label exposed synthetic credential (details redacted)" >&2
+  status=1
+ elif [ "$scan_result" -ne 1 ]; then
+  echo "RED: $label inspection unavailable (details redacted)" >&2
+  status=1
+ fi
 }
 cleanup() {
  status=$?
  if [ "$db_created" = true ]; then
-  if docker cp "$db:/cockroach/cockroach-data/logs/." "$fixture_dir/db-logs/" >/dev/null 2>&1 &&
-   docker logs "$db" >"$fixture_dir/db-logs/container.log" 2>&1; then
-   if has_sentinel "$fixture_dir/db-logs"; then
-    echo 'RED: server-log sentinel exposed (details redacted)' >&2
-    status=1
-   fi
-  else
-   echo 'RED: server log inspection unavailable (details redacted)' >&2
+  fixture_quiesce_collect_logs "$db" "$fixture_dir/db-logs" || status=1
+  scan_capture "$fixture_dir/db-logs" 'server log'
+  if [ "$audit_expected" = true ] && ! fixture_audit_markers "$fixture_dir/db-logs"; then
+   echo 'RED: positive SQL/security/sensitive audit marker missing (details redacted)' >&2
    status=1
   fi
  fi
- if [ "$db_created" = true ] && ! fixture_stop_container "$db"; then status=1; fi
  if [ -n "$s3proxy_pid" ]; then kill "$s3proxy_pid" >/dev/null 2>&1 || :; wait "$s3proxy_pid" >/dev/null 2>&1 || :; fi
- if [ -f "$fixture_dir/s3proxy-output" ] && has_sentinel "$fixture_dir/s3proxy-output"; then
-  echo 'RED: synthetic storage log exposed credential (details redacted)' >&2
+ if [ -n "$s3proxy_pid" ] && [ ! -f "$fixture_dir/s3proxy-output" ]; then
+  echo 'RED: synthetic storage log unavailable (details redacted)' >&2
   status=1
  fi
+ if [ -f "$fixture_dir/s3proxy-output" ]; then scan_capture "$fixture_dir/s3proxy-output" 'synthetic storage log'; fi
  if [ -n "${synthetic_secret:-}" ]; then
   for output in "$fixture_dir"/mc-output "$fixture_dir"/probe "$fixture_dir"/users \
    "$fixture_dir"/roles "$fixture_dir"/system-grants "$fixture_dir"/db-grants \
@@ -60,14 +57,22 @@ cleanup() {
    "$fixture_dir"/check "$fixture_dir"/verify-output "$fixture_dir"/connection-grants \
    "$fixture_dir"/count "$fixture_dir"/identity-* "$fixture_dir"/negative-* \
    "$fixture_dir"/mutation-* "$fixture_dir"/fingerprint-* \
-   "$fixture_dir"/metadata-* "$fixture_dir"/defaultdb-grants; do
-   if [ -f "$output" ] && has_sentinel "$output"; then
-    echo 'RED: client output exposed synthetic credential (details redacted)' >&2
-    status=1
-   fi
+   "$fixture_dir"/metadata-* "$fixture_dir"/defaultdb-grants \
+   "$fixture_dir"/log-config-check "$fixture_dir"/sql-audit-setting; do
+   if [ -f "$output" ]; then scan_capture "$output" 'client output'; fi
   done
  fi
- rm -rf "$fixture_dir"
+ if [ "$db_created" = true ] && ! docker rm "$db" >/dev/null 2>&1; then
+  echo 'RED: secure fixture container removal incomplete (details redacted)' >&2
+  status=1
+ fi
+ if ! rm -rf "$fixture_dir"; then
+  echo 'RED: secure fixture private cleanup incomplete (details redacted)' >&2
+  status=1
+ fi
+ if [ "$status" -eq 0 ] && [ "$audit_expected" = true ]; then
+  echo 'secure backup roles, synthetic S3 connection, rerun and redaction checks passed'
+ fi
  exit "$status"
 }
 trap cleanup EXIT
@@ -102,6 +107,13 @@ export KEYSTORE_PASSWORD="$keystore_password"
 echo 'PHASE: PKCS#12 creation' >&2
 openssl pkcs12 -export -in "$fixture_dir/certs/node.crt" -inkey "$fixture_dir/certs/node.key" \
  -out "$fixture_dir/s3proxy.p12" -passout env:KEYSTORE_PASSWORD >/dev/null 2>&1 || fail 'PKCS#12 creation'
+echo 'PHASE: log config validation' >&2
+fixture_log_config_dir=$(pwd)/scripts/fixtures
+[ -r "$fixture_log_config_dir/cockroach-backup-logging.yaml" ] || fail 'log config validation'
+docker run --rm --mount "type=bind,src=$fixture_log_config_dir,dst=/fixture-logging,readonly" \
+ --entrypoint /cockroach/cockroach "$cockroach_image" debug check-log-config \
+ --log-config-file=/fixture-logging/cockroach-backup-logging.yaml \
+ >"$fixture_dir/log-config-check" 2>&1 || fail 'log config validation'
 
 synthetic_access=$(awk 'BEGIN { for (i=0;i<44;i++) printf "K" }')
 synthetic_secret=$(awk 'BEGIN { for (i=0;i<44;i++) printf "S" }')
@@ -127,7 +139,6 @@ FIXTURE_VERIFIER_URL=$(role_url jandibat_backup_verifier "$password_g")
 FIXTURE_PASS_A=$password_a FIXTURE_PASS_B=$password_b FIXTURE_PASS_C=$password_c FIXTURE_PASS_D=$password_d
 FIXTURE_PASS_E=$password_e FIXTURE_PASS_F=$password_f FIXTURE_PASS_G=$password_g
 FIXTURE_ACCESS=$synthetic_access FIXTURE_SECRET=$synthetic_secret
-. scripts/backup-fixture-client.sh
 fixture_write_env
 
 {
@@ -141,11 +152,13 @@ echo 'PHASE: S3Proxy startup' >&2
 s3proxy --properties "$fixture_dir/s3proxy.properties" >"$fixture_dir/s3proxy-output" 2>&1 &
 s3proxy_pid=$!
 echo 'PHASE: DB start' >&2
-docker run -d --rm --name "$db" --network host \
+docker run -d --name "$db" --network host \
  --env SSL_CERT_FILE=/certs/ca.crt \
  --mount "type=bind,src=$fixture_dir/certs,dst=/certs,readonly" \
+ --mount "type=bind,src=$fixture_log_config_dir,dst=/fixture-logging,readonly" \
  --entrypoint /cockroach/cockroach "$cockroach_image" start-single-node \
- --certs-dir=/certs --listen-addr=127.0.0.1:26259 --http-addr=127.0.0.1:8089 >/dev/null 2>&1 || fail 'DB start'
+ --certs-dir=/certs --log-config-file=/fixture-logging/cockroach-backup-logging.yaml \
+ --listen-addr=127.0.0.1:26259 --http-addr=127.0.0.1:8089 >/dev/null 2>&1 || fail 'DB start'
 db_created=true
 
 client() { fixture_client "$@"; }
@@ -185,6 +198,8 @@ for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
  sleep 1
 done
 [ "$ready" = true ] || fail 'secure Cockroach node did not become ready'
+sql_as root 'SET CLUSTER SETTING sql.log.all_statements.enabled = true;' \
+ >"$fixture_dir/sql-audit-setting" 2>&1 || fail 'SQL statement audit setting'
 bucket_ready=false
 export MC_HOST_fixture="https://$synthetic_access:$synthetic_secret@127.0.0.1:9009"
 export SSL_CERT_FILE="$fixture_dir/certs/ca.crt"
@@ -337,4 +352,4 @@ sql_as root "SELECT count(*) FROM [SHOW EXTERNAL CONNECTIONS] WHERE connection_n
 
 # Never stream raw SQL errors into CI. The EXIT trap checks all output even
 # when an earlier RED assertion fails.
-echo 'secure backup roles, synthetic S3 connection, rerun and redaction checks passed'
+audit_expected=true

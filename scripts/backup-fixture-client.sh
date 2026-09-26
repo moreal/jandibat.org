@@ -54,6 +54,82 @@ fixture_stop_container() {
  return 1
 }
 
+fixture_percent_encode() {
+ # Encode bytes without placing a credential in a process argument.
+ printf '%s' "$1" | od -An -tx1 | awk '
+  { for (i=1; i<=NF; i++) {
+      h=tolower($i); n=(index("0123456789abcdef",substr(h,1,1))-1)*16+index("0123456789abcdef",substr(h,2,1))-1
+      if ((n>=48 && n<=57) || (n>=65 && n<=90) || (n>=97 && n<=122) || n==45 || n==46 || n==95 || n==126)
+        printf "%c", n
+      else printf "%%%s", toupper(h)
+    }
+  }
+ '
+}
+
+fixture_has_sentinel() {
+ target=$1
+ [ -e "$target" ] || return 2
+ for sentinel in "${synthetic_secret:-}" "${synthetic_access:-}" "${rotated_secret:-}" "${keystore_password:-}" \
+  "${password_a:-}" "${password_b:-}" "${password_c:-}" "${password_d:-}" \
+  "${password_e:-}" "${password_f:-}" "${password_g:-}"; do
+  [ -n "$sentinel" ] || continue
+  encoded=$(fixture_percent_encode "$sentinel") || return 2
+  for candidate in "$sentinel" "$encoded"; do
+   if [ -d "$target" ]; then
+    grep -R -Fq "$candidate" "$target"
+   else
+    grep -Fq "$candidate" "$target"
+   fi
+   result=$?
+   [ "$result" -eq 0 ] && return 0
+   [ "$result" -eq 1 ] || return 2
+  done
+ done
+ return 1
+}
+
+fixture_quiesce_collect_logs() {
+ name=$1
+ log_dir=$2
+ result=0
+ docker stop "$name" >/dev/null 2>&1 || result=1
+ docker wait "$name" >/dev/null 2>&1 || result=1
+ docker cp "$name:/cockroach/cockroach-data/logs/." "$log_dir/" >/dev/null 2>&1 || result=1
+ docker logs "$name" >"$log_dir/container.log" 2>&1 || result=1
+ server_log=$(find "$log_dir" -type f -name 'cockroach*' -print -quit 2>/dev/null) || result=1
+ [ -n "$server_log" ] || result=1
+ if [ "$result" -ne 0 ]; then
+  echo 'RED: secure fixture final log collection or cleanup incomplete (details redacted)' >&2
+ fi
+ return "$result"
+}
+
+fixture_audit_markers() {
+ log_dir=$1
+ for specification in \
+  'cockroach-sql-exec.*|CREATE EXTERNAL CONNECTION' \
+  'cockroach-security.*|USER_ADMIN|PRIVILEGES' \
+  'cockroach-sql-audit.*|SENSITIVE_ACCESS|42501'; do
+  pattern=${specification%%|*}
+  markers=${specification#*|}
+  found=false
+  for file in "$log_dir"/$pattern; do
+   [ -f "$file" ] || continue
+   if [ "$pattern" = 'cockroach-sql-audit.*' ]; then
+    grep -Fq 'SENSITIVE_ACCESS' "$file" &&
+     grep -Eq '42501|denied|insufficient privilege' "$file" && found=true
+   elif [ "$pattern" = 'cockroach-security.*' ]; then
+    grep -Eq 'USER_ADMIN|PRIVILEGES' "$file" && found=true
+   else
+    grep -Fq "$markers" "$file" && found=true
+   fi
+  done
+  [ "$found" = true ] || return 1
+ done
+ return 0
+}
+
 fixture_check_system_grants() {
  awk -F '\t' '
   NR==1 { if ($1!="grantee" || $2!="privilege_type" || $3!="is_grantable") bad=1; next }

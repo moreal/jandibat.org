@@ -1,0 +1,27 @@
+file-defaults:
+  redact: false
+  buffered-writes: false
+sinks:
+  file-groups:
+    default:
+      channels:
+        INFO: "all except [OPS, SENSITIVE_ACCESS, USER_ADMIN, PRIVILEGES, SESSIONS, SQL_EXEC]"
+    ops:
+      channels:
+        WARNING: [OPS]
+    sql-audit:
+      channels: [SENSITIVE_ACCESS]
+      auditable: true
+    security:
+      channels: [USER_ADMIN, PRIVILEGES]
+      auditable: true
+    sql-auth:
+      channels: [SESSIONS]
+      auditable: true
+    sql-exec:
+      channels: [SQL_EXEC]
+      auditable: true
+  stderr:
+    channels: "all except OPS"
+    filter: INFO
+    redact: false

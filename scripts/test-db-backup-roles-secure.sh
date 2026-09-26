@@ -84,12 +84,12 @@ docker image inspect "$cockroach_image" >/dev/null 2>&1 ||
  docker pull "$cockroach_image" >/dev/null 2>&1 || fail 'Cockroach image availability'
 
 echo 'PHASE: certificate generation' >&2
-docker run --rm --mount "type=bind,src=$fixture_dir/certs,dst=/certs" \
+docker run --rm --user "$(id -u):$(id -g)" --mount "type=bind,src=$fixture_dir/certs,dst=/certs" \
  --entrypoint /cockroach/cockroach "$cockroach_image" cert create-ca --certs-dir=/certs --ca-key=/certs/ca.key >/dev/null 2>&1 || fail 'certificate generation'
-docker run --rm --mount "type=bind,src=$fixture_dir/certs,dst=/certs" \
+docker run --rm --user "$(id -u):$(id -g)" --mount "type=bind,src=$fixture_dir/certs,dst=/certs" \
  --entrypoint /cockroach/cockroach "$cockroach_image" cert create-node localhost 127.0.0.1 \
  --certs-dir=/certs --ca-key=/certs/ca.key >/dev/null 2>&1 || fail 'certificate generation'
-docker run --rm --mount "type=bind,src=$fixture_dir/certs,dst=/certs" \
+docker run --rm --user "$(id -u):$(id -g)" --mount "type=bind,src=$fixture_dir/certs,dst=/certs" \
  --entrypoint /cockroach/cockroach "$cockroach_image" cert create-client root \
  --certs-dir=/certs --ca-key=/certs/ca.key >/dev/null 2>&1 || fail 'certificate generation'
 echo 'PHASE: host node key readability' >&2

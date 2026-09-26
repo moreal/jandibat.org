@@ -114,6 +114,60 @@ exit 0
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('certificate containers use the host identity so the node key is readable', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'backup-fixture-cert-owner-'));
+  try {
+    const fake = {
+      uname: '#!/bin/sh\ncase "$1" in -s) echo Linux;; -m) echo x86_64;; esac\n',
+      docker: `#!/bin/sh
+case "$*" in
+  *"cert create-ca"*|*"cert create-node"*|*"cert create-client"*)
+    for arg do
+      case "$arg" in
+        type=bind,src=*,dst=/certs) cert_dir=\${arg#type=bind,src=}; cert_dir=\${cert_dir%,dst=/certs};;
+        --user) expect_user=true;;
+        "$TEST_HOST_ID") [ "\${expect_user:-}" = true ] && host_user=true;;
+      esac
+    done
+    [ "\${host_user:-}" = true ] || exit 0
+    case "$*" in
+      *"cert create-ca"*) printf 'ca' >"$cert_dir/ca.crt";;
+      *"cert create-node"*) printf 'node' >"$cert_dir/node.crt"; printf 'key' >"$cert_dir/node.key";;
+      *"cert create-client"*) printf 'client' >"$cert_dir/client.root.crt";;
+    esac
+    printf '%s\n' "$*" >>"$TEST_CERT_RUNS"
+    exit 0;;
+  *"start-single-node"*) exit 99;;
+esac
+exit 0
+`,
+      s3proxy: '#!/bin/sh\nexit 0\n',
+      mc: '#!/bin/sh\nexit 0\n',
+      openssl: '#!/bin/sh\nexit 0\n',
+    };
+    for (const [name, source] of Object.entries(fake)) {
+      writeFileSync(join(dir, name), source);
+      chmodSync(join(dir, name), 0o700);
+    }
+    const hostId = `${process.getuid()}:${process.getgid()}`;
+    const certRuns = join(dir, 'cert-runs');
+    const result = spawnSync('sh', ['scripts/test-db-backup-roles-secure.sh'], {
+      encoding: 'utf8', env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, TEST_HOST_ID: hostId, TEST_CERT_RUNS: certRuns },
+    });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /RED: DB start \(details redacted\)/);
+    assert.deepEqual([...result.stderr.matchAll(/PHASE: ([^\n]+)/g)].map((match) => match[1]), [
+      'Cockroach image availability', 'certificate generation', 'host node key readability',
+      'CA certificate copy', 'PKCS#12 creation', 'S3Proxy startup', 'DB start',
+    ]);
+    const runs = readFileSync(certRuns, 'utf8').trim().split('\n');
+    assert.equal(runs.length, 3);
+    for (const run of runs) assert.equal(run.split(' ').filter((arg) => arg === '--user').length, 1);
+    assert.doesNotMatch(result.stderr, /backup-fixture-cert-owner-|synthetic-secret|\/certs\/|\/ca-only\//);
+    assert.equal(result.stdout, '');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('bootstrap, runner and verifier have no root URL or private key', () => {
   const dir = mkdtempSync(join(tmpdir(), 'backup-fixture-client-'));
   try {

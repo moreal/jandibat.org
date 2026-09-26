@@ -52,11 +52,17 @@ func run() error {
 	return nil
 }
 
-// runMode permits only the two verification modes. The checker and listener
+// runMode permits verification and the offline retention diagnostic. The checker and listener
 // arguments are test seams; production always uses the fixed packaged script
 // and opens its own internal listener.
 func runMode(ctx context.Context, args []string, getenv func(string) string, checker backup.Checker, scheduleChecker backup.ScheduleChecker, supplied net.Listener, out io.Writer) error {
-	if len(args) != 1 || (args[0] != "check-once" && args[0] != "run-verifier") || getenv == nil {
+	if len(args) != 1 || getenv == nil {
+		return errors.New("invalid backup-tools mode")
+	}
+	if args[0] == "plan-retention" {
+		return runPlanRetention(os.Stdin, out, time.Now().UTC())
+	}
+	if args[0] != "check-once" && args[0] != "run-verifier" {
 		return errors.New("invalid backup-tools mode")
 	}
 	path := getenv("BACKUP_VERIFIED_RECORD_FILE")

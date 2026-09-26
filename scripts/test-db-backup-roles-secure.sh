@@ -7,6 +7,18 @@ if [ "$(uname -s)" != Linux ] || [ "$(uname -m)" != x86_64 ]; then
  echo 'SKIP 77: backup-role fixture requires native x86_64 Linux' >&2
  exit 77
 fi
+# CI annotations use only these fixed categories. Never pass failure labels or
+# captured tool output to the workflow command.
+ci_phase=setup
+annotate_failure() {
+ [ "${GITHUB_ACTIONS:-}" = true ] || return 0
+ case "$ci_phase" in
+  setup|cockroach-image|certificate-generation|host-node-key|ca-certificate-copy|pkcs12-creation|log-config-validation|s3proxy-startup|db-start|role-and-connection-checks|cleanup) ;;
+  *) ci_phase=setup ;;
+ esac
+ printf '::error title=Secure backup fixture failure::phase=%s\n' "$ci_phase" >&2
+}
+trap 'exit_status=$?; [ "$exit_status" -eq 0 ] || annotate_failure' EXIT
 . scripts/backup-fixture-client.sh
 command -v docker >/dev/null 2>&1 || { echo 'Docker is required for backup-role fixture' >&2; exit 2; }
 command -v s3proxy >/dev/null 2>&1 || { echo 'Nix-pinned S3Proxy is required for backup-role fixture' >&2; exit 2; }
@@ -35,6 +47,7 @@ scan_capture() {
 }
 cleanup() {
  status=$?
+ initial_status=$status
  if [ "$db_creation_attempted" = true ]; then
   fixture_quiesce_collect_logs "$db" "$fixture_dir/db-logs" || status=1
   scan_capture "$fixture_dir/db-logs" 'server log'
@@ -77,6 +90,10 @@ cleanup() {
  if [ "$status" -eq 0 ] && [ "$audit_expected" = true ]; then
   echo 'secure backup roles, synthetic S3 connection, rerun and redaction checks passed'
  fi
+ if [ "$status" -ne 0 ]; then
+  [ "$initial_status" -ne 0 ] || ci_phase=cleanup
+  annotate_failure
+ fi
  exit "$status"
 }
 trap cleanup EXIT
@@ -89,10 +106,12 @@ for script in db-bootstrap-roles.sh db-bootstrap-backup-connection.sh db-verify-
 done
 
 # The only container image is the repository-pinned secure Cockroach release.
+ci_phase=cockroach-image
 echo 'PHASE: Cockroach image availability' >&2
 docker image inspect "$cockroach_image" >/dev/null 2>&1 ||
  docker pull "$cockroach_image" >/dev/null 2>&1 || fail 'Cockroach image availability'
 
+ci_phase=certificate-generation
 echo 'PHASE: certificate generation' >&2
 docker run --rm --user "$(id -u):$(id -g)" --mount "type=bind,src=$fixture_dir/certs,dst=/certs" \
  --entrypoint /cockroach/cockroach "$cockroach_image" cert create-ca --certs-dir=/certs --ca-key=/certs/ca.key >/dev/null 2>&1 || fail 'certificate generation'
@@ -102,15 +121,19 @@ docker run --rm --user "$(id -u):$(id -g)" --mount "type=bind,src=$fixture_dir/c
 docker run --rm --user "$(id -u):$(id -g)" --mount "type=bind,src=$fixture_dir/certs,dst=/certs" \
  --entrypoint /cockroach/cockroach "$cockroach_image" cert create-client root \
  --certs-dir=/certs --ca-key=/certs/ca.key >/dev/null 2>&1 || fail 'certificate generation'
+ci_phase=host-node-key
 echo 'PHASE: host node key readability' >&2
 [ -r "$fixture_dir/certs/node.key" ] || fail 'host node key unreadable'
+ci_phase=ca-certificate-copy
 echo 'PHASE: CA certificate copy' >&2
 cp "$fixture_dir/certs/ca.crt" "$fixture_dir/ca-only/ca.crt" >/dev/null 2>&1 || fail 'CA certificate copy'
 keystore_password=$(awk 'BEGIN { for (i=0;i<44;i++) printf "P" }')
 export KEYSTORE_PASSWORD="$keystore_password"
+ci_phase=pkcs12-creation
 echo 'PHASE: PKCS#12 creation' >&2
 openssl pkcs12 -export -in "$fixture_dir/certs/node.crt" -inkey "$fixture_dir/certs/node.key" \
  -out "$fixture_dir/s3proxy.p12" -passout env:KEYSTORE_PASSWORD >/dev/null 2>&1 || fail 'PKCS#12 creation'
+ci_phase=log-config-validation
 echo 'PHASE: log config validation' >&2
 fixture_log_config_dir=$(pwd)/scripts/fixtures
 [ -r "$fixture_log_config_dir/cockroach-backup-logging.yaml" ] || fail 'log config validation'
@@ -153,9 +176,11 @@ fixture_write_env
  printf 's3proxy.keystore-path=%s\ns3proxy.keystore-password=%s\n' "$fixture_dir/s3proxy.p12" "$keystore_password"
  printf 'jclouds.provider=filesystem\njclouds.filesystem.basedir=%s\n' "$fixture_dir/s3-data"
 } >"$fixture_dir/s3proxy.properties"
+ci_phase=s3proxy-startup
 echo 'PHASE: S3Proxy startup' >&2
 s3proxy --properties "$fixture_dir/s3proxy.properties" >"$fixture_dir/s3proxy-output" 2>&1 &
 s3proxy_pid=$!
+ci_phase=db-start
 echo 'PHASE: DB start' >&2
 db_creation_attempted=true
 docker run -d --name "$db" --network host \
@@ -165,6 +190,7 @@ docker run -d --name "$db" --network host \
  --entrypoint /cockroach/cockroach "$cockroach_image" start-single-node \
  --certs-dir=/certs --log-config-file=/fixture-logging/cockroach-backup-logging.yaml \
  --listen-addr=127.0.0.1:26259 --http-addr=127.0.0.1:8089 >/dev/null 2>&1 || fail 'DB start'
+ci_phase=role-and-connection-checks
 
 client() { fixture_client "$@"; }
 sql_as() {

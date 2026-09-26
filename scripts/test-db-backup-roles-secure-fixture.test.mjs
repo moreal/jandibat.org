@@ -91,11 +91,12 @@ test('non-Linux host reports a non-passing skip without contacting Docker', () =
     chmodSync(join(dir, 'uname'), 0o700);
     chmodSync(join(dir, 'docker'), 0o700);
     const result = spawnSync('sh', ['scripts/test-db-backup-roles-secure.sh'], {
-      encoding: 'utf8', env: { ...process.env, PATH: `${dir}:${process.env.PATH}` },
+      encoding: 'utf8', env: { ...process.env, GITHUB_ACTIONS: 'true', PATH: `${dir}:${process.env.PATH}` },
     });
     assert.equal(result.status, 77);
     assert.match(result.stderr, /SKIP 77/);
     assert.doesNotMatch(result.stderr, /docker-invoked/);
+    assert.doesNotMatch(result.stderr, /::error/);
     assert.equal(result.stdout, '');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
@@ -106,6 +107,7 @@ test('fixture startup failures report ordered fixed phases without leaking detai
     const fake = {
       uname: '#!/bin/sh\ncase "$1" in -s) echo Linux;; -m) echo x86_64;; esac\n',
       docker: `#!/bin/sh
+if [ "$TEST_FAILURE" = db-cleanup ] && [ "$1" = rm ]; then exit 99; fi
 if [ "$TEST_FAILURE" = image ]; then
   [ "$1 $2" = 'image inspect' ] && exit 1
   if [ "$1" = pull ]; then echo 'synthetic-secret /synthetic/private/path' >&2; exit 99; fi
@@ -145,24 +147,91 @@ exit 0
     }
     const effective = join(dir, 'effective.yaml');
     writeFileSync(effective, fakeEffectiveLogConfig);
-    for (const [failure, reason, phases] of [
-      ['image', 'Cockroach image availability', ['Cockroach image availability']],
-      ['certificate', 'certificate generation', ['Cockroach image availability', 'certificate generation']],
-      ['key', 'host node key unreadable', ['Cockroach image availability', 'certificate generation', 'host node key readability']],
-      ['ca', 'CA certificate copy', ['Cockroach image availability', 'certificate generation', 'host node key readability', 'CA certificate copy']],
-      ['pkcs', 'PKCS#12 creation', ['Cockroach image availability', 'certificate generation', 'host node key readability', 'CA certificate copy', 'PKCS#12 creation']],
-      ['log', 'log config validation', ['Cockroach image availability', 'certificate generation', 'host node key readability', 'CA certificate copy', 'PKCS#12 creation', 'log config validation']],
-      ['db', 'DB start', ['Cockroach image availability', 'certificate generation', 'host node key readability', 'CA certificate copy', 'PKCS#12 creation', 'log config validation', 'S3Proxy startup', 'DB start']],
+    for (const [failure, reason, phases, annotationPhase] of [
+      ['image', 'Cockroach image availability', ['Cockroach image availability'], 'cockroach-image'],
+      ['certificate', 'certificate generation', ['Cockroach image availability', 'certificate generation'], 'certificate-generation'],
+      ['key', 'host node key unreadable', ['Cockroach image availability', 'certificate generation', 'host node key readability'], 'host-node-key'],
+      ['ca', 'CA certificate copy', ['Cockroach image availability', 'certificate generation', 'host node key readability', 'CA certificate copy'], 'ca-certificate-copy'],
+      ['pkcs', 'PKCS#12 creation', ['Cockroach image availability', 'certificate generation', 'host node key readability', 'CA certificate copy', 'PKCS#12 creation'], 'pkcs12-creation'],
+      ['log', 'log config validation', ['Cockroach image availability', 'certificate generation', 'host node key readability', 'CA certificate copy', 'PKCS#12 creation', 'log config validation'], 'log-config-validation'],
+      ['db', 'DB start', ['Cockroach image availability', 'certificate generation', 'host node key readability', 'CA certificate copy', 'PKCS#12 creation', 'log config validation', 'S3Proxy startup', 'DB start'], 'db-start'],
+      ['db-cleanup', 'DB start', ['Cockroach image availability', 'certificate generation', 'host node key readability', 'CA certificate copy', 'PKCS#12 creation', 'log config validation', 'S3Proxy startup', 'DB start'], 'db-start'],
     ]) {
       const result = spawnSync('sh', ['scripts/test-db-backup-roles-secure.sh'], {
-        encoding: 'utf8', env: { ...process.env, TEST_FAILURE: failure, TEST_EFFECTIVE: effective, PATH: `${dir}:${process.env.PATH}` },
+        encoding: 'utf8', env: { ...process.env, GITHUB_ACTIONS: 'true', TEST_FAILURE: failure, TEST_EFFECTIVE: effective, PATH: `${dir}:${process.env.PATH}` },
       });
       assert.equal(result.status, 1, failure);
       assert.ok(result.stderr.includes(`RED: ${reason} (details redacted)`), failure);
       assert.deepEqual([...result.stderr.matchAll(/PHASE: ([^\n]+)/g)].map((match) => match[1]), phases, failure);
+      assert.deepEqual([...result.stderr.matchAll(/^::error[^\n]*$/gm)].map((match) => match[0]), [
+        `::error title=Secure backup fixture failure::phase=${annotationPhase}`,
+      ], failure);
       assert.doesNotMatch(result.stderr, /synthetic-secret|\/synthetic\/private\/path|\/certs\/|\/ca-only\/|backup-fixture-key-/, failure);
       assert.equal(result.stdout, '', failure);
     }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('unexpected setup exit has one fixed CI annotation', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'backup-fixture-unexpected-'));
+  try {
+    const fake = {
+      uname: '#!/bin/sh\ncase "$1" in -s) echo Linux;; -m) echo x86_64;; esac\n',
+      docker: '#!/bin/sh\nexit 0\n',
+      s3proxy: '#!/bin/sh\nexit 0\n',
+      mc: '#!/bin/sh\nexit 0\n',
+      openssl: '#!/bin/sh\nexit 0\n',
+      mkdir: '#!/bin/sh\nexit 99\n',
+    };
+    for (const [name, source] of Object.entries(fake)) {
+      writeFileSync(join(dir, name), source);
+      chmodSync(join(dir, name), 0o700);
+    }
+    const result = spawnSync('sh', ['scripts/test-db-backup-roles-secure.sh'], {
+      encoding: 'utf8', env: { ...process.env, GITHUB_ACTIONS: 'true', PATH: `${dir}:${process.env.PATH}` },
+    });
+    assert.equal(result.status, 99);
+    assert.deepEqual([...result.stderr.matchAll(/^::error[^\n]*$/gm)].map((match) => match[0]), [
+      '::error title=Secure backup fixture failure::phase=setup',
+    ]);
+    assert.doesNotMatch(result.stderr, /backup-fixture-unexpected-/);
+    assert.equal(result.stdout, '');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('cleanup annotates its own failure and leaves successful CI runs unannotated', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'backup-fixture-cleanup-annotation-'));
+  try {
+    for (const [name, source] of Object.entries({
+      uname: '#!/bin/sh\ncase "$1" in -s) echo Linux;; -m) echo x86_64;; esac\n',
+      docker: '#!/bin/sh\nexit 0\n',
+      s3proxy: '#!/bin/sh\nexit 0\n',
+      mc: '#!/bin/sh\nexit 0\n',
+      openssl: '#!/bin/sh\nexit 0\n',
+      rm: '#!/bin/sh\n/bin/rm "$@"\n[ "${TEST_CLEANUP_FAILURE:-}" = true ] && exit 1\nexit 0\n',
+    })) {
+      writeFileSync(join(dir, name), source);
+      chmodSync(join(dir, name), 0o700);
+    }
+    const fixture = readFileSync('scripts/test-db-backup-roles-secure.sh', 'utf8');
+    const cleanupTrap = '\ntrap cleanup EXIT\n';
+    assert.ok(fixture.includes(cleanupTrap), 'fixture cleanup trap missing');
+    const setupAndCleanup = `${fixture.split(cleanupTrap)[0]}${cleanupTrap}\nexit 0\n`;
+    const run = (cleanupFailure) => spawnSync('sh', ['-c', setupAndCleanup], {
+      encoding: 'utf8', env: { ...process.env, GITHUB_ACTIONS: 'true', TEST_CLEANUP_FAILURE: cleanupFailure ? 'true' : 'false', PATH: `${dir}:${process.env.PATH}` },
+    });
+    const failed = run(true);
+    assert.equal(failed.status, 1);
+    assert.match(failed.stderr, /RED: secure fixture private cleanup incomplete \(details redacted\)/);
+    assert.deepEqual([...failed.stderr.matchAll(/^::error[^\n]*$/gm)].map((match) => match[0]), [
+      '::error title=Secure backup fixture failure::phase=cleanup',
+    ]);
+    assert.doesNotMatch(failed.stderr, /backup-fixture-cleanup-annotation-/);
+    assert.equal(failed.stdout, '');
+    const successful = run(false);
+    assert.equal(successful.status, 0, successful.stderr);
+    assert.doesNotMatch(successful.stderr, /::error/);
+    assert.equal(successful.stdout, '');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

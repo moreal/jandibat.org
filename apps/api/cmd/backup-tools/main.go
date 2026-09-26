@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -72,7 +73,7 @@ func runMode(ctx context.Context, args []string, getenv func(string) string, che
 		if _, err := os.Stat(chainScriptPath); err != nil {
 			return errors.New("chain checker unavailable")
 		}
-		checker = scriptChecker(chainScriptPath, getenv)
+		checker = scriptChecker(chainScriptPath, path, getenv)
 	}
 	if args[0] == "check-once" {
 		if err := state.Check(ctx, checker); err != nil {
@@ -126,7 +127,7 @@ func runMode(ctx context.Context, args []string, getenv func(string) string, che
 	}
 }
 
-func scriptChecker(path string, getenv func(string) string) backup.Checker {
+func scriptChecker(path, recordPath string, getenv func(string) string) backup.Checker {
 	return func(ctx context.Context) (backup.CheckResult, error) {
 		checkCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		defer cancel()
@@ -139,6 +140,7 @@ func scriptChecker(path string, getenv func(string) string) backup.Checker {
 		cmd.Env = []string{
 			"PATH=" + os.Getenv("PATH"),
 			"BACKUP_VERIFIER_DATABASE_URL=" + getenv("BACKUP_VERIFIER_DATABASE_URL"),
+			"TMPDIR=" + filepath.Dir(recordPath),
 		}
 		if client := getenv("COCKROACH_SQL_BIN"); client != "" {
 			cmd.Env = append(cmd.Env, "COCKROACH_SQL_BIN="+client)

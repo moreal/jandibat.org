@@ -156,7 +156,7 @@ func TestScriptCheckerBoundsOutputAndRedactsFailure(t *testing.T) {
 			if err := os.WriteFile(path, []byte(tc.script), 0600); err != nil {
 				t.Fatal(err)
 			}
-			_, err := scriptChecker(path, getenv)(context.Background())
+			_, err := scriptChecker(path, filepath.Join(dir, "verified.json"), getenv)(context.Background())
 			if err == nil || strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "postgresql://") {
 				t.Fatalf("unsafe script result: %v", err)
 			}
@@ -172,8 +172,37 @@ func TestScriptCheckerStopsOnContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	started := time.Now()
-	_, err := scriptChecker(path, func(string) string { return "" })(ctx)
+	_, err := scriptChecker(path, filepath.Join(t.TempDir(), "verified.json"), func(string) string { return "" })(ctx)
 	if err == nil || time.Since(started) > 2*time.Second {
 		t.Fatalf("checker ignored cancellation: %v", err)
+	}
+}
+
+func TestScriptCheckerUsesRecordDirectoryForPrivateTemporaryFiles(t *testing.T) {
+	recordDir := t.TempDir()
+	forbiddenTemp := filepath.Join(t.TempDir(), "unavailable")
+	t.Setenv("TMPDIR", forbiddenTemp)
+	script := filepath.Join(t.TempDir(), "needs-private-tmp.sh")
+	body := `set -eu
+scratch=$(mktemp -d "$TMPDIR/jandibat-chain-capture.XXXXXX")
+rmdir "$scratch"
+printf '%s\n' '{"schemaVersion":1,"chainId":"chain_1","collectionId":"jandibat_backup_v1","fullScheduleId":"9223372036854775807","incrementalScheduleId":"9223372036854775806","checkedAt":"2026-09-25T11:01:00Z","recoveryTimestamp":"2026-09-25T11:00:00Z","fileChecked":true,"passed":true}'
+`
+	if err := os.WriteFile(script, []byte(body), 0600); err != nil {
+		t.Fatal(err)
+	}
+	getenv := func(key string) string {
+		switch key {
+		case "BACKUP_VERIFIER_DATABASE_URL":
+			return "postgresql://secret@fixture/db"
+		case "TMPDIR":
+			return forbiddenTemp
+		default:
+			return ""
+		}
+	}
+	got, err := scriptChecker(script, filepath.Join(recordDir, "verified.json"), getenv)(context.Background())
+	if err != nil || got.ChainID != "chain_1" {
+		t.Fatalf("private temporary directory not available to checker: %v", err)
 	}
 }

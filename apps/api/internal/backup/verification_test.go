@@ -15,6 +15,47 @@ import (
 
 const testToken = "0123456789abcdef0123456789abcdef"
 
+func checkedResult(chain, collection string, recovery, checked time.Time) CheckResult {
+	return CheckResult{ChainID: chain, CollectionID: collection,
+		FullScheduleID: "9223372036854775807", IncrementalScheduleID: "9223372036854775806",
+		RecoveryTimestamp: recovery, CheckedAt: checked, FileChecked: true, Passed: true}
+}
+
+func TestVerificationRequiresLinkedScheduleProvenanceAndFreshCheckTime(t *testing.T) {
+	now := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
+	path := filepath.Join(t.TempDir(), "verified.json")
+	state, err := NewVerificationState(path, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid := checkedResult("chain_1", "jandibat_backup_v1", now.Add(-time.Minute), now)
+	for _, mutate := range []func(*CheckResult){
+		func(r *CheckResult) { r.FullScheduleID = "" },
+		func(r *CheckResult) { r.IncrementalScheduleID = "not-a-decimal" },
+		func(r *CheckResult) { r.IncrementalScheduleID = r.FullScheduleID },
+		func(r *CheckResult) { r.CheckedAt = now.Add(-16 * time.Minute) },
+		func(r *CheckResult) { r.Passed = false },
+	} {
+		result := valid
+		mutate(&result)
+		if err := state.Check(context.Background(), func(context.Context) (CheckResult, error) { return result, nil }); err == nil || state.Healthy() {
+			t.Fatal("unlinked, stale or failed proof became healthy")
+		}
+	}
+	if err := state.Check(context.Background(), func(context.Context) (CheckResult, error) { return valid, nil }); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{`"collectionId":"jandibat_backup_v1"`, `"linkedScheduleIds":["9223372036854775807","9223372036854775806"]`, `"chainId":"chain_1"`, `"checkedAt":"2026-09-25T12:00:00Z"`, `"verifiedRecoveryAt":"2026-09-25T11:59:00Z"`, `"outcome":"pass"`} {
+		if !strings.Contains(string(data), field) {
+			t.Fatalf("safe record missing %s", field)
+		}
+	}
+}
+
 func TestVerificationKeepsDurableRecoveryWatermarkAcrossFailedChecks(t *testing.T) {
 	now := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
 	clock := func() time.Time { return now }
@@ -24,7 +65,7 @@ func TestVerificationKeepsDurableRecoveryWatermarkAcrossFailedChecks(t *testing.
 		t.Fatal(err)
 	}
 	verified := now.Add(-10 * time.Minute)
-	good := CheckResult{ChainID: "chain_1", CollectionID: "collection_1", RecoveryTimestamp: verified, FileChecked: true}
+	good := checkedResult("chain_1", "collection_1", verified, now)
 	if err := state.Check(context.Background(), func(context.Context) (CheckResult, error) { return good, nil }); err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +80,7 @@ func TestVerificationKeepsDurableRecoveryWatermarkAcrossFailedChecks(t *testing.
 	}{
 		{"checker failure", CheckResult{}, errors.New("s3://secret:user@host/object")},
 		{"missing files", CheckResult{ChainID: "chain_2", CollectionID: "collection_1", RecoveryTimestamp: now, FileChecked: false}, nil},
-		{"older recovery", CheckResult{ChainID: "chain_1", CollectionID: "collection_1", RecoveryTimestamp: verified.Add(-time.Second), FileChecked: true}, nil},
+		{"older recovery", checkedResult("chain_1", "collection_1", verified.Add(-time.Second), now), nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			now = now.Add(time.Minute)
@@ -73,7 +114,7 @@ func TestVerificationRestartAndStaleness(t *testing.T) {
 	if state.Healthy() || !state.LastVerified().IsZero() {
 		t.Fatal("missing record was treated as verified")
 	}
-	result := CheckResult{ChainID: "chain_1", CollectionID: "collection_1", RecoveryTimestamp: now.Add(-time.Minute), FileChecked: true}
+	result := checkedResult("chain_1", "collection_1", now.Add(-time.Minute), now)
 	if err := state.Check(context.Background(), func(context.Context) (CheckResult, error) { return result, nil }); err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +184,7 @@ func TestMetricsRequiresExactAuthenticatedGETAndAlwaysAnswers(t *testing.T) {
 			t.Fatalf("missing unknown metrics: %q", w.Body.String())
 		}
 	}
-	result := CheckResult{ChainID: "chain_1", CollectionID: "collection_1", RecoveryTimestamp: now.Add(-time.Minute), FileChecked: true}
+	result := checkedResult("chain_1", "collection_1", now.Add(-time.Minute), now)
 	if err := state.Check(context.Background(), func(context.Context) (CheckResult, error) { return result, nil }); err != nil {
 		t.Fatal(err)
 	}
@@ -190,6 +231,9 @@ func TestVerificationRejectsUnsafeEvidenceAndRecord(t *testing.T) {
 		}
 		if !json.Valid(data) {
 			t.Fatalf("torn record: %s", data)
+		}
+		if !strings.Contains(string(data), `"verifiedRecoveryAt":null`) || !strings.Contains(string(data), `"outcome":"fail"`) {
+			t.Fatalf("empty failed record is not explicitly unknown: %s", data)
 		}
 	}
 	if err := os.WriteFile(path, []byte(strings.Repeat("x", 4097)), 0600); err != nil {
@@ -259,7 +303,7 @@ func TestMetricsScrapeDoesNotWaitForRecordPersistence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first := CheckResult{ChainID: "chain_1", CollectionID: "collection_1", RecoveryTimestamp: now.Add(-time.Minute), FileChecked: true}
+	first := checkedResult("chain_1", "collection_1", now.Add(-time.Minute), now)
 	if err := state.Check(context.Background(), func(context.Context) (CheckResult, error) { return first, nil }); err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +328,7 @@ func TestMetricsScrapeDoesNotWaitForRecordPersistence(t *testing.T) {
 		return err
 	}
 	now = now.Add(time.Minute)
-	second := CheckResult{ChainID: "chain_1", CollectionID: "collection_1", RecoveryTimestamp: now, FileChecked: true}
+	second := checkedResult("chain_1", "collection_1", now, now)
 	done := make(chan error, 1)
 	go func() {
 		done <- state.Check(context.Background(), func(context.Context) (CheckResult, error) { return second, nil })

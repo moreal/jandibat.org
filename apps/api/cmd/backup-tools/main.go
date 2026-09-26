@@ -131,6 +131,11 @@ func scriptChecker(path string, getenv func(string) string) backup.Checker {
 		checkCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		defer cancel()
 		cmd := exec.CommandContext(checkCtx, "sh", path)
+		// The SQL client is a child of the shell script. Cancellation must stop
+		// the whole private process group, not leave a descendant with pipe FDs.
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+		cmd.WaitDelay = time.Second
 		cmd.Env = []string{
 			"PATH=" + os.Getenv("PATH"),
 			"BACKUP_VERIFIER_DATABASE_URL=" + getenv("BACKUP_VERIFIER_DATABASE_URL"),
@@ -181,7 +186,7 @@ func parseChainResult(data []byte) (backup.CheckResult, error) {
 			return bad, errors.New("invalid chain check result")
 		}
 		switch key {
-		case "schemaVersion", "chainId", "collectionId", "recoveryTimestamp", "fileChecked":
+		case "schemaVersion", "chainId", "collectionId", "fullScheduleId", "incrementalScheduleId", "checkedAt", "recoveryTimestamp", "fileChecked", "passed":
 		default:
 			return bad, errors.New("invalid chain check result")
 		}
@@ -194,7 +199,7 @@ func parseChainResult(data []byte) (backup.CheckResult, error) {
 		}
 		fields[key] = value
 	}
-	if len(fields) != 5 {
+	if len(fields) != 9 {
 		return bad, errors.New("invalid chain check result")
 	}
 	if tok, err = d.Token(); err != nil || tok != json.Delim('}') {
@@ -204,22 +209,45 @@ func parseChainResult(data []byte) (backup.CheckResult, error) {
 		return bad, errors.New("invalid chain check result")
 	}
 	var version int
-	var chainID, collectionID, timestamp string
-	var checked bool
+	var chainID, collectionID, fullID, incrementalID, timestamp, checkedAt string
+	var checked, passed bool
 	if json.Unmarshal(fields["schemaVersion"], &version) != nil || version != 1 ||
 		json.Unmarshal(fields["chainId"], &chainID) != nil ||
 		json.Unmarshal(fields["collectionId"], &collectionID) != nil ||
+		json.Unmarshal(fields["fullScheduleId"], &fullID) != nil ||
+		json.Unmarshal(fields["incrementalScheduleId"], &incrementalID) != nil ||
+		json.Unmarshal(fields["checkedAt"], &checkedAt) != nil ||
 		json.Unmarshal(fields["recoveryTimestamp"], &timestamp) != nil ||
-		json.Unmarshal(fields["fileChecked"], &checked) != nil || !checked ||
-		!safeEvidenceID(chainID) || !safeEvidenceID(collectionID) || !strings.HasSuffix(timestamp, "Z") {
+		json.Unmarshal(fields["fileChecked"], &checked) != nil ||
+		json.Unmarshal(fields["passed"], &passed) != nil || !checked || !passed ||
+		!safeEvidenceID(chainID) || !safeEvidenceID(collectionID) ||
+		!safeScheduleID(fullID) || !safeScheduleID(incrementalID) || fullID == incrementalID ||
+		!strings.HasSuffix(timestamp, "Z") || !strings.HasSuffix(checkedAt, "Z") {
 		return bad, errors.New("invalid chain check result")
 	}
 	recovery, err := time.Parse(time.RFC3339Nano, timestamp)
 	if err != nil || recovery.IsZero() {
 		return bad, errors.New("invalid chain check result")
 	}
+	checkTime, err := time.Parse(time.RFC3339Nano, checkedAt)
+	if err != nil || checkTime.IsZero() || recovery.After(checkTime) {
+		return bad, errors.New("invalid chain check result")
+	}
 	return backup.CheckResult{ChainID: chainID, CollectionID: collectionID,
-		RecoveryTimestamp: recovery, FileChecked: true}, nil
+		FullScheduleID: fullID, IncrementalScheduleID: incrementalID,
+		RecoveryTimestamp: recovery, CheckedAt: checkTime, FileChecked: true, Passed: true}, nil
+}
+
+func safeScheduleID(id string) bool {
+	if len(id) == 0 || len(id) > 20 || id[0] == '0' {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		if id[i] < '0' || id[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func safeEvidenceID(id string) bool {

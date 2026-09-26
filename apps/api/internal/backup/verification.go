@@ -28,20 +28,26 @@ const (
 // SHOW BACKUP ... WITH check_files. FileChecked must never be inferred from
 // schedule completion or from a backup's presence in a catalog.
 type CheckResult struct {
-	ChainID           string
-	CollectionID      string
-	RecoveryTimestamp time.Time
-	FileChecked       bool
+	ChainID               string
+	CollectionID          string
+	FullScheduleID        string
+	IncrementalScheduleID string
+	RecoveryTimestamp     time.Time
+	CheckedAt             time.Time
+	FileChecked           bool
+	Passed                bool
 }
 
 type Checker func(context.Context) (CheckResult, error)
 
 type verificationRecord struct {
-	ChainID           string    `json:"chain_id,omitempty"`
-	CollectionID      string    `json:"collection_id,omitempty"`
-	RecoveryTimestamp time.Time `json:"recovery_timestamp,omitempty"`
-	LastCheckAt       time.Time `json:"last_check_at,omitempty"`
-	CheckHealthy      bool      `json:"check_healthy"`
+	ChainID           string    `json:"chainId,omitempty"`
+	CollectionID      string    `json:"collectionId,omitempty"`
+	LinkedScheduleIDs []string  `json:"linkedScheduleIds,omitempty"`
+	RecoveryTimestamp time.Time `json:"verifiedRecoveryAt,omitempty"`
+	CheckedAt         time.Time `json:"checkedAt,omitempty"`
+	LastCheckAt       time.Time `json:"lastAttemptAt,omitempty"`
+	Outcome           string    `json:"outcome"`
 }
 
 // VerificationState stores one Pod-local record. A new emptyDir starts unknown.
@@ -98,8 +104,20 @@ func (s *VerificationState) Healthy() bool {
 }
 
 func healthy(r verificationRecord, now time.Time) bool {
-	age := now.Sub(r.LastCheckAt)
-	return r.CheckHealthy && !r.RecoveryTimestamp.IsZero() && age >= 0 && age <= checkStaleAfter
+	age := now.Sub(r.CheckedAt)
+	return r.Outcome == "pass" && !r.RecoveryTimestamp.IsZero() && age >= 0 && age <= checkStaleAfter
+}
+
+func validScheduleID(id string) bool {
+	if len(id) == 0 || len(id) > 20 || id[0] == '0' {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		if id[i] < '0' || id[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func validID(id string) bool {
@@ -119,10 +137,18 @@ func validRecord(r verificationRecord, now time.Time) bool {
 	if !r.LastCheckAt.IsZero() && r.LastCheckAt.After(now) {
 		return false
 	}
-	if r.RecoveryTimestamp.IsZero() {
-		return !r.CheckHealthy && r.ChainID == "" && r.CollectionID == ""
+	if r.Outcome != "" && r.Outcome != "unknown" && r.Outcome != "fail" && r.Outcome != "pass" {
+		return false
 	}
-	return validID(r.ChainID) && validID(r.CollectionID) && !r.RecoveryTimestamp.After(now) && !r.LastCheckAt.IsZero()
+	if r.RecoveryTimestamp.IsZero() {
+		return r.Outcome != "pass" && r.ChainID == "" && r.CollectionID == "" &&
+			len(r.LinkedScheduleIDs) == 0 && r.CheckedAt.IsZero()
+	}
+	return validID(r.ChainID) && validID(r.CollectionID) && len(r.LinkedScheduleIDs) == 2 &&
+		validScheduleID(r.LinkedScheduleIDs[0]) && validScheduleID(r.LinkedScheduleIDs[1]) &&
+		r.LinkedScheduleIDs[0] != r.LinkedScheduleIDs[1] &&
+		!r.RecoveryTimestamp.After(r.CheckedAt) && !r.CheckedAt.After(now) &&
+		!r.LastCheckAt.IsZero()
 }
 
 // Check records each attempt. Failed, missing-file, malformed, or older
@@ -145,21 +171,28 @@ func (s *VerificationState) Check(ctx context.Context, checker Checker) error {
 	next := s.record
 	s.mu.RUnlock()
 	next.LastCheckAt = now
-	next.CheckHealthy = false
-	if checkErr == nil && result.FileChecked && validID(result.ChainID) && validID(result.CollectionID) &&
+	next.Outcome = "fail"
+	checkedAge := now.Sub(result.CheckedAt)
+	if checkErr == nil && result.FileChecked && result.Passed && validID(result.ChainID) && validID(result.CollectionID) &&
+		validScheduleID(result.FullScheduleID) && validScheduleID(result.IncrementalScheduleID) &&
+		result.FullScheduleID != result.IncrementalScheduleID &&
+		checkedAge >= 0 && checkedAge <= checkStaleAfter &&
 		!result.RecoveryTimestamp.IsZero() && !result.RecoveryTimestamp.After(now) &&
+		!result.RecoveryTimestamp.After(result.CheckedAt) &&
 		!result.RecoveryTimestamp.Before(next.RecoveryTimestamp) {
 		next.ChainID = result.ChainID
 		next.CollectionID = result.CollectionID
+		next.LinkedScheduleIDs = []string{result.FullScheduleID, result.IncrementalScheduleID}
 		next.RecoveryTimestamp = result.RecoveryTimestamp.UTC()
-		next.CheckHealthy = true
+		next.CheckedAt = result.CheckedAt.UTC()
+		next.Outcome = "pass"
 	} else {
 		checkErr = errors.New("verification check failed")
 	}
 	if err := s.persist(s.path, next); err != nil {
 		// A failed write cannot establish fresh durable evidence.
 		s.mu.Lock()
-		s.record.CheckHealthy = false
+		s.record.Outcome = "fail"
 		s.mu.Unlock()
 		return errors.New("cannot store verification record")
 	}
@@ -189,7 +222,25 @@ func (s *VerificationState) RunChecks(ctx context.Context, checker Checker) {
 }
 
 func replaceRecord(path string, record verificationRecord) error {
-	data, err := json.Marshal(record)
+	var recovery, checked, attempted *time.Time
+	if !record.RecoveryTimestamp.IsZero() {
+		recovery = &record.RecoveryTimestamp
+	}
+	if !record.CheckedAt.IsZero() {
+		checked = &record.CheckedAt
+	}
+	if !record.LastCheckAt.IsZero() {
+		attempted = &record.LastCheckAt
+	}
+	data, err := json.Marshal(struct {
+		ChainID           string     `json:"chainId,omitempty"`
+		CollectionID      string     `json:"collectionId,omitempty"`
+		LinkedScheduleIDs []string   `json:"linkedScheduleIds"`
+		RecoveryTimestamp *time.Time `json:"verifiedRecoveryAt"`
+		CheckedAt         *time.Time `json:"checkedAt"`
+		LastCheckAt       *time.Time `json:"lastAttemptAt"`
+		Outcome           string     `json:"outcome"`
+	}{record.ChainID, record.CollectionID, record.LinkedScheduleIDs, recovery, checked, attempted, record.Outcome})
 	if err != nil || len(data) > maxRecordSize {
 		return errors.New("invalid verification record")
 	}

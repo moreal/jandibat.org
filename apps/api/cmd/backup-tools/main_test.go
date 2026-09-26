@@ -18,13 +18,17 @@ import (
 const fixtureToken = "0123456789abcdef0123456789abcdef"
 
 func TestParseChainResultRejectsNonCanonicalEvidence(t *testing.T) {
-	good := `{"schemaVersion":1,"chainId":"chain_1","collectionId":"jandibat_backup_v1","recoveryTimestamp":"2026-09-25T11:00:00Z","fileChecked":true}`
+	good := `{"schemaVersion":1,"chainId":"chain_1","collectionId":"jandibat_backup_v1","fullScheduleId":"9223372036854775807","incrementalScheduleId":"9223372036854775806","checkedAt":"2026-09-25T11:01:00Z","recoveryTimestamp":"2026-09-25T11:00:00Z","fileChecked":true,"passed":true}`
 	for _, raw := range []string{
 		good + "\n{}", good[:len(good)-1] + `,"objectKey":"private"}`,
 		strings.Replace(good, `"schemaVersion":1,`, "", 1),
 		strings.Replace(good, `"schemaVersion":1,`, `"schemaVersion":2,`, 1),
 		strings.Replace(good, `"chainId":"chain_1",`, `"chainId":"chain_1","chainId":"chain_2",`, 1),
 		strings.Replace(good, `"fileChecked":true`, `"fileChecked":false`, 1),
+		strings.Replace(good, `"passed":true`, `"passed":false`, 1),
+		strings.Replace(good, `"fullScheduleId":"9223372036854775807",`, "", 1),
+		strings.Replace(good, `"checkedAt":"2026-09-25T11:01:00Z",`, "", 1),
+		strings.Replace(good, `"incrementalScheduleId":"9223372036854775806"`, `"incrementalScheduleId":"0"`, 1),
 		strings.Replace(good, `"chainId":"chain_1"`, `"chainId":null`, 1),
 		strings.Replace(good, `"chainId":"chain_1"`, `"chainId":"s3://secret@host/key"`, 1),
 		strings.Repeat("x", 4097),
@@ -34,7 +38,10 @@ func TestParseChainResultRejectsNonCanonicalEvidence(t *testing.T) {
 		}
 	}
 	got, err := parseChainResult([]byte(good))
-	if err != nil || got.ChainID != "chain_1" || !got.FileChecked || !got.RecoveryTimestamp.Equal(time.Date(2026, 9, 25, 11, 0, 0, 0, time.UTC)) {
+	if err != nil || got.ChainID != "chain_1" || !got.FileChecked || !got.Passed ||
+		got.FullScheduleID != "9223372036854775807" || got.IncrementalScheduleID != "9223372036854775806" ||
+		!got.CheckedAt.Equal(time.Date(2026, 9, 25, 11, 1, 0, 0, time.UTC)) ||
+		!got.RecoveryTimestamp.Equal(time.Date(2026, 9, 25, 11, 0, 0, 0, time.UTC)) {
 		t.Fatalf("canonical chain result rejected: %+v, %v", got, err)
 	}
 }
@@ -47,13 +54,15 @@ func TestCheckOncePersistsOnlyVerifiedEvidence(t *testing.T) {
 	var out bytes.Buffer
 	now := time.Now().UTC().Add(-time.Minute)
 	checker := func(context.Context) (backup.CheckResult, error) {
-		return backup.CheckResult{ChainID: "chain_1", CollectionID: "jandibat_backup_v1", RecoveryTimestamp: now, FileChecked: true}, nil
+		return backup.CheckResult{ChainID: "chain_1", CollectionID: "jandibat_backup_v1", FullScheduleID: "9223372036854775807", IncrementalScheduleID: "9223372036854775806", CheckedAt: time.Now().UTC(), RecoveryTimestamp: now, FileChecked: true, Passed: true}, nil
 	}
 	if err := runMode(context.Background(), []string{"check-once"}, getenv, checker, nil, &out); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(record)
-	if err != nil || !bytes.Contains(data, []byte(`"chain_id":"chain_1"`)) || strings.Contains(out.String(), "chain_1") {
+	if err != nil || !bytes.Contains(data, []byte(`"chainId":"chain_1"`)) ||
+		!bytes.Contains(data, []byte(`"linkedScheduleIds":["9223372036854775807","9223372036854775806"]`)) ||
+		!bytes.Contains(data, []byte(`"outcome":"pass"`)) || strings.Contains(out.String(), "chain_1") {
 		t.Fatalf("durable check-once evidence absent or exposed: %v", err)
 	}
 	if err := runMode(context.Background(), []string{"check-once"}, getenv, func(context.Context) (backup.CheckResult, error) {
@@ -126,5 +135,45 @@ func TestRunVerifierRefusesUnsafeConfiguration(t *testing.T) {
 		if err := runMode(context.Background(), []string{"run-verifier"}, func(k string) string { return env[k] }, nil, nil, &bytes.Buffer{}); err == nil {
 			t.Fatalf("unsafe listen address accepted")
 		}
+	}
+}
+
+func TestScriptCheckerBoundsOutputAndRedactsFailure(t *testing.T) {
+	dir := t.TempDir()
+	getenv := func(k string) string {
+		if k == "BACKUP_VERIFIER_DATABASE_URL" {
+			return "postgresql://secret@fixture/db"
+		}
+		return ""
+	}
+	for _, tc := range []struct{ name, script string }{
+		{"stderr credential", "echo 'postgresql://secret@fixture/db' >&2; exit 1\n"},
+		{"oversized stdout", "head -c 5000 /dev/zero\n"},
+		{"malformed evidence", "printf '%s\\n' '{\"schemaVersion\":1,\"collectionId\":\"secret\"}'\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(dir, strings.ReplaceAll(tc.name, " ", "-"))
+			if err := os.WriteFile(path, []byte(tc.script), 0600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := scriptChecker(path, getenv)(context.Background())
+			if err == nil || strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "postgresql://") {
+				t.Fatalf("unsafe script result: %v", err)
+			}
+		})
+	}
+}
+
+func TestScriptCheckerStopsOnContextCancellation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "slow.sh")
+	if err := os.WriteFile(path, []byte("sleep 30\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	_, err := scriptChecker(path, func(string) string { return "" })(ctx)
+	if err == nil || time.Since(started) > 2*time.Second {
+		t.Fatalf("checker ignored cancellation: %v", err)
 	}
 }

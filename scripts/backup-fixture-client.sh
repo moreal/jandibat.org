@@ -72,6 +72,33 @@ fixture_check_database_grants() {
  ' "$1"
 }
 
+fixture_check_defaultdb_grants() {
+ awk -F '\t' '
+  NR==1 { if ($1!="grantee" || $2!="privilege_type" || $3!="is_grantable") bad=1; next }
+  $1=="jandibat_backup_bootstrap" && $2=="CONNECT" && ($3=="false" || $3=="f") { allowed++; next }
+  { bad=1 }
+  END { exit bad || allowed!=1 }
+ ' "$1"
+}
+
+fixture_check_metadata_grants() {
+ kind=$1
+ file=$2
+ awk -F '\t' -v kind="$kind" '
+  NR==1 { if ($1!="grantee" || $2!="privilege_type" || $3!="is_grantable") bad=1; next }
+  $1=="jandibat_backup_bootstrap" && ($3=="false" || $3=="f") && (
+   (kind=="schema" && $2=="USAGE") ||
+   (kind=="table" && ($2=="SELECT" || $2=="INSERT")) ||
+   (kind=="view" && $2=="SELECT")) { seen[$2]++; next }
+  { bad=1 }
+  END {
+   if (kind=="table") exit bad || seen["SELECT"]!=1 || seen["INSERT"]!=1
+   if (kind=="schema") exit bad || seen["USAGE"]!=1
+   exit bad || seen["SELECT"]!=1
+  }
+ ' "$file"
+}
+
 fixture_check_connection_grants() {
  # Unfiltered v26.2 SHOW GRANTS includes the built-in root ALL row even
  # when the external connection was created by the bootstrap identity.

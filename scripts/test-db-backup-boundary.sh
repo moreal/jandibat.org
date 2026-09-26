@@ -51,7 +51,6 @@ run_retired() {
 
 run_retired backup sh "$root/scripts/db-backup.sh"
 run_retired schedule sh "$root/scripts/db-configure-backup-schedule.sh"
-run_retired roles sh "$root/scripts/db-verify-backup-roles.sh"
 run_retired restore sh "$root/scripts/db-restore-verify.sh"
 run_retired restore-explicit env RESTORE_TARGET_DATABASE=isolated_fixture \
 	RESTORE_TARGET_DISPOSITION=preserve sh "$root/scripts/db-restore-verify.sh"
@@ -60,9 +59,19 @@ run_retired restore-delete-disposition env RESTORE_TARGET_DATABASE=isolated_fixt
 run_retired restore-unsafe-target env RESTORE_TARGET_DATABASE='fixture;DROP' \
 	RESTORE_TARGET_DISPOSITION=preserve sh "$root/scripts/db-restore-verify.sh"
 
+: >"$TEST_CLI_ARGS"
+: >"$TEST_CLI_ENV_KEYS"
+if env -u BACKUP_VERIFIER_DATABASE_URL COCKROACH_SQL_BIN="$test_dir/cockroach" \
+ sh "$root/scripts/db-verify-backup-roles.sh" >"$test_dir/output" 2>&1; then
+ echo 'FAIL: active verifier accepted missing DSN' >&2; exit 1
+fi
+if [ -s "$TEST_CLI_ARGS" ] || [ -s "$TEST_CLI_ENV_KEYS" ]; then
+ echo 'FAIL: active verifier reached SQL without DSN' >&2; exit 1
+fi
+
 if rg -q -- '--url=|ignore_existing_backups|AS OF SYSTEM TIME|jandibat_backup([^_A-Za-z0-9]|$)' \
 	"$root/scripts/db-backup.sh" "$root/scripts/db-configure-backup-schedule.sh" \
-	"$root/scripts/db-verify-backup-roles.sh" "$root/scripts/db-restore-verify.sh"; then
+	"$root/scripts/db-restore-verify.sh"; then
 	echo 'FAIL: unsafe legacy SQL policy remains in an entry point' >&2
 	exit 1
 fi

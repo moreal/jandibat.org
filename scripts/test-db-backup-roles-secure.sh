@@ -59,7 +59,8 @@ cleanup() {
    "$fixture_dir"/privilege-drop "$fixture_dir"/first-run "$fixture_dir"/second-run \
    "$fixture_dir"/check "$fixture_dir"/verify-output "$fixture_dir"/connection-grants \
    "$fixture_dir"/count "$fixture_dir"/identity-* "$fixture_dir"/negative-* \
-   "$fixture_dir"/mutation-* "$fixture_dir"/fingerprint-*; do
+   "$fixture_dir"/mutation-* "$fixture_dir"/fingerprint-* \
+   "$fixture_dir"/metadata-* "$fixture_dir"/defaultdb-grants; do
    if [ -f "$output" ] && has_sentinel "$output"; then
     echo 'RED: client output exposed synthetic credential (details redacted)' >&2
     status=1
@@ -211,6 +212,27 @@ awk -F '\t' '$1 ~ /^jandibat_backup_/ { n++; if ($3 != "{}") bad=1 } END { exit 
 sql_as root "SELECT grantee, privilege_type, is_grantable FROM [SHOW GRANTS ON DATABASE jandibat] WHERE grantee IN ('jandibat_backup_bootstrap', 'jandibat_backup_runner', 'jandibat_backup_verifier') ORDER BY grantee, privilege_type;" \
  >"$fixture_dir/db-grants" 2>&1 || fail 'database grants'
 fixture_check_database_grants "$fixture_dir/db-grants" || fail 'exact backup database grant boundary'
+sql_as root "SELECT grantee, privilege_type, is_grantable FROM [SHOW GRANTS ON DATABASE defaultdb] WHERE grantee IN ('jandibat_backup_bootstrap', 'jandibat_backup_runner', 'jandibat_backup_verifier') ORDER BY grantee, privilege_type;" \
+ >"$fixture_dir/defaultdb-grants" 2>&1 || fail 'private database grants'
+fixture_check_defaultdb_grants "$fixture_dir/defaultdb-grants" || fail 'private database grant boundary'
+sql_as root "SELECT grantee, privilege_type, is_grantable FROM [SHOW GRANTS ON SCHEMA defaultdb.jandibat_backup_admin] WHERE grantee IN ('jandibat_backup_bootstrap', 'jandibat_backup_runner', 'jandibat_backup_verifier', 'public') ORDER BY grantee, privilege_type;" \
+ >"$fixture_dir/metadata-schema-grants" 2>&1 || fail 'metadata schema grants'
+fixture_check_metadata_grants schema "$fixture_dir/metadata-schema-grants" || fail 'metadata schema grant boundary'
+sql_as root "SELECT grantee, privilege_type, is_grantable FROM [SHOW GRANTS ON TABLE defaultdb.jandibat_backup_admin.connection_policy] WHERE grantee IN ('jandibat_backup_bootstrap', 'jandibat_backup_runner', 'jandibat_backup_verifier', 'public') ORDER BY grantee, privilege_type;" \
+ >"$fixture_dir/metadata-table-grants" 2>&1 || fail 'metadata table grants'
+fixture_check_metadata_grants table "$fixture_dir/metadata-table-grants" || fail 'metadata table grant boundary'
+sql_as root "SELECT grantee, privilege_type, is_grantable FROM [SHOW GRANTS ON TABLE defaultdb.jandibat_backup_admin.connection_live_digest] WHERE grantee IN ('jandibat_backup_bootstrap', 'jandibat_backup_runner', 'jandibat_backup_verifier', 'public') ORDER BY grantee, privilege_type;" \
+ >"$fixture_dir/metadata-view-grants" 2>&1 || fail 'metadata view grants'
+fixture_check_metadata_grants view "$fixture_dir/metadata-view-grants" || fail 'metadata view grant boundary'
+sql_as bootstrap "SET allow_unsafe_internals = true; SELECT connection_name, catalog_digest FROM defaultdb.jandibat_backup_admin.connection_live_digest;" \
+ >"$fixture_dir/metadata-view-read" 2>&1 || fail 'bootstrap digest view read'
+sql_as bootstrap "BEGIN; INSERT INTO defaultdb.jandibat_backup_admin.connection_policy (connection_name, policy_version, input_digest, catalog_digest) VALUES ('jandibat_backup_v1', 1, repeat('a',64), repeat('b',64)); ROLLBACK;" \
+ >"$fixture_dir/metadata-insert-probe" 2>&1 || fail 'bootstrap metadata INSERT capability'
+assert_denied bootstrap raw-catalog 'SET allow_unsafe_internals = true; SELECT connection_details FROM system.external_connections;'
+assert_denied bootstrap metadata-update 'UPDATE defaultdb.jandibat_backup_admin.connection_policy SET policy_version = 1 WHERE false;'
+assert_denied bootstrap metadata-delete 'DELETE FROM defaultdb.jandibat_backup_admin.connection_policy WHERE false;'
+assert_denied bootstrap metadata-create 'CREATE TABLE defaultdb.jandibat_backup_admin.forbidden (id INT PRIMARY KEY);'
+assert_denied verifier metadata-read 'SELECT * FROM defaultdb.jandibat_backup_admin.connection_policy;'
 sql_as root 'CREATE TABLE jandibat.public.backup_privilege_probe (id INT PRIMARY KEY);' \
  >"$fixture_dir/mutation-table-setup" 2>&1 || fail 'privilege probe table setup'
 for role in bootstrap runner verifier; do

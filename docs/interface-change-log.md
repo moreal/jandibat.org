@@ -3,6 +3,24 @@
 API 계약 변경 시 이 파일과 GraphQL SDL(도메인) 또는 `openapi/jandibat.yaml`(HTTP edge)을 같은 변경에 포함합니다.
 각 항목에는 날짜, 호환성, 영향받는 operation/schema, 백엔드·프론트엔드 후속 작업을 기록합니다.
 
+## 2026-09-26 — 백업 연결 정책의 비공개 메타데이터 계약
+
+호환성: 기존 네 애플리케이션 계정 bootstrap에는 호환되는 opt-in 추가입니다. 세 백업
+계정 비밀번호 입력이 모두 없으면 기존 작업만 실행하며, 하나나 둘만 있거나 값이
+비어 있으면 SQL 실행 전에 거부합니다. GraphQL 도메인 SDL과 공개 OpenAPI 경로는
+변경하지 않습니다.
+
+- root 계정만 `defaultdb.jandibat_backup_admin` 스키마, `connection_policy`
+  테이블, `connection_live_digest` 뷰를 생성하고 기존 객체의 정의·소유권·권한을
+  재검증합니다. 테이블에는 고정 연결 이름, 버전 1, non-null 소문자 SHA-256
+  input/catalog digest만 저장합니다. 뷰는 고정 연결의 catalog digest만 노출합니다.
+- `jandibat_backup_bootstrap`은 private 스키마 USAGE, 정책 테이블 SELECT/INSERT,
+  digest 뷰 SELECT와 SYSTEM EXTERNALCONNECTION을 받습니다. runner는 `jandibat`
+  데이터베이스 BACKUP, verifier는 연결 USAGE를 담당합니다. 연결 USAGE는 후속
+  연결 생성 단계에서만 부여합니다. 공개·기본 권한 누출과 역할 멤버십은 거부합니다.
+- Coordination은 루트 bootstrap, 내부 fixture와 CI gate를 소유합니다. 백엔드와
+  프론트엔드의 도메인 요청·생성 타입에는 변경이 없습니다.
+
 ## 2026-09-25 — 내부 metrics-only scrape 계약
 
 호환성: 내부 운영 인터페이스를 추가하는 additive 변경입니다. GraphQL SDL은 도메인 API

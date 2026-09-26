@@ -90,13 +90,13 @@ console.log('/nix/store/' + name + (process.env.DIVERGE === name && args.include
   assert.equal(result.status, 1, result.stderr);
   assert.equal(readFileSync(makeTrace, 'utf8'), 'images-smoke');
   const builds = readFileSync(trace, 'utf8').trim().split('\n').map(JSON.parse);
-  for (const [index, name] of ['api', 'worker', 'maintenance', 'web'].entries()) {
+  for (const [index, name] of ['api', 'worker', 'maintenance', 'web', 'backup-tools'].entries()) {
     assert.deepEqual(builds[index * 2], ['build', '--no-link', '--print-out-paths', `.#${name}-payload`]);
     assert.deepEqual(builds[index * 2 + 1], ['build', '--rebuild', '--option', 'sandbox', 'true', '--no-link', '--print-out-paths', `.#${name}-payload`]);
   }
-  assert.equal(builds.length, 8);
+  assert.equal(builds.length, 10);
   assert.equal(readFileSync(join(dir, 'matching', 'payload-rebuilds.txt'), 'utf8'),
-    ['api', 'worker', 'maintenance', 'web'].map(name => `${name} /nix/store/${name} /nix/store/${name}\n`).join(''));
+    ['api', 'worker', 'maintenance', 'web', 'backup-tools'].map(name => `${name} /nix/store/${name} /nix/store/${name}\n`).join(''));
 
   const mismatched = invoke('build-release-images.sh', { ...env, DIVERGE: 'api' }, [join(dir, 'mismatched')]);
   assert.equal(mismatched.status, 1, mismatched.stderr);
@@ -236,7 +236,7 @@ test('restore image packages the named database payload and checks it after impo
   assert.match(dockerfile, /^COPY db\/migrations\/ \/workspace\/db\/migrations\/$/m);
   assert.match(dockerfile, /^COPY scripts\/ \/workspace\/scripts\/$/m);
   assert.match(builder, /cp db\/migrations\/\*\.sql "\$restore_context\/db\/migrations\/"/);
-  assert.match(builder, /for file in db-migrate-url\.sh db-configure-runtime-roles\.sh db-verify-runtime-roles\.sh db-bootstrap-roles\.sh; do/);
+  assert.match(builder, /for file in db-migrate-url\.sh db-configure-runtime-roles\.sh db-verify-runtime-roles\.sh db-bootstrap-roles\.sh db-verify-backup-chain\.sh; do/);
   assert.match(builder, /cp "scripts\/\$file" "\$restore_context\/scripts\/\$file"/);
   assert.match(builder, /node scripts\/image-release\.mjs import restore-tools[^\n]*\n(?:[^\n]*\n)*?sh scripts\/test-restore-tools-payload\.sh/);
 });
@@ -252,6 +252,58 @@ process.exit(2);
   const result = invoke('test-restore-tools-payload.sh', { PATH: `${join(dir, 'bin')}:${process.env.PATH}` }, ['sha256:' + 'b'.repeat(64)]);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /0001_baseline\.sql/);
+});
+
+for (const [mode, reason] of [
+  ['missing-binary', 'a missing backup-tools executable'],
+  ['source-tree', 'an embedded application source tree'],
+  ['extra-workspace-file', 'an unreviewed workspace file'],
+  ['root-user', 'a root default User'],
+  ['missing-token', 'a verifier that starts without its metrics token'],
+]) test(`restore payload validation rejects ${reason}`, t => {
+  const dir = fixture(t);
+  const dockerTrace = join(dir, 'docker-trace');
+  executable(dir, 'docker', `
+const fs = require('node:fs');
+const { createHash } = require('node:crypto');
+const args = process.argv.slice(2);
+fs.appendFileSync(process.env.DOCKER_TRACE, JSON.stringify(args) + '\\n');
+if (args.at(-1) === 'run-verifier') process.exit(process.env.LEAK_MODE === 'missing-token' ? 0 : 1);
+if (args[0] === 'image' && args[1] === 'inspect') {
+  console.log(process.env.LEAK_MODE === 'root-user' ? '' : '65532:65532');
+  process.exit(0);
+}
+if (args.includes('find')) {
+  for (const file of fs.readdirSync('db/migrations').filter(file => file.endsWith('.sql')))
+    console.log('/workspace/db/migrations/' + file);
+  for (const file of ['db-migrate-url.sh', 'db-configure-runtime-roles.sh', 'db-verify-runtime-roles.sh', 'db-bootstrap-roles.sh', 'db-verify-backup-chain.sh'])
+    console.log('/workspace/scripts/' + file);
+  console.log('/workspace/bin/backup-tools');
+  if (process.env.LEAK_MODE === 'extra-workspace-file' && args.includes('/workspace')) console.log('/workspace/extra.txt');
+  process.exit(0);
+}
+if (args.includes('sha256sum')) {
+  const file = args.at(-1);
+  console.log(createHash('sha256').update(fs.readFileSync(file.replace(/^\\/workspace\\//, ''))).digest('hex') + '  ' + file);
+  process.exit(0);
+}
+if (args.includes('test')) {
+  if (process.env.LEAK_MODE === 'source-tree' && args.slice(args.indexOf('test') + 1).join(' ') === '! -e /workspace/apps') process.exit(1);
+  process.exit(process.env.LEAK_MODE === 'missing-binary' && args.includes('/workspace/bin/backup-tools') ? 1 : 0);
+}
+process.exit(0);
+`);
+  const result = invoke('test-restore-tools-payload.sh', { PATH: `${join(dir, 'bin')}:${process.env.PATH}`, LEAK_MODE: mode, DOCKER_TRACE: dockerTrace }, ['sha256:' + 'b'.repeat(64)]);
+  assert.notEqual(result.status, 0, `restore-tools accepted ${reason}`);
+  assert.match(result.stderr, mode === 'missing-binary' ? /backup-tools/ : mode === 'root-user' ? /non-root User/ : mode === 'source-tree' ? /source tree/ : mode === 'extra-workspace-file' ? /inventory/ : /metrics token/);
+  if (mode === 'missing-token') {
+    const calls = readFileSync(dockerTrace, 'utf8').trim().split('\n').map(JSON.parse);
+    const run = calls.find(args => args.at(-1) === 'run-verifier');
+    assert.ok(run, 'missing-token smoke did not run backup-tools');
+    assert.equal(run[run.indexOf('--entrypoint') + 1], '/usr/bin/timeout');
+    assert.deepEqual(run.slice(-3), ['10s', '/workspace/bin/backup-tools', 'run-verifier']);
+    assert.ok(run.includes('--rm'));
+  }
 });
 
 test('restore payload validation rejects a non-hex image ID before Docker', t => {
@@ -681,9 +733,13 @@ test(`release packaging ${uncertainOwnership ? 'preserves uncertain builder afte
   mkdirSync(join(staticBusybox, 'bin'), { recursive: true });
   writeFileSync(join(staticBusybox, 'bin/busybox'), 'static fixture executable', { mode: 0o555 });
   env.STATIC_BUSYBOX = staticBusybox;
+  const backupToolsPayload = join(dir, 'backup-tools-payload');
+  mkdirSync(join(backupToolsPayload, 'bin'), { recursive: true });
+  writeFileSync(join(backupToolsPayload, 'bin/backup-tools'), 'static fixture executable', { mode: 0o555 });
+  env.BACKUP_TOOLS_PAYLOAD = backupToolsPayload;
   executable(dir, 'nix', `
 const a = process.argv.slice(2);
-console.log(a[0] === 'eval' ? 'x86_64-linux' : a.includes('.#restore-tools-busybox') ? process.env.STATIC_BUSYBOX : process.env.FIXTURE_ARCHIVE);
+console.log(a[0] === 'eval' ? 'x86_64-linux' : a.includes('.#restore-tools-busybox') ? process.env.STATIC_BUSYBOX : a.includes('.#backup-tools-payload') ? process.env.BACKUP_TOOLS_PAYLOAD : process.env.FIXTURE_ARCHIVE);
 `);
   executable(dir, 'make', '');
   // Image import/scan has its own real-program fixture; this shell fixture
@@ -727,12 +783,12 @@ if (a[1] === 'build') {
  const context = a.at(-1);
  const scripts = fs.readdirSync(context + '/scripts').sort();
  const migrations = fs.readdirSync(context + '/db/migrations').sort();
- if (JSON.stringify(scripts) !== JSON.stringify(['db-bootstrap-roles.sh','db-configure-runtime-roles.sh','db-migrate-url.sh','db-verify-runtime-roles.sh'])) process.exit(10);
+ if (JSON.stringify(scripts) !== JSON.stringify(['db-bootstrap-roles.sh','db-configure-runtime-roles.sh','db-migrate-url.sh','db-verify-backup-chain.sh','db-verify-runtime-roles.sh'])) process.exit(10);
  if (JSON.stringify(migrations) !== JSON.stringify(fs.readdirSync('db/migrations').filter(f => f.endsWith('.sql')).sort())) process.exit(11);
  for (const file of scripts) if (!(fs.statSync(context + '/scripts/' + file).mode & 0o111)) process.exit(12);
  for (const file of migrations) if (fs.statSync(context + '/db/migrations/' + file).mode & 0o222) process.exit(13);
- for (const path of ['/db/migrations','/scripts']) if (fs.statSync(context + path).mode & 0o222) process.exit(14);
- for (const binary of ['jandibat-api', 'jandibat-maintenance', 'busybox']) {
+ for (const path of ['/db/migrations','/scripts','/bin']) if (fs.statSync(context + path).mode & 0o222) process.exit(14);
+ for (const binary of ['jandibat-api', 'jandibat-maintenance', 'busybox', 'bin/backup-tools']) {
    const path = context + '/' + binary;
    if (!fs.existsSync(path) || !fs.statSync(path).isFile() || fs.lstatSync(path).isSymbolicLink()) process.exit(15);
  }

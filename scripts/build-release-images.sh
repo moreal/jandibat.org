@@ -11,7 +11,7 @@ evidence=$(CDPATH='' cd "$evidence" && pwd)
 
 # Rebuild payload derivations (not cache lookups) in the sandbox.
 # Keep substituters available to realize build inputs missing from the first closure.
-for name in api worker maintenance web; do
+for name in api worker maintenance web backup-tools; do
 	first=$(nix build --no-link --print-out-paths ".#${name}-payload")
 	second=$(nix build --rebuild --option sandbox true --no-link --print-out-paths ".#${name}-payload")
 	test "$first" = "$second"
@@ -44,7 +44,7 @@ cleanup() {
 	if [ "$builder_created" = true ]; then
 		docker buildx rm "$restore_builder" >/dev/null || :
 	fi
-	for directory in "$restore_context/db/migrations" "$restore_context/scripts"; do
+	for directory in "$restore_context/db/migrations" "$restore_context/scripts" "$restore_context/bin"; do
 		if [ -d "$directory" ]; then chmod u+w "$directory"; fi
 	done
 	rm -r "$restore_context"
@@ -98,18 +98,21 @@ docker cp -L "$api_extract_container:/bin/server" "$restore_context/jandibat-api
 docker cp -L "$maintenance_extract_container:/bin/maintenance" "$restore_context/jandibat-maintenance"
 static_busybox=$(nix build --no-link --print-out-paths .#restore-tools-busybox)
 cp "$static_busybox/bin/busybox" "$restore_context/busybox"
-for binary in jandibat-api jandibat-maintenance busybox; do
+backup_tools_payload=$(nix build --no-link --print-out-paths .#backup-tools-payload)
+mkdir -p "$restore_context/bin"
+cp "$backup_tools_payload/bin/backup-tools" "$restore_context/bin/backup-tools"
+for binary in jandibat-api jandibat-maintenance busybox bin/backup-tools; do
 	test -s "$restore_context/$binary" && test -f "$restore_context/$binary" && test ! -L "$restore_context/$binary"
 	chmod 0555 "$restore_context/$binary"
 done
 mkdir -p "$restore_context/db/migrations" "$restore_context/scripts"
 cp db/migrations/*.sql "$restore_context/db/migrations/"
 chmod 444 "$restore_context"/db/migrations/*.sql
-for file in db-migrate-url.sh db-configure-runtime-roles.sh db-verify-runtime-roles.sh db-bootstrap-roles.sh; do
+for file in db-migrate-url.sh db-configure-runtime-roles.sh db-verify-runtime-roles.sh db-bootstrap-roles.sh db-verify-backup-chain.sh; do
 	cp "scripts/$file" "$restore_context/scripts/$file"
 	chmod 555 "$restore_context/scripts/$file"
 done
-chmod 555 "$restore_context/db/migrations" "$restore_context/scripts"
+chmod 555 "$restore_context/db/migrations" "$restore_context/scripts" "$restore_context/bin"
 docker buildx build --file deploy/restore-tools.Dockerfile --platform linux/amd64 \
 	--builder "$restore_builder" \
 	--build-arg SOURCE_DATE_EPOCH=1 --provenance=false \

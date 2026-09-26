@@ -63,6 +63,7 @@ rec {
   api-payload = mkGoPayload "api" [ "server" "metrics-proxy" ];
   worker-payload = mkGoPayload "worker" [ "worker" ];
   maintenance-payload = mkGoPayload "maintenance" [ "maintenance" ];
+  backup-tools-payload = mkGoPayload "backup-tools" [ "backup-tools" ];
 
   web-payload = pkgs.stdenvNoCC.mkDerivation {
     pname = "jandibat-web-payload";

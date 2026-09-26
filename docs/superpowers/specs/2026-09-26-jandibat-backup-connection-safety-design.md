@@ -93,6 +93,15 @@ Bootstrap has no schema CREATE, ownership, UPDATE, DELETE or raw system-table
 privileges. Explicitly test effective privileges inherited through `public` and
 role membership as well as direct grants.
 
+Root's all-database, all-user-schema grant and default-grant audit is the
+authoritative boundary and must run before the low-privilege verifier in the
+backup rollout. The verifier checks `public`, the known private metadata schema,
+and every schema visible to its identity; CockroachDB can hide other schemas
+from that identity, so verifier success does not claim continuous detection of
+defaults later changed in a hidden schema. The `jandibat.public` baseline has
+USAGE but no public CREATE after runtime role hardening; neither actor restores
+that CREATE grant.
+
 | Actor | Additional authority |
 | --- | --- |
 | `jandibat_backup_bootstrap` | LOGIN; SYSTEM EXTERNALCONNECTION without grant option; private metadata privileges above; creator's inherent connection DROP/USAGE with grant options. |

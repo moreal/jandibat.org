@@ -41,10 +41,18 @@ if grep -q 'SELECT database_name FROM \[SHOW DATABASES\]' "$TEST_SQL_CURRENT"; t
  printf 'database_name\ndefaultdb\njandibat\npostgres\nsystem\n'
  exit 0
 fi
+if grep -q 'SELECT schema_name FROM \[SHOW SCHEMAS FROM' "$TEST_SQL_CURRENT"; then
+ database=$(sed -n 's/.*SHOW SCHEMAS FROM "\([A-Za-z0-9_.-]*\)".*/\1/p' "$TEST_SQL_CURRENT" | head -n 1)
+ printf 'schema_name\n'
+ case "$COCKROACH_URL:$database" in *jandibat_backup_verifier@*:system) :;; *) printf 'public\n';; esac
+ [ "$database" != defaultdb ] || printf 'jandibat_backup_admin\n'
+ [ "$database" != jandibat ] || printf 'private_probe\n'
+ exit 0
+fi
 if grep -q 'SHOW GRANTS FOR jandibat_backup_bootstrap' "$TEST_SQL_CURRENT"; then
  database=$(sed -n 's/^USE "\([A-Za-z0-9_.-]*\)";.*/\1/p' "$TEST_SQL_CURRENT" | head -n 1)
  printf 'SET\ndatabase_name\tschema_name\tobject_name\tobject_type\tgrantee\tprivilege_type\tis_grantable\n'
- printf '%s\tpublic\tNULL\tschema\tpublic\tCREATE\tf\n' "$database"
+ [ "$database" = jandibat ] || printf '%s\tpublic\tNULL\tschema\tpublic\tCREATE\tf\n' "$database"
  printf '%s\tpublic\tNULL\tschema\tpublic\tUSAGE\tf\n' "$database"
  case "$database" in
   defaultdb)
@@ -79,6 +87,14 @@ if grep -q 'SELECT IF(' "$TEST_SQL_CURRENT"; then
   printf 'valid\n0\n'
   exit 0
  fi
+ if [ "${TEST_OTHER_SCHEMA_DEFAULT:-}" = 1 ] && grep -q 'IN SCHEMA "public"' "$TEST_SQL_CURRENT" && grep -q 'USE "jandibat"' "$TEST_SQL_CURRENT"; then
+  printf 'valid\n0\n'
+  exit 0
+ fi
+ if [ "${TEST_NAMED_SCHEMA_DEFAULT:-}" = 1 ] && grep -q 'IN SCHEMA "private_probe"' "$TEST_SQL_CURRENT" && grep -q 'USE "jandibat"' "$TEST_SQL_CURRENT"; then
+  printf 'valid\n0\n'
+  exit 0
+ fi
  case "${TEST_BAD_OBJECT:-}" in
   missing_private_schema) grep -q 'SHOW SCHEMAS FROM defaultdb' "$TEST_SQL_CURRENT" && { printf 'valid\n0\n'; exit 0; };;
   wrong_owner) grep -q 'pg_catalog.pg_class' "$TEST_SQL_CURRENT" && { printf 'valid\n0\n'; exit 0; };;
@@ -92,6 +108,8 @@ if grep -q 'SELECT IF(' "$TEST_SQL_CURRENT"; then
   cross_creator_default_grant) grep -q 'SHOW DEFAULT PRIVILEGES FOR GRANTEE' "$TEST_SQL_CURRENT" && { printf 'valid\n0\n'; exit 0; };;
   wrong_fixed_name_constraint) grep -q 'SHOW CONSTRAINTS FROM' "$TEST_SQL_CURRENT" && grep -q 'details' "$TEST_SQL_CURRENT" && { printf 'valid\n0\n'; exit 0; };;
   unrelated_private_grant) grep -q 'SHOW GRANTS ON TABLE defaultdb.jandibat_backup_admin' "$TEST_SQL_CURRENT" && grep -q "grantee = 'admin'" "$TEST_SQL_CURRENT" && { printf 'valid\n0\n'; exit 0; };;
+  other_schema_default_grant) grep -q 'IN SCHEMA "public"' "$TEST_SQL_CURRENT" && grep -q 'USE "jandibat"' "$TEST_SQL_CURRENT" && { printf 'valid\n0\n'; exit 0; };;
+  other_named_schema_default_grant) grep -q 'IN SCHEMA "private_probe"' "$TEST_SQL_CURRENT" && grep -q 'USE "jandibat"' "$TEST_SQL_CURRENT" && { printf 'valid\n0\n'; exit 0; };;
  esac
  printf 'valid\n1\n'
  exit 0
@@ -186,7 +204,7 @@ done
 if run_bootstrap env JANDIBAT_BACKUP_RUNNER_PASSWORD="$password_e"; then fail 'duplicate backup password accepted'; fi
 [ ! -s "$TEST_SQL_LOG" ] || fail 'duplicate backup password reached SQL'
 : >"$TEST_SQL_LOG"
-if ! run_bootstrap env; then fail 'complete backup inputs rejected'; fi
+if ! run_bootstrap env; then fail 'hardened_jandibat_public_schema_baseline rejected'; fi
 for expected in \
  'CREATE USER IF NOT EXISTS jandibat_backup_bootstrap' \
  'CREATE USER IF NOT EXISTS jandibat_backup_runner' \
@@ -207,7 +225,7 @@ for state in 1:0:0 1:1:0 0:1:1; do
  if run_bootstrap env TEST_STATE="$state"; then fail "partial existing object state $state accepted"; fi
  if grep -Eq '^CREATE (SCHEMA|TABLE|VIEW) ' "$TEST_SQL_LOG"; then fail "partial existing object state $state replaced"; fi
 done
-for bad in missing_private_schema wrong_owner wrong_view_predicate nullable_digest unexpected_public_grant extra_role_membership public_default_grant unexpected_public_system_grant extra_app_table_grant cross_creator_default_grant wrong_fixed_name_constraint unrelated_private_grant; do
+for bad in missing_private_schema wrong_owner wrong_view_predicate nullable_digest unexpected_public_grant unexpected_public_system_grant extra_role_membership public_default_grant extra_app_table_grant cross_creator_default_grant wrong_fixed_name_constraint unrelated_private_grant other_schema_default_grant other_named_schema_default_grant; do
  : >"$TEST_SQL_LOG"
  if run_bootstrap env TEST_STATE=1:1:1 TEST_BAD_OBJECT="$bad"; then fail "$bad accepted"; fi
  if grep -Eq '^CREATE (SCHEMA|TABLE|VIEW) ' "$TEST_SQL_LOG"; then fail "$bad replaced existing object"; fi
@@ -228,4 +246,8 @@ if env TEST_EXTRA_METADATA_ACCESS=1 COCKROACH_SQL_BIN=cockroach BACKUP_VERIFIER_
  sh scripts/db-verify-backup-roles.sh >"$test_dir/output" 2>&1; then fail 'verifier accepted private metadata access'; fi
 if env TEST_EXTRA_DEFAULT_GRANT=1 COCKROACH_SQL_BIN=cockroach BACKUP_VERIFIER_DATABASE_URL='postgresql://jandibat_backup_verifier@localhost/jandibat' \
  sh scripts/db-verify-backup-roles.sh >"$test_dir/output" 2>&1; then fail 'verifier accepted future default-grant authority'; fi
+if env TEST_OTHER_SCHEMA_DEFAULT=1 COCKROACH_SQL_BIN=cockroach BACKUP_VERIFIER_DATABASE_URL='postgresql://jandibat_backup_verifier@localhost/jandibat' \
+ sh scripts/db-verify-backup-roles.sh >"$test_dir/output" 2>&1; then fail 'verifier accepted jandibat.public future default-grant authority'; fi
+if env TEST_NAMED_SCHEMA_DEFAULT=1 COCKROACH_SQL_BIN=cockroach BACKUP_VERIFIER_DATABASE_URL='postgresql://jandibat_backup_verifier@localhost/jandibat' \
+ sh scripts/db-verify-backup-roles.sh >"$test_dir/output" 2>&1; then fail 'verifier accepted visible nonpublic future default-grant authority'; fi
 echo 'backup metadata opt-in and SQL contract checks passed'

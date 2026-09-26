@@ -83,7 +83,7 @@ ORDER BY database_name, schema_name, object_name, object_type, grantee, privileg
    expected[db FS schema FS object FS kind FS grantee FS privilege FS grantable]=1
   }
   BEGIN {
-   allow("public", "NULL", "schema", "public", "CREATE", "f")
+   if (db!="jandibat") allow("public", "NULL", "schema", "public", "CREATE", "f")
    allow("public", "NULL", "schema", "public", "USAGE", "f")
    if (db=="defaultdb") {
     allow("NULL", "NULL", "database", "jandibat_backup_bootstrap", "CONNECT", "f")
@@ -111,6 +111,21 @@ ORDER BY database_name, schema_name, object_name, object_type, grantee, privileg
    exit bad
   }
  ' "$capture_dir/stdout" || { echo 'database backup effective grant mismatch' >&2; exit 1; }
+ sql "$COCKROACH_ROOT_URL" "SELECT schema_name FROM [SHOW SCHEMAS FROM \"$database\"]
+WHERE schema_name NOT IN ('crdb_internal', 'information_schema', 'pg_catalog', 'pg_extension')
+ORDER BY schema_name;"
+ cp "$capture_dir/stdout" "$capture_dir/schemas"
+ seen_public=false
+ while IFS= read -r schema; do
+  [ "$schema" != schema_name ] || continue
+  case "$schema" in ''|*[!A-Za-z0-9_.-]*) echo 'database backup default grant audit unsupported schema' >&2; exit 1;; esac
+  [ "$schema" != public ] || seen_public=true
+  for grantee in public jandibat_backup_bootstrap jandibat_backup_runner jandibat_backup_verifier; do
+   value=$(sql_value "$COCKROACH_ROOT_URL" "USE \"$database\"; SELECT IF((SELECT count(*) FROM [SHOW DEFAULT PRIVILEGES FOR GRANTEE $grantee IN SCHEMA \"$schema\"]) = 0, 1, 0);")
+   [ "$value" = 1 ] || { echo 'database backup schema default grant mismatch' >&2; exit 1; }
+  done
+ done <"$capture_dir/schemas"
+ [ "$seen_public" = true ] || { echo 'database backup schema inventory incomplete' >&2; exit 1; }
  for grantee in public jandibat_backup_bootstrap jandibat_backup_runner jandibat_backup_verifier; do
   if [ "$grantee" = public ]; then
    predicate="object_type IN ('tables', 'schemas')"
@@ -119,10 +134,6 @@ ORDER BY database_name, schema_name, object_name, object_type, grantee, privileg
   fi
   value=$(sql_value "$COCKROACH_ROOT_URL" "USE \"$database\"; SELECT IF((SELECT count(*) FROM [SHOW DEFAULT PRIVILEGES FOR GRANTEE $grantee] WHERE $predicate) = 0, 1, 0);")
   [ "$value" = 1 ] || { echo 'database backup default grant mismatch' >&2; exit 1; }
-  if [ "$database" = defaultdb ]; then
-   value=$(sql_value "$COCKROACH_ROOT_URL" "USE defaultdb; SELECT IF((SELECT count(*) FROM [SHOW DEFAULT PRIVILEGES FOR GRANTEE $grantee IN SCHEMA jandibat_backup_admin]) = 0, 1, 0);")
-   [ "$value" = 1 ] || { echo 'database backup private default grant mismatch' >&2; exit 1; }
-  fi
  done
 }
 expect_private_grants() {

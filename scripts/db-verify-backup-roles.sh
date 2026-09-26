@@ -30,6 +30,13 @@ expect_denied() {
   echo 'backup verifier denial was not a privilege refusal' >&2; exit 1;
  }
 }
+audit_schema_defaults() {
+ schema=$1
+ case "$schema" in ''|*[!A-Za-z0-9_.-]*) echo 'backup default grant audit unsupported schema' >&2; exit 1;; esac
+ for grantee in public jandibat_backup_bootstrap jandibat_backup_runner jandibat_backup_verifier; do
+  expect_one "USE \"$database\"; SELECT IF((SELECT count(*) FROM [SHOW DEFAULT PRIVILEGES FOR GRANTEE $grantee IN SCHEMA \"$schema\"]) = 0, 1, 0);"
+ done
+}
 audit_database_grants() {
  database=$1
  case "$database" in ''|*[!A-Za-z0-9_.-]*) echo 'backup grant audit unsupported identifier' >&2; exit 1;; esac
@@ -42,7 +49,7 @@ ORDER BY database_name, schema_name, object_name, object_type, grantee, privileg
    expected[db FS schema FS object FS kind FS grantee FS privilege FS grantable]=1
   }
   BEGIN {
-   allow("public", "NULL", "schema", "public", "CREATE", "f")
+   if (db!="jandibat") allow("public", "NULL", "schema", "public", "CREATE", "f")
    allow("public", "NULL", "schema", "public", "USAGE", "f")
    if (db=="defaultdb") {
     allow("NULL", "NULL", "database", "jandibat_backup_bootstrap", "CONNECT", "f")
@@ -70,6 +77,18 @@ ORDER BY database_name, schema_name, object_name, object_type, grantee, privileg
    exit bad
   }
  ' "$capture_dir/stdout" || { echo 'backup role effective grant mismatch' >&2; exit 1; }
+ # SHOW SCHEMAS can hide system/private schemas from this least-privileged
+ # identity. Audit the known policy scopes explicitly, then all visible ones.
+ audit_schema_defaults public
+ [ "$database" != defaultdb ] || audit_schema_defaults jandibat_backup_admin
+ sql "SELECT schema_name FROM [SHOW SCHEMAS FROM \"$database\"]
+WHERE schema_name NOT IN ('crdb_internal', 'information_schema', 'pg_catalog', 'pg_extension')
+ORDER BY schema_name;"
+ cp "$capture_dir/stdout" "$capture_dir/schemas"
+ while IFS= read -r schema; do
+  [ "$schema" != schema_name ] || continue
+  audit_schema_defaults "$schema"
+ done <"$capture_dir/schemas"
  for grantee in public jandibat_backup_bootstrap jandibat_backup_runner jandibat_backup_verifier; do
   if [ "$grantee" = public ]; then
    predicate="object_type IN ('tables', 'schemas')"
@@ -77,9 +96,6 @@ ORDER BY database_name, schema_name, object_name, object_type, grantee, privileg
    predicate='role IS DISTINCT FROM grantee OR for_all_roles'
   fi
   expect_one "USE \"$database\"; SELECT IF((SELECT count(*) FROM [SHOW DEFAULT PRIVILEGES FOR GRANTEE $grantee] WHERE $predicate) = 0, 1, 0);"
-  if [ "$database" = defaultdb ]; then
-   expect_one "USE defaultdb; SELECT IF((SELECT count(*) FROM [SHOW DEFAULT PRIVILEGES FOR GRANTEE $grantee IN SCHEMA jandibat_backup_admin]) = 0, 1, 0);"
-  fi
  done
 }
 sql 'SELECT current_user();'

@@ -88,6 +88,8 @@ jobs:
         run: nix develop --command node --test scripts/test-db-backup-roles-secure-fixture.test.mjs
       - name: Reject malformed backup account metadata and input
         run: nix develop --command make db-backup-metadata-test
+      - name: Verify backup connection state machine and secret output boundary
+        run: nix develop --command make db-backup-roles-test
       - name: Probe isolated secure backup roles and synthetic S3 connection
         run: nix develop .#backup-fixture --command sh scripts/test-db-backup-roles-secure.sh
       - name: Verify production secret startup and live worker OAuth rejection

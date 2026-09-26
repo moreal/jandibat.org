@@ -28,14 +28,12 @@ const (
 // SHOW BACKUP ... WITH check_files. FileChecked must never be inferred from
 // schedule completion or from a backup's presence in a catalog.
 type CheckResult struct {
-	ChainID               string
-	CollectionID          string
-	FullScheduleID        string
-	IncrementalScheduleID string
-	RecoveryTimestamp     time.Time
-	CheckedAt             time.Time
-	FileChecked           bool
-	Passed                bool
+	ChainID           string
+	CollectionID      string
+	RecoveryTimestamp time.Time
+	CheckedAt         time.Time
+	FileChecked       bool
+	Passed            bool
 }
 
 type Checker func(context.Context) (CheckResult, error)
@@ -43,7 +41,6 @@ type Checker func(context.Context) (CheckResult, error)
 type verificationRecord struct {
 	ChainID           string    `json:"chainId,omitempty"`
 	CollectionID      string    `json:"collectionId,omitempty"`
-	LinkedScheduleIDs []string  `json:"linkedScheduleIds,omitempty"`
 	RecoveryTimestamp time.Time `json:"verifiedRecoveryAt,omitempty"`
 	CheckedAt         time.Time `json:"checkedAt,omitempty"`
 	LastCheckAt       time.Time `json:"lastAttemptAt,omitempty"`
@@ -108,18 +105,6 @@ func healthy(r verificationRecord, now time.Time) bool {
 	return r.Outcome == "pass" && !r.RecoveryTimestamp.IsZero() && age >= 0 && age <= checkStaleAfter
 }
 
-func validScheduleID(id string) bool {
-	if len(id) == 0 || len(id) > 20 || id[0] == '0' {
-		return false
-	}
-	for i := 0; i < len(id); i++ {
-		if id[i] < '0' || id[i] > '9' {
-			return false
-		}
-	}
-	return true
-}
-
 func validID(id string) bool {
 	if len(id) == 0 || len(id) > 128 {
 		return false
@@ -142,11 +127,9 @@ func validRecord(r verificationRecord, now time.Time) bool {
 	}
 	if r.RecoveryTimestamp.IsZero() {
 		return r.Outcome != "pass" && r.ChainID == "" && r.CollectionID == "" &&
-			len(r.LinkedScheduleIDs) == 0 && r.CheckedAt.IsZero()
+			r.CheckedAt.IsZero()
 	}
-	return validID(r.ChainID) && validID(r.CollectionID) && len(r.LinkedScheduleIDs) == 2 &&
-		validScheduleID(r.LinkedScheduleIDs[0]) && validScheduleID(r.LinkedScheduleIDs[1]) &&
-		r.LinkedScheduleIDs[0] != r.LinkedScheduleIDs[1] &&
+	return validID(r.ChainID) && validID(r.CollectionID) &&
 		!r.RecoveryTimestamp.After(r.CheckedAt) && !r.CheckedAt.After(now) &&
 		!r.LastCheckAt.IsZero()
 }
@@ -174,15 +157,12 @@ func (s *VerificationState) Check(ctx context.Context, checker Checker) error {
 	next.Outcome = "fail"
 	checkedAge := now.Sub(result.CheckedAt)
 	if checkErr == nil && result.FileChecked && result.Passed && validID(result.ChainID) && validID(result.CollectionID) &&
-		validScheduleID(result.FullScheduleID) && validScheduleID(result.IncrementalScheduleID) &&
-		result.FullScheduleID != result.IncrementalScheduleID &&
 		checkedAge >= 0 && checkedAge <= checkStaleAfter &&
 		!result.RecoveryTimestamp.IsZero() && !result.RecoveryTimestamp.After(now) &&
 		!result.RecoveryTimestamp.After(result.CheckedAt) &&
 		!result.RecoveryTimestamp.Before(next.RecoveryTimestamp) {
 		next.ChainID = result.ChainID
 		next.CollectionID = result.CollectionID
-		next.LinkedScheduleIDs = []string{result.FullScheduleID, result.IncrementalScheduleID}
 		next.RecoveryTimestamp = result.RecoveryTimestamp.UTC()
 		next.CheckedAt = result.CheckedAt.UTC()
 		next.Outcome = "pass"
@@ -235,12 +215,11 @@ func replaceRecord(path string, record verificationRecord) error {
 	data, err := json.Marshal(struct {
 		ChainID           string     `json:"chainId,omitempty"`
 		CollectionID      string     `json:"collectionId,omitempty"`
-		LinkedScheduleIDs []string   `json:"linkedScheduleIds"`
 		RecoveryTimestamp *time.Time `json:"verifiedRecoveryAt"`
 		CheckedAt         *time.Time `json:"checkedAt"`
 		LastCheckAt       *time.Time `json:"lastAttemptAt"`
 		Outcome           string     `json:"outcome"`
-	}{record.ChainID, record.CollectionID, record.LinkedScheduleIDs, recovery, checked, attempted, record.Outcome})
+	}{record.ChainID, record.CollectionID, recovery, checked, attempted, record.Outcome})
 	if err != nil || len(data) > maxRecordSize {
 		return errors.New("invalid verification record")
 	}

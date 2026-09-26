@@ -188,7 +188,7 @@ func parseChainResult(data []byte) (backup.CheckResult, error) {
 			return bad, errors.New("invalid chain check result")
 		}
 		switch key {
-		case "schemaVersion", "chainId", "collectionId", "fullScheduleId", "incrementalScheduleId", "checkedAt", "recoveryTimestamp", "fileChecked", "passed":
+		case "schemaVersion", "chainId", "collectionId", "checkedAt", "recoveryTimestamp", "fileChecked", "passed":
 		default:
 			return bad, errors.New("invalid chain check result")
 		}
@@ -201,7 +201,7 @@ func parseChainResult(data []byte) (backup.CheckResult, error) {
 		}
 		fields[key] = value
 	}
-	if len(fields) != 9 {
+	if len(fields) != 7 {
 		return bad, errors.New("invalid chain check result")
 	}
 	if tok, err = d.Token(); err != nil || tok != json.Delim('}') {
@@ -211,19 +211,16 @@ func parseChainResult(data []byte) (backup.CheckResult, error) {
 		return bad, errors.New("invalid chain check result")
 	}
 	var version int
-	var chainID, collectionID, fullID, incrementalID, timestamp, checkedAt string
+	var chainID, collectionID, timestamp, checkedAt string
 	var checked, passed bool
 	if json.Unmarshal(fields["schemaVersion"], &version) != nil || version != 1 ||
 		json.Unmarshal(fields["chainId"], &chainID) != nil ||
 		json.Unmarshal(fields["collectionId"], &collectionID) != nil ||
-		json.Unmarshal(fields["fullScheduleId"], &fullID) != nil ||
-		json.Unmarshal(fields["incrementalScheduleId"], &incrementalID) != nil ||
 		json.Unmarshal(fields["checkedAt"], &checkedAt) != nil ||
 		json.Unmarshal(fields["recoveryTimestamp"], &timestamp) != nil ||
 		json.Unmarshal(fields["fileChecked"], &checked) != nil ||
 		json.Unmarshal(fields["passed"], &passed) != nil || !checked || !passed ||
 		!safeEvidenceID(chainID) || !safeEvidenceID(collectionID) ||
-		!safeScheduleID(fullID) || !safeScheduleID(incrementalID) || fullID == incrementalID ||
 		!strings.HasSuffix(timestamp, "Z") || !strings.HasSuffix(checkedAt, "Z") {
 		return bad, errors.New("invalid chain check result")
 	}
@@ -236,20 +233,7 @@ func parseChainResult(data []byte) (backup.CheckResult, error) {
 		return bad, errors.New("invalid chain check result")
 	}
 	return backup.CheckResult{ChainID: chainID, CollectionID: collectionID,
-		FullScheduleID: fullID, IncrementalScheduleID: incrementalID,
 		RecoveryTimestamp: recovery, CheckedAt: checkTime, FileChecked: true, Passed: true}, nil
-}
-
-func safeScheduleID(id string) bool {
-	if len(id) == 0 || len(id) > 20 || id[0] == '0' {
-		return false
-	}
-	for i := 0; i < len(id); i++ {
-		if id[i] < '0' || id[i] > '9' {
-			return false
-		}
-	}
-	return true
 }
 
 func safeEvidenceID(id string) bool {

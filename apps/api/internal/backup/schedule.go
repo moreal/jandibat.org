@@ -68,7 +68,9 @@ func (s *ScheduleState) Check(ctx context.Context, checker ScheduleChecker) erro
 	}
 	now := s.now().UTC()
 	age := now.Sub(result.CheckedAt)
-	if err != nil || result.CheckedAt.IsZero() || age < 0 || age > checkStaleAfter || result.Initializing && !result.Healthy {
+	previous := s.snapshot()
+	if err != nil || result.CheckedAt.IsZero() || result.CheckedAt.Before(previous.CheckedAt) ||
+		age < 0 || age > checkStaleAfter || result.Initializing && !result.Healthy {
 		s.mu.Lock()
 		s.result.Healthy = false
 		s.result.Initializing = false

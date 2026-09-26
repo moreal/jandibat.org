@@ -2,6 +2,14 @@
 set -eu
 
 evidence=${1:?evidence directory is required}
+stage=setup
+record_failure() {
+	status=$1
+	if [ "$status" -ne 0 ] && [ -n "${IMAGE_VALIDATION_STAGE_FILE:-}" ]; then
+		printf '%s\n' "$stage" 2>/dev/null >"$IMAGE_VALIDATION_STAGE_FILE" || :
+	fi
+}
+trap 'record_failure "$?"' EXIT
 test "$(nix eval --impure --raw --expr builtins.currentSystem)" = x86_64-linux || {
 	echo 'release image validation requires an actual x86_64-linux builder and Docker runtime' >&2
 	exit 2
@@ -12,18 +20,23 @@ evidence=$(CDPATH='' cd "$evidence" && pwd)
 # Rebuild payload derivations (not cache lookups) in the sandbox.
 # Keep substituters available to realize build inputs missing from the first closure.
 for name in api worker maintenance web backup-tools; do
+	stage=payload-build
 	first=$(nix build --no-link --print-out-paths ".#${name}-payload")
+	stage=payload-rebuild
 	second=$(nix build --rebuild --option sandbox true --no-link --print-out-paths ".#${name}-payload")
+	stage=payload-compare
 	test "$first" = "$second"
 	printf '%s %s %s\n' "$name" "$first" "$second" >>"$evidence/payload-rebuilds.txt"
 done
 
 # Includes archive contract, actual second archive build/hash comparison,
 # non-root read-only runtime, /tmp fail-closed, and DB-independent liveness.
-make images-smoke >"$evidence/image-smoke.log" 2>&1 || {
-	cat "$evidence/image-smoke.log" >&2
-	exit 1
-}
+stage=image-smoke
+if make images-smoke >"$evidence/.image-smoke.log" 2>&1; then :; else
+	smoke_status=$?
+	exit "$smoke_status"
+fi
+stage=packaging
 for name in api worker maintenance web; do
 	archive=$(nix build --no-link --print-out-paths ".#${name}-image")
 	node scripts/image-release.mjs import "$name" "$archive" "$evidence"
@@ -39,6 +52,8 @@ builder_created=false
 api_extract_container=
 maintenance_extract_container=
 cleanup() {
+	status=$1
+	record_failure "$status"
 	if [ -n "$api_extract_container" ]; then docker rm -f "$api_extract_container" >/dev/null || :; fi
 	if [ -n "$maintenance_extract_container" ]; then docker rm -f "$maintenance_extract_container" >/dev/null || :; fi
 	if [ "$builder_created" = true ]; then
@@ -49,7 +64,7 @@ cleanup() {
 	done
 	rm -r "$restore_context"
 }
-trap cleanup EXIT
+trap 'cleanup "$?"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 # The default docker driver cannot export this archive. Select our own

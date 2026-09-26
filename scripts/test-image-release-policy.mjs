@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync, execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, cpSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, cpSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, basename } from 'node:path';
 import test from 'node:test';
@@ -61,8 +61,11 @@ test('workflows build Nix archives and gate release on local and registry eviden
     const imageJob = workflow.jobs[file === 'ci.yml' ? 'images' : 'build'];
     assert.equal(imageJob['runs-on'], 'ubuntu-24.04');
     assert.ok(imageJob.steps.some(s => s.uses?.startsWith('DeterminateSystems/nix-installer-action@')));
-    assert.ok(imageJob.steps.some(s => s.run?.includes('build-release-images.sh')));
-    assert.ok(imageJob.steps.some(s => s.uses?.startsWith('actions/upload-artifact@') && s.with['if-no-files-found'] === 'error'));
+    assert.ok(imageJob.steps.some(s => s.run?.includes('run-image-validation-ci.sh')));
+    const upload = imageJob.steps.find(s => s.uses?.startsWith('actions/upload-artifact@') && s.with['if-no-files-found'] === 'error');
+    assert.ok(upload);
+    assert.equal(upload.if, 'success()');
+    assert.doesNotMatch(upload.with.path, /\*\.log/);
     if (file === 'deploy-staging.yml') {
       assert.ok(imageJob.steps.some(s => s.run?.includes('image-release.mjs publish')));
       for (const name of names) assert.ok(imageJob.outputs[name.replace('-', '_') + '_ref']);
@@ -87,7 +90,7 @@ console.log('/nix/store/' + name + (process.env.DIVERGE === name && args.include
   executable(dir, 'make', `require('node:fs').writeFileSync(process.env.MAKE_TRACE, 'images-smoke'); process.exit(23);`);
   const env = { PATH: `${join(dir, 'bin')}:${process.env.PATH}`, NIX_TRACE: trace, MAKE_TRACE: makeTrace };
   const result = invoke('build-release-images.sh', env, [join(dir, 'matching')]);
-  assert.equal(result.status, 1, result.stderr);
+  assert.equal(result.status, 23, result.stderr);
   assert.equal(readFileSync(makeTrace, 'utf8'), 'images-smoke');
   const builds = readFileSync(trace, 'utf8').trim().split('\n').map(JSON.parse);
   for (const [index, name] of ['api', 'worker', 'maintenance', 'web', 'backup-tools'].entries()) {
@@ -101,6 +104,58 @@ console.log('/nix/store/' + name + (process.env.DIVERGE === name && args.include
   const mismatched = invoke('build-release-images.sh', { ...env, DIVERGE: 'api' }, [join(dir, 'mismatched')]);
   assert.equal(mismatched.status, 1, mismatched.stderr);
   assert.equal(existsSync(join(dir, 'mismatched', 'payload-rebuilds.txt')), false);
+});
+
+test('image validation CI reports one fixed stage and quarantines child output', t => {
+  const dir = fixture(t);
+  const sentinel = 'SENTINEL-secret-path-::error::injected';
+  executable(dir, 'nix', `
+const { spawnSync } = require('node:child_process');
+const args = process.argv.slice(2);
+if (args[0] === 'develop') {
+  if (process.env.FAIL_STAGE === 'setup') { console.error(process.env.SENTINEL); process.exit(41); }
+  const result = spawnSync(args[args.indexOf('--command') + 1], args.slice(args.indexOf('--command') + 2), { stdio: 'inherit' });
+  process.exit(result.status ?? 99);
+}
+if (args[0] === 'eval') { console.log('x86_64-linux'); process.exit(0); }
+if (args[0] !== 'build') process.exit(90);
+const stage = args.includes('--rebuild') ? 'rebuild' : 'build';
+if (process.env.FAIL_STAGE === stage) { console.error(process.env.SENTINEL); process.exit(stage === 'build' ? 31 : 32); }
+const name = args.at(-1).slice(2, -'-payload'.length);
+console.log('/nix/store/' + name + (process.env.FAIL_STAGE === 'compare' && stage === 'rebuild' ? '-different' : ''));
+`);
+  executable(dir, 'make', `
+const fs = require('node:fs');
+fs.writeFileSync(process.env.MAKE_TRACE, 'images-smoke');
+console.error(process.env.SENTINEL);
+process.exit(47);
+`);
+  const expected = {
+    setup: [41, 'setup'],
+    build: [31, 'payload build'],
+    rebuild: [32, 'payload rebuild'],
+    compare: [1, 'payload comparison'],
+    smoke: [47, 'image smoke'],
+  };
+  for (const [stage, [status, label]] of Object.entries(expected)) {
+    const evidence = join(dir, stage);
+    const env = {
+      PATH: `${join(dir, 'bin')}:${process.env.PATH}`,
+      FAIL_STAGE: stage, SENTINEL: sentinel, MAKE_TRACE: join(dir, `${stage}-make-trace`),
+    };
+    const result = invoke('run-image-validation-ci.sh', env, [evidence]);
+    assert.equal(result.status, status, `${stage}: ${result.stderr}`);
+    assert.equal(result.stdout, '');
+    assert.equal(result.stderr, `::error::Image validation failed during ${label}.\n`);
+    assert.doesNotMatch(result.stdout + result.stderr, /SENTINEL|injected/);
+    if (['setup', 'build', 'rebuild'].includes(stage))
+      assert.match(readFileSync(join(evidence, '.image-validation-output'), 'utf8'), /SENTINEL/);
+    if (stage === 'smoke') {
+      assert.equal(readFileSync(env.MAKE_TRACE, 'utf8'), 'images-smoke');
+      assert.match(readFileSync(join(evidence, '.image-smoke.log'), 'utf8'), /SENTINEL/);
+      assert.deepEqual(readdirSync(evidence).filter(name => !name.startsWith('.') && name.endsWith('.log')), []);
+    } else assert.equal(existsSync(env.MAKE_TRACE), false);
+  }
 });
 
 test('publish workflow requires human review and cannot deploy', () => {
@@ -131,10 +186,13 @@ test('publish workflow requires human review and cannot deploy', () => {
   const staging = yaml(join(root, '.github/workflows/deploy-staging.yml'));
   const stagingReviewRun = staging.jobs['security-review'].steps.find(s => s.name === 'Validate review evidence and reviewed code binding')?.run || '';
   assert.equal(stagingReviewRun, reviewRun);
-  assert.ok(publish.steps.some(s => s.run?.includes('build-release-images.sh')));
+  assert.ok(publish.steps.some(s => s.run?.includes('run-image-validation-ci.sh')));
   assert.ok(publish.steps.some(s => s.run?.includes('docker login ghcr.io')));
   assert.ok(publish.steps.some(s => s.run?.includes('image-release.mjs publish')));
-  assert.ok(publish.steps.some(s => s.uses === 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a' && s.with['if-no-files-found'] === 'error'));
+  const upload = publish.steps.find(s => s.uses === 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a' && s.with['if-no-files-found'] === 'error');
+  assert.ok(upload);
+  assert.equal(upload.if, 'success()');
+  assert.doesNotMatch(upload.with.path, /\*\.log/);
 });
 
 function reviewBindingFixture(t) {
@@ -760,6 +818,10 @@ const uncertainOwnership = ['create', 'collision'].includes(failure);
 test(`release packaging ${uncertainOwnership ? 'preserves uncertain builder after' : 'cleans owned builder after'} ${failure === 'none' ? 'success' : failure + ' failure'}`, t => {
   const dir = fixture(t);
   const env = { PATH: `${join(dir, 'bin')}:${process.env.PATH}`, TRACE: join(dir, 'trace'), BUILDER_STATE: join(dir,'builder'), FIXTURE_ARCHIVE: join(dir,'archive.tar'), FAILURE: failure };
+  if (failure === 'build') {
+    env.IMAGE_VALIDATION_STAGE_FILE = join(dir, 'unwritable-stage');
+    mkdirSync(env.IMAGE_VALIDATION_STAGE_FILE);
+  }
   const staticBusybox = join(dir, 'static-busybox');
   mkdirSync(join(staticBusybox, 'bin'), { recursive: true });
   writeFileSync(join(staticBusybox, 'bin/busybox'), 'static fixture executable', { mode: 0o555 });

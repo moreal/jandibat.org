@@ -22,9 +22,10 @@ import (
 )
 
 const (
-	defaultRecordPath = "/var/run/jandibat-backup/verified.json"
-	chainScriptPath   = "/workspace/scripts/db-verify-backup-chain.sh"
-	maxChainResult    = 4096
+	defaultRecordPath  = "/var/run/jandibat-backup/verified.json"
+	chainScriptPath    = "/workspace/scripts/db-verify-backup-chain.sh"
+	scheduleScriptPath = "/workspace/scripts/db-observe-backup-schedule.sh"
+	maxChainResult     = 4096
 )
 
 func main() {
@@ -44,7 +45,7 @@ func run() error {
 	defer func() { _ = syncLogger() }()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := runMode(ctx, os.Args[1:], os.Getenv, nil, nil, os.Stdout); err != nil {
+	if err := runMode(ctx, os.Args[1:], os.Getenv, nil, nil, nil, os.Stdout); err != nil {
 		observability.Log(logger, "backup_tools.stopped", zap.String("reason", "operation failed"))
 		return err
 	}
@@ -54,7 +55,7 @@ func run() error {
 // runMode permits only the two verification modes. The checker and listener
 // arguments are test seams; production always uses the fixed packaged script
 // and opens its own internal listener.
-func runMode(ctx context.Context, args []string, getenv func(string) string, checker backup.Checker, supplied net.Listener, out io.Writer) error {
+func runMode(ctx context.Context, args []string, getenv func(string) string, checker backup.Checker, scheduleChecker backup.ScheduleChecker, supplied net.Listener, out io.Writer) error {
 	if len(args) != 1 || (args[0] != "check-once" && args[0] != "run-verifier") || getenv == nil {
 		return errors.New("invalid backup-tools mode")
 	}
@@ -84,6 +85,13 @@ func runMode(ctx context.Context, args []string, getenv func(string) string, che
 		}
 		return nil
 	}
+	if scheduleChecker == nil {
+		if _, err := os.Stat(scheduleScriptPath); err != nil {
+			return errors.New("schedule observer unavailable")
+		}
+		scheduleChecker = scriptScheduleChecker(scheduleScriptPath, path, getenv)
+	}
+	schedule := backup.NewScheduleState(time.Now)
 	address := getenv("BACKUP_METRICS_LISTEN_ADDR")
 	host, _, err := net.SplitHostPort(address)
 	if err != nil {
@@ -93,7 +101,7 @@ func runMode(ctx context.Context, args []string, getenv func(string) string, che
 	if ip == nil || ip.IsUnspecified() || !(ip.IsLoopback() || ip.IsPrivate()) {
 		return errors.New("verifier listen address must be internal")
 	}
-	handler, err := backup.NewVerificationMetricsHandler(state, getenv("BACKUP_METRICS_TOKEN_FILE"))
+	handler, err := backup.NewBackupMetricsHandler(state, schedule, getenv("BACKUP_METRICS_TOKEN_FILE"))
 	if err != nil {
 		return errors.New("verifier metrics configuration unavailable")
 	}
@@ -111,6 +119,7 @@ func runMode(ctx context.Context, args []string, getenv func(string) string, che
 	serverErrors := make(chan error, 1)
 	go func() { serverErrors <- server.Serve(listener) }()
 	go state.RunChecks(ctx, checker)
+	go schedule.RunChecks(ctx, scheduleChecker)
 	select {
 	case err := <-serverErrors:
 		if errors.Is(err, http.ErrServerClosed) {
@@ -129,31 +138,48 @@ func runMode(ctx context.Context, args []string, getenv func(string) string, che
 
 func scriptChecker(path, recordPath string, getenv func(string) string) backup.Checker {
 	return func(ctx context.Context) (backup.CheckResult, error) {
-		checkCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-		defer cancel()
-		cmd := exec.CommandContext(checkCtx, "sh", path)
-		// The SQL client is a child of the shell script. Cancellation must stop
-		// the whole private process group, not leave a descendant with pipe FDs.
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-		cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
-		cmd.WaitDelay = time.Second
-		cmd.Env = []string{
-			"PATH=" + os.Getenv("PATH"),
-			"BACKUP_VERIFIER_DATABASE_URL=" + getenv("BACKUP_VERIFIER_DATABASE_URL"),
-			"TMPDIR=" + filepath.Dir(recordPath),
-		}
-		if client := getenv("COCKROACH_SQL_BIN"); client != "" {
-			cmd.Env = append(cmd.Env, "COCKROACH_SQL_BIN="+client)
-		}
-		var output boundedBuffer
-		output.limit = maxChainResult
-		cmd.Stdout = &output
-		cmd.Stderr = io.Discard
-		if err := cmd.Run(); err != nil {
+		output, err := runSafeScript(ctx, path, recordPath, getenv)
+		if err != nil {
 			return backup.CheckResult{}, errors.New("chain check subprocess failed")
 		}
-		return parseChainResult(output.Bytes())
+		return parseChainResult(output)
 	}
+}
+
+func scriptScheduleChecker(path, recordPath string, getenv func(string) string) backup.ScheduleChecker {
+	return func(ctx context.Context) (backup.ScheduleCheckResult, error) {
+		output, err := runSafeScript(ctx, path, recordPath, getenv)
+		if err != nil {
+			return backup.ScheduleCheckResult{}, errors.New("schedule observation subprocess failed")
+		}
+		return parseScheduleResult(output)
+	}
+}
+
+func runSafeScript(ctx context.Context, path, recordPath string, getenv func(string) string) ([]byte, error) {
+	checkCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(checkCtx, "sh", path)
+	// A shell child may retain output pipes after cancellation.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = time.Second
+	cmd.Env = []string{
+		"PATH=" + os.Getenv("PATH"),
+		"BACKUP_VERIFIER_DATABASE_URL=" + getenv("BACKUP_VERIFIER_DATABASE_URL"),
+		"TMPDIR=" + filepath.Dir(recordPath),
+	}
+	if client := getenv("COCKROACH_SQL_BIN"); client != "" {
+		cmd.Env = append(cmd.Env, "COCKROACH_SQL_BIN="+client)
+	}
+	var output boundedBuffer
+	output.limit = maxChainResult
+	cmd.Stdout = &output
+	cmd.Stderr = io.Discard
+	if err := cmd.Run(); err != nil {
+		return nil, errors.New("backup observation subprocess failed")
+	}
+	return output.Bytes(), nil
 }
 
 type boundedBuffer struct {
@@ -166,6 +192,73 @@ func (b *boundedBuffer) Write(p []byte) (int, error) {
 		return 0, errors.New("chain check output exceeded limit")
 	}
 	return b.Buffer.Write(p)
+}
+
+func parseScheduleResult(data []byte) (backup.ScheduleCheckResult, error) {
+	bad := backup.ScheduleCheckResult{}
+	if len(data) == 0 || len(data) > maxChainResult {
+		return bad, errors.New("invalid schedule observation")
+	}
+	d := json.NewDecoder(bytes.NewReader(data))
+	tok, err := d.Token()
+	if err != nil || tok != json.Delim('{') {
+		return bad, errors.New("invalid schedule observation")
+	}
+	fields := map[string]json.RawMessage{}
+	for d.More() {
+		keyToken, err := d.Token()
+		key, ok := keyToken.(string)
+		if err != nil || !ok {
+			return bad, errors.New("invalid schedule observation")
+		}
+		switch key {
+		case "schemaVersion", "checkedAt", "healthy", "initializing":
+		default:
+			return bad, errors.New("invalid schedule observation")
+		}
+		if _, exists := fields[key]; exists {
+			return bad, errors.New("invalid schedule observation")
+		}
+		var value json.RawMessage
+		if err := d.Decode(&value); err != nil {
+			return bad, errors.New("invalid schedule observation")
+		}
+		fields[key] = value
+	}
+	if len(fields) != 4 {
+		return bad, errors.New("invalid schedule observation")
+	}
+	if tok, err = d.Token(); err != nil || tok != json.Delim('}') {
+		return bad, errors.New("invalid schedule observation")
+	}
+	if _, err = d.Token(); !errors.Is(err, io.EOF) {
+		return bad, errors.New("invalid schedule observation")
+	}
+	var version int
+	var stamp string
+	healthy, healthyOK := strictJSONBool(fields["healthy"])
+	initializing, initializingOK := strictJSONBool(fields["initializing"])
+	if json.Unmarshal(fields["schemaVersion"], &version) != nil || version != 1 ||
+		json.Unmarshal(fields["checkedAt"], &stamp) != nil || !strings.HasSuffix(stamp, "Z") ||
+		!healthyOK || !initializingOK || initializing && !healthy {
+		return bad, errors.New("invalid schedule observation")
+	}
+	checkedAt, err := time.Parse(time.RFC3339Nano, stamp)
+	if err != nil || checkedAt.IsZero() {
+		return bad, errors.New("invalid schedule observation")
+	}
+	return backup.ScheduleCheckResult{CheckedAt: checkedAt, Healthy: healthy, Initializing: initializing}, nil
+}
+
+func strictJSONBool(raw json.RawMessage) (bool, bool) {
+	switch string(bytes.TrimSpace(raw)) {
+	case "true":
+		return true, true
+	case "false":
+		return false, true
+	default:
+		return false, false
+	}
 }
 
 // parseChainResult requires one versioned, exact-field object. No SQL text,

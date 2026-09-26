@@ -259,6 +259,12 @@ func replaceRecord(path string, record verificationRecord) error {
 // NewVerificationMetricsHandler reads a dedicated scrape token file once.
 // The handler answers while verification is unknown or unhealthy.
 func NewVerificationMetricsHandler(state *VerificationState, tokenFile string) (http.Handler, error) {
+	return NewBackupMetricsHandler(state, nil, tokenFile)
+}
+
+// NewBackupMetricsHandler keeps schedule policy observations separate from
+// file-checked recovery state. Neither metric family gates the other.
+func NewBackupMetricsHandler(state *VerificationState, schedule *ScheduleState, tokenFile string) (http.Handler, error) {
 	if state == nil || tokenFile == "" {
 		return nil, errors.New("invalid verification metrics configuration")
 	}
@@ -295,15 +301,35 @@ func NewVerificationMetricsHandler(state *VerificationState, tokenFile string) (
 		if healthy(record, state.now().UTC()) {
 			healthValue = 1
 		}
+		scheduleResult := schedule.snapshot()
+		scheduleHealthy := 0
+		scheduleInitializing := 0
+		if schedule != nil && schedule.now != nil {
+			age := schedule.now().UTC().Sub(scheduleResult.CheckedAt)
+			if scheduleResult.Healthy && !scheduleResult.CheckedAt.IsZero() && age >= 0 && age <= checkStaleAfter {
+				scheduleHealthy = 1
+				if scheduleResult.Initializing {
+					scheduleInitializing = 1
+				}
+			}
+		}
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 		_, _ = fmt.Fprintf(w, "# TYPE jandibat_backup_verified_recovery_timestamp_seconds gauge\n"+
 			"jandibat_backup_verified_recovery_timestamp_seconds %d\n"+
 			"# TYPE jandibat_backup_check_healthy gauge\n"+
 			"jandibat_backup_check_healthy %d\n"+
 			"# TYPE jandibat_backup_last_check_timestamp_seconds gauge\n"+
-			"jandibat_backup_last_check_timestamp_seconds %d\n",
+			"jandibat_backup_last_check_timestamp_seconds %d\n"+
+			"# TYPE jandibat_backup_schedule_policy_healthy gauge\n"+
+			"jandibat_backup_schedule_policy_healthy %d\n"+
+			"# TYPE jandibat_backup_schedule_initializing gauge\n"+
+			"jandibat_backup_schedule_initializing %d\n"+
+			"# TYPE jandibat_backup_schedule_last_check_timestamp_seconds gauge\n"+
+			"jandibat_backup_schedule_last_check_timestamp_seconds %d\n",
 			record.RecoveryTimestamp.Unix()*boolInt(!record.RecoveryTimestamp.IsZero()),
-			healthValue, record.LastCheckAt.Unix()*boolInt(!record.LastCheckAt.IsZero()))
+			healthValue, record.LastCheckAt.Unix()*boolInt(!record.LastCheckAt.IsZero()),
+			scheduleHealthy, scheduleInitializing,
+			scheduleResult.CheckedAt.Unix()*boolInt(!scheduleResult.CheckedAt.IsZero()))
 	}), nil
 }
 

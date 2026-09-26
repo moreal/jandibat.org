@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -45,6 +46,84 @@ func TestParseChainResultRejectsNonCanonicalEvidence(t *testing.T) {
 	}
 }
 
+func TestParseScheduleResultUsesExactSafeFourFieldContract(t *testing.T) {
+	good := `{"schemaVersion":1,"checkedAt":"2026-09-25T12:00:00Z","healthy":true,"initializing":true}`
+	for _, raw := range []string{
+		strings.Replace(good, `"schemaVersion":1,`, "", 1),
+		strings.Replace(good, `"healthy":true`, `"healthy":false`, 1),
+		strings.Replace(good, `"healthy":true`, `"healthy":null`, 1),
+		strings.Replace(good, `"initializing":true`, `"initializing":null`, 1),
+		strings.Replace(good, `"healthy":true`, `"healthy":true,"healthy":false`, 1),
+		good[:len(good)-1] + `,"fullScheduleId":"private"}`,
+		good + "\n{}", strings.Repeat("x", 4097),
+	} {
+		if _, err := parseScheduleResult([]byte(raw)); err == nil {
+			t.Fatal("unsafe schedule observation accepted")
+		}
+	}
+	got, err := parseScheduleResult([]byte(good))
+	if err != nil || !got.Healthy || !got.Initializing || !got.CheckedAt.Equal(time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)) {
+		t.Fatalf("expected initial paused policy observation: %+v %v", got, err)
+	}
+}
+
+func TestRunVerifierKeepsFileRecoveryWhenScheduleQueryFails(t *testing.T) {
+	dir := t.TempDir()
+	tokenFile := filepath.Join(dir, "token")
+	if err := os.WriteFile(tokenFile, []byte(fixtureToken), 0600); err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{"BACKUP_VERIFIED_RECORD_FILE": filepath.Join(dir, "verified.json"), "BACKUP_METRICS_TOKEN_FILE": tokenFile, "BACKUP_METRICS_LISTEN_ADDR": "127.0.0.1:0"}
+	getenv := func(k string) string { return env[k] }
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	checkedAt := time.Now().UTC()
+	go func() {
+		done <- runMode(ctx, []string{"run-verifier"}, getenv,
+			func(context.Context) (backup.CheckResult, error) {
+				return backup.CheckResult{ChainID: "chain_1", CollectionID: "jandibat_backup_v1", RecoveryTimestamp: checkedAt.Add(-time.Minute), CheckedAt: checkedAt, FileChecked: true, Passed: true}, nil
+			},
+			func(context.Context) (backup.ScheduleCheckResult, error) {
+				return backup.ScheduleCheckResult{}, errors.New("private SQL URI")
+			},
+			listener, &bytes.Buffer{})
+	}()
+	client := &http.Client{Timeout: time.Second}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		req, _ := http.NewRequest("GET", "http://"+listener.Addr().String()+"/metrics", nil)
+		req.Header.Set("Authorization", "Bearer "+fixtureToken)
+		resp, err := client.Do(req)
+		if err == nil {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if strings.Contains(string(body), "jandibat_backup_check_healthy 1\n") {
+				if !strings.Contains(string(body), "jandibat_backup_schedule_policy_healthy 0\n") {
+					t.Fatalf("schedule query failure masked: %q", body)
+				}
+				cancel()
+				select {
+				case err := <-done:
+					if err != nil {
+						t.Fatal(err)
+					}
+				case <-time.After(3 * time.Second):
+					t.Fatal("verifier did not stop")
+				}
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("file-checked recovery did not become healthy independently")
+}
+
 func TestCheckOncePersistsOnlyVerifiedEvidence(t *testing.T) {
 	dir := t.TempDir()
 	record := filepath.Join(dir, "verified.json")
@@ -55,7 +134,7 @@ func TestCheckOncePersistsOnlyVerifiedEvidence(t *testing.T) {
 	checker := func(context.Context) (backup.CheckResult, error) {
 		return backup.CheckResult{ChainID: "chain_1", CollectionID: "jandibat_backup_v1", CheckedAt: time.Now().UTC(), RecoveryTimestamp: now, FileChecked: true, Passed: true}, nil
 	}
-	if err := runMode(context.Background(), []string{"check-once"}, getenv, checker, nil, &out); err != nil {
+	if err := runMode(context.Background(), []string{"check-once"}, getenv, checker, nil, nil, &out); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(record)
@@ -66,7 +145,7 @@ func TestCheckOncePersistsOnlyVerifiedEvidence(t *testing.T) {
 	}
 	if err := runMode(context.Background(), []string{"check-once"}, getenv, func(context.Context) (backup.CheckResult, error) {
 		return backup.CheckResult{}, errors.New("s3://secret:user@host/object")
-	}, nil, &out); err == nil || strings.Contains(err.Error(), "secret") {
+	}, nil, nil, &out); err == nil || strings.Contains(err.Error(), "secret") {
 		t.Fatalf("unsafe failure: %v", err)
 	}
 }
@@ -98,6 +177,8 @@ func TestRunVerifierServesMetricsDuringFailedCheck(t *testing.T) {
 			close(started)
 			<-release
 			return backup.CheckResult{}, errors.New("secret credential")
+		}, func(context.Context) (backup.ScheduleCheckResult, error) {
+			return backup.ScheduleCheckResult{}, errors.New("schedule unavailable")
 		}, listener, &bytes.Buffer{})
 	}()
 	select {
@@ -131,7 +212,7 @@ func TestRunVerifierServesMetricsDuringFailedCheck(t *testing.T) {
 func TestRunVerifierRefusesUnsafeConfiguration(t *testing.T) {
 	for _, addr := range []string{"", ":8080", "0.0.0.0:8080", "example.org:8080"} {
 		env := map[string]string{"BACKUP_METRICS_LISTEN_ADDR": addr, "BACKUP_METRICS_TOKEN_FILE": "/missing"}
-		if err := runMode(context.Background(), []string{"run-verifier"}, func(k string) string { return env[k] }, nil, nil, &bytes.Buffer{}); err == nil {
+		if err := runMode(context.Background(), []string{"run-verifier"}, func(k string) string { return env[k] }, nil, nil, nil, &bytes.Buffer{}); err == nil {
 			t.Fatalf("unsafe listen address accepted")
 		}
 	}
@@ -174,6 +255,31 @@ func TestScriptCheckerStopsOnContextCancellation(t *testing.T) {
 	_, err := scriptChecker(path, filepath.Join(t.TempDir(), "verified.json"), func(string) string { return "" })(ctx)
 	if err == nil || time.Since(started) > 2*time.Second {
 		t.Fatalf("checker ignored cancellation: %v", err)
+	}
+}
+
+func TestScriptScheduleCheckerKeepsSQLFailurePrivate(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "schedule.sh")
+	if err := os.WriteFile(script, []byte("echo 's3://private-user:private-key@storage' >&2; exit 1\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	getenv := func(key string) string {
+		if key == "BACKUP_VERIFIER_DATABASE_URL" {
+			return "postgresql://private@fixture/db"
+		}
+		return ""
+	}
+	_, err := scriptScheduleChecker(script, filepath.Join(dir, "verified.json"), getenv)(context.Background())
+	if err == nil || strings.Contains(err.Error(), "private") || strings.Contains(err.Error(), "s3://") {
+		t.Fatalf("schedule observer leaked SQL failure: %v", err)
+	}
+	if err := os.WriteFile(script, []byte("printf '%s\\n' '{\"schemaVersion\":1,\"checkedAt\":\"2026-09-25T12:00:00Z\",\"healthy\":false,\"initializing\":false}'\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	result, err := scriptScheduleChecker(script, filepath.Join(dir, "verified.json"), getenv)(context.Background())
+	if err != nil || result.Healthy || result.Initializing {
+		t.Fatalf("safe drift observation rejected: %+v %v", result, err)
 	}
 }
 

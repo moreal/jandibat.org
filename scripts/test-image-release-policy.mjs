@@ -236,7 +236,7 @@ test('restore image packages the named database payload and checks it after impo
   assert.match(dockerfile, /^COPY db\/migrations\/ \/workspace\/db\/migrations\/$/m);
   assert.match(dockerfile, /^COPY scripts\/ \/workspace\/scripts\/$/m);
   assert.match(builder, /cp db\/migrations\/\*\.sql "\$restore_context\/db\/migrations\/"/);
-  assert.match(builder, /for file in db-migrate-url\.sh db-configure-runtime-roles\.sh db-verify-runtime-roles\.sh db-bootstrap-roles\.sh db-verify-backup-chain\.sh db-bootstrap-backup-connection\.sh db-configure-backup-schedule\.sh db-verify-backup-roles\.sh; do/);
+  assert.match(builder, /for file in db-migrate-url\.sh db-configure-runtime-roles\.sh db-verify-runtime-roles\.sh db-bootstrap-roles\.sh db-verify-backup-chain\.sh db-bootstrap-backup-connection\.sh db-configure-backup-schedule\.sh db-verify-backup-roles\.sh db-observe-backup-schedule\.sh; do/);
   assert.match(builder, /cp "scripts\/\$file" "\$restore_context\/scripts\/\$file"/);
   assert.match(builder, /node scripts\/image-release\.mjs import restore-tools[^\n]*\n(?:[^\n]*\n)*?sh scripts\/test-restore-tools-payload\.sh/);
 });
@@ -259,6 +259,7 @@ for (const [mode, reason] of [
   ['missing-connection-script', 'a missing backup connection script'],
   ['missing-schedule-script', 'a missing backup schedule script'],
   ['missing-backup-role-verifier', 'a missing backup role verifier script'],
+  ['missing-schedule-observer', 'a missing backup schedule observer script'],
   ['source-tree', 'an embedded application source tree'],
   ['extra-workspace-file', 'an unreviewed workspace file'],
   ['root-user', 'a root default User'],
@@ -288,8 +289,9 @@ if (args[0] === 'image' && args[1] === 'inspect') {
 if (args.includes('find')) {
   for (const file of fs.readdirSync('db/migrations').filter(file => file.endsWith('.sql')))
     console.log('/workspace/db/migrations/' + file);
-  for (const file of ['db-migrate-url.sh', 'db-configure-runtime-roles.sh', 'db-verify-runtime-roles.sh', 'db-bootstrap-roles.sh', 'db-verify-backup-chain.sh', 'db-bootstrap-backup-connection.sh', 'db-configure-backup-schedule.sh', 'db-verify-backup-roles.sh']) {
-    if (process.env.LEAK_MODE !== 'missing-backup-role-verifier' || file !== 'db-verify-backup-roles.sh')
+  for (const file of ['db-migrate-url.sh', 'db-configure-runtime-roles.sh', 'db-verify-runtime-roles.sh', 'db-bootstrap-roles.sh', 'db-verify-backup-chain.sh', 'db-bootstrap-backup-connection.sh', 'db-configure-backup-schedule.sh', 'db-verify-backup-roles.sh', 'db-observe-backup-schedule.sh']) {
+    if ((process.env.LEAK_MODE !== 'missing-backup-role-verifier' || file !== 'db-verify-backup-roles.sh') &&
+        (process.env.LEAK_MODE !== 'missing-schedule-observer' || file !== 'db-observe-backup-schedule.sh'))
       console.log('/workspace/scripts/' + file);
   }
   console.log('/workspace/bin/backup-tools');
@@ -305,6 +307,7 @@ if (args.includes('test')) {
   if (process.env.LEAK_MODE === 'missing-connection-script' && args.includes('/workspace/scripts/db-bootstrap-backup-connection.sh')) process.exit(1);
   if (process.env.LEAK_MODE === 'missing-schedule-script' && args.includes('/workspace/scripts/db-configure-backup-schedule.sh')) process.exit(1);
   if (process.env.LEAK_MODE === 'missing-backup-role-verifier' && args.includes('/workspace/scripts/db-verify-backup-roles.sh')) process.exit(1);
+  if (process.env.LEAK_MODE === 'missing-schedule-observer' && args.includes('/workspace/scripts/db-observe-backup-schedule.sh')) process.exit(1);
   if (process.env.LEAK_MODE === 'source-tree' && args.slice(args.indexOf('test') + 1).join(' ') === '! -e /workspace/apps') process.exit(1);
   process.exit(process.env.LEAK_MODE === 'missing-binary' && args.includes('/workspace/bin/backup-tools') ? 1 : 0);
 }
@@ -323,7 +326,7 @@ process.exit(0);
     return;
   }
   assert.notEqual(result.status, 0, `restore-tools accepted ${reason}`);
-  assert.match(result.stderr, mode === 'missing-binary' ? /backup-tools/ : mode === 'missing-connection-script' ? /db-bootstrap-backup-connection/ : mode === 'missing-schedule-script' ? /db-configure-backup-schedule/ : mode === 'missing-backup-role-verifier' ? /db-verify-backup-roles/ : mode === 'root-user' ? /non-root User/ : mode === 'source-tree' ? /source tree/ : mode === 'extra-workspace-file' ? /inventory/ : /metrics token/);
+  assert.match(result.stderr, mode === 'missing-binary' ? /backup-tools/ : mode === 'missing-connection-script' ? /db-bootstrap-backup-connection/ : mode === 'missing-schedule-script' ? /db-configure-backup-schedule/ : mode === 'missing-backup-role-verifier' ? /db-verify-backup-roles/ : mode === 'missing-schedule-observer' ? /db-observe-backup-schedule/ : mode === 'root-user' ? /non-root User/ : mode === 'source-tree' ? /source tree/ : mode === 'extra-workspace-file' ? /inventory/ : /metrics token/);
   if (mode === 'missing-token') {
     const calls = readFileSync(dockerTrace, 'utf8').trim().split('\n').map(JSON.parse);
     const run = calls.find(args => args.at(-1) === 'run-verifier');
@@ -811,7 +814,7 @@ if (a[1] === 'build') {
  const context = a.at(-1);
  const scripts = fs.readdirSync(context + '/scripts').sort();
  const migrations = fs.readdirSync(context + '/db/migrations').sort();
- if (JSON.stringify(scripts) !== JSON.stringify(['db-bootstrap-backup-connection.sh','db-bootstrap-roles.sh','db-configure-backup-schedule.sh','db-configure-runtime-roles.sh','db-migrate-url.sh','db-verify-backup-chain.sh','db-verify-backup-roles.sh','db-verify-runtime-roles.sh'])) process.exit(10);
+ if (JSON.stringify(scripts) !== JSON.stringify(['db-bootstrap-backup-connection.sh','db-bootstrap-roles.sh','db-configure-backup-schedule.sh','db-configure-runtime-roles.sh','db-migrate-url.sh','db-observe-backup-schedule.sh','db-verify-backup-chain.sh','db-verify-backup-roles.sh','db-verify-runtime-roles.sh'])) process.exit(10);
  if (JSON.stringify(migrations) !== JSON.stringify(fs.readdirSync('db/migrations').filter(f => f.endsWith('.sql')).sort())) process.exit(11);
  for (const file of scripts) if (!(fs.statSync(context + '/scripts/' + file).mode & 0o111)) process.exit(12);
  for (const file of migrations) if (fs.statSync(context + '/db/migrations/' + file).mode & 0o222) process.exit(13);

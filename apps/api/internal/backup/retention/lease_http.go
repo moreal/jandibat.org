@@ -134,9 +134,10 @@ func (a *KubernetesLeaseHTTPAPI) call(ctx context.Context, method, resource stri
 		APIVersion string `json:"apiVersion"`
 		Kind       string `json:"kind"`
 		Metadata   struct {
-			Namespace       string `json:"namespace"`
-			Name            string `json:"name"`
-			ResourceVersion string `json:"resourceVersion"`
+			Namespace       string            `json:"namespace"`
+			Name            string            `json:"name"`
+			ResourceVersion string            `json:"resourceVersion"`
+			Annotations     map[string]string `json:"annotations"`
 		} `json:"metadata"`
 		Spec struct {
 			HolderIdentity       string `json:"holderIdentity"`
@@ -144,7 +145,7 @@ func (a *KubernetesLeaseHTTPAPI) call(ctx context.Context, method, resource stri
 			RenewTime            string `json:"renewTime"`
 		} `json:"spec"`
 	}
-	if err := json.Unmarshal(data, &envelope); err != nil || envelope.APIVersion != "coordination.k8s.io/v1" || envelope.Kind != "Lease" || envelope.Metadata.Namespace != a.namespace || envelope.Metadata.Name != KubernetesLeaseName || envelope.Metadata.ResourceVersion == "" {
+	if err := json.Unmarshal(data, &envelope); err != nil || envelope.APIVersion != "coordination.k8s.io/v1" || envelope.Kind != "Lease" || envelope.Metadata.Namespace != a.namespace || envelope.Metadata.Name != KubernetesLeaseName || envelope.Metadata.ResourceVersion == "" || envelope.Metadata.Annotations["kustomize.toolkit.fluxcd.io/prune"] != "disabled" {
 		return empty, errors.New("kubernetes Lease API object invalid")
 	}
 	record := KubernetesLeaseRecord{Namespace: envelope.Metadata.Namespace, Name: envelope.Metadata.Name, ResourceVersion: envelope.Metadata.ResourceVersion, HolderIdentity: envelope.Spec.HolderIdentity, LeaseDurationSeconds: envelope.Spec.LeaseDurationSeconds}

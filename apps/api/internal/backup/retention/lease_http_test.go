@@ -41,9 +41,52 @@ func leaseHTTPFixture(t *testing.T, handler http.Handler) (*KubernetesLeaseHTTPA
 }
 
 func leaseJSON(rv, holder string) []byte {
-	payload := map[string]any{"apiVersion": "coordination.k8s.io/v1", "kind": "Lease", "metadata": map[string]any{"name": KubernetesLeaseName, "namespace": "jandibat", "resourceVersion": rv}, "spec": map[string]any{"holderIdentity": holder, "leaseDurationSeconds": 30, "renewTime": "2026-09-26T12:00:00.123456Z"}}
+	payload := map[string]any{"apiVersion": "coordination.k8s.io/v1", "kind": "Lease", "metadata": map[string]any{"name": KubernetesLeaseName, "namespace": "jandibat", "resourceVersion": rv, "annotations": map[string]any{"kustomize.toolkit.fluxcd.io/prune": "disabled"}}, "spec": map[string]any{"holderIdentity": holder, "leaseDurationSeconds": 30, "renewTime": "2026-09-26T12:00:00.123456Z"}}
 	result, _ := json.Marshal(payload)
 	return result
+}
+
+func TestLeaseHTTPRejectsMissingOrWrongPruneProtection(t *testing.T) {
+	for _, choice := range []string{"missing", "wrong"} {
+		t.Run(choice, func(t *testing.T) {
+			lease := map[string]any{}
+			if err := json.Unmarshal(leaseJSON("17", ""), &lease); err != nil {
+				t.Fatal(err)
+			}
+			metadata := lease["metadata"].(map[string]any)
+			if choice == "missing" {
+				delete(metadata, "annotations")
+			} else {
+				metadata["annotations"].(map[string]any)["kustomize.toolkit.fluxcd.io/prune"] = "enabled"
+			}
+			body, err := json.Marshal(lease)
+			if err != nil {
+				t.Fatal(err)
+			}
+			api, _ := leaseHTTPFixture(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(body) }))
+			if _, err := api.Get(context.Background(), "jandibat", KubernetesLeaseName); err == nil {
+				t.Fatal("unprotected Lease accepted")
+			}
+		})
+	}
+}
+
+func TestLeaseHTTPStalePutConflictIsSanitized(t *testing.T) {
+	api, _ := leaseHTTPFixture(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			_, _ = w.Write(leaseJSON("17", ""))
+			return
+		}
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(syntheticLeaseToken()))
+	}))
+	if _, err := api.Get(context.Background(), "jandibat", KubernetesLeaseName); err != nil {
+		t.Fatal(err)
+	}
+	_, err := api.Update(context.Background(), KubernetesLeaseRecord{Namespace: "jandibat", Name: KubernetesLeaseName, ResourceVersion: "17", HolderIdentity: "retention-job", LeaseDurationSeconds: 30, RenewTime: time.Date(2026, 9, 26, 12, 0, 0, 123456000, time.UTC)})
+	if err == nil || strings.Contains(err.Error(), syntheticLeaseToken()) {
+		t.Fatalf("stale PUT accepted or leaked response: %v", err)
+	}
 }
 
 func TestLeaseHTTPGetsOnlyExactNamespacedLeaseOverTLS(t *testing.T) {

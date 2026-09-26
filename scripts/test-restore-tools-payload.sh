@@ -86,5 +86,34 @@ else
 		exit 1
 	fi
 fi
+# Production mounts only the verifier record emptyDir. Prove that the
+# packaged checker reaches its SQL client with a read-only root and no /tmp
+# tmpfs: its private capture directory must live beside the record.
+scratch_probe=$(mktemp -d)
+trap 'rm -r "$scratch_probe"' EXIT
+mkdir "$scratch_probe/record"
+chmod 0777 "$scratch_probe/record"
+printf '%s\n' '#!/bin/sh' 'printf reached > /var/run/jandibat-backup/sql-reached' 'exit 1' >"$scratch_probe/fake-sql"
+chmod 0555 "$scratch_probe/fake-sql"
+if docker run --rm --network none --user 65532:65532 --read-only \
+	--mount "type=bind,src=$scratch_probe/record,dst=/var/run/jandibat-backup" \
+	--mount "type=bind,src=$scratch_probe/fake-sql,dst=/workspace/bin/fake-sql,readonly" \
+	--env BACKUP_VERIFIED_RECORD_FILE=/var/run/jandibat-backup/verified.json \
+	--env BACKUP_VERIFIER_DATABASE_URL=postgresql://fixture.invalid/fixture \
+	--env COCKROACH_SQL_BIN=/workspace/bin/fake-sql \
+	--entrypoint /usr/bin/timeout "$image_id" 10s /workspace/bin/backup-tools check-once >/dev/null 2>&1; then
+	echo 'backup checker unexpectedly accepted synthetic SQL failure' >&2
+	exit 1
+else
+	status=$?
+	if [ "$status" -ne 1 ]; then
+		echo 'backup checker scratch smoke did not exit cleanly' >&2
+		exit 1
+	fi
+fi
+test -f "$scratch_probe/record/sql-reached" || {
+	echo 'backup checker did not reach SQL with only record storage writable' >&2
+	exit 1
+}
 docker run --rm --user 65532:65532 --read-only --tmpfs /tmp --entrypoint /bin/sh "$image_id" -c 'test -w /tmp && /cockroach/cockroach version >/dev/null'
 printf '%s\n' 'restore-tools payload, permissions, Cockroach CLI and non-root /tmp passed'

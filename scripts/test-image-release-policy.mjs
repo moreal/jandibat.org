@@ -260,7 +260,8 @@ for (const [mode, reason] of [
   ['extra-workspace-file', 'an unreviewed workspace file'],
   ['root-user', 'a root default User'],
   ['missing-token', 'a verifier that starts without its metrics token'],
-]) test(`restore payload validation rejects ${reason}`, t => {
+  ['checker-scratch', 'checker scratch without writable /tmp'],
+]) test(mode === 'checker-scratch' ? `restore payload validation exercises ${reason}` : `restore payload validation rejects ${reason}`, t => {
   const dir = fixture(t);
   const dockerTrace = join(dir, 'docker-trace');
   executable(dir, 'docker', `
@@ -269,6 +270,14 @@ const { createHash } = require('node:crypto');
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.DOCKER_TRACE, JSON.stringify(args) + '\\n');
 if (args.at(-1) === 'run-verifier') process.exit(process.env.LEAK_MODE === 'missing-token' ? 0 : 1);
+if (args.at(-1) === 'check-once') {
+  const mount = args.filter((arg, index) => args[index - 1] === '--mount').find(arg => arg.includes('dst=/var/run/jandibat-backup'));
+  if (mount) {
+    const source = mount.split(',').find(part => part.startsWith('src='))?.slice(4);
+    if (source) fs.writeFileSync(source + '/sql-reached', 'reached');
+  }
+  process.exit(1);
+}
 if (args[0] === 'image' && args[1] === 'inspect') {
   console.log(process.env.LEAK_MODE === 'root-user' ? '' : '65532:65532');
   process.exit(0);
@@ -294,6 +303,17 @@ if (args.includes('test')) {
 process.exit(0);
 `);
   const result = invoke('test-restore-tools-payload.sh', { PATH: `${join(dir, 'bin')}:${process.env.PATH}`, LEAK_MODE: mode, DOCKER_TRACE: dockerTrace }, ['sha256:' + 'b'.repeat(64)]);
+  if (mode === 'checker-scratch') {
+    assert.equal(result.status, 0, result.stderr);
+    const calls = readFileSync(dockerTrace, 'utf8').trim().split('\n').map(JSON.parse);
+    const check = calls.find(args => args.at(-1) === 'check-once');
+    assert.ok(check, 'read-only checker smoke was not exercised');
+    assert.ok(check.includes('--read-only'));
+    assert.equal(check.includes('--tmpfs') && check.includes('/tmp'), false);
+    assert.equal(check[check.indexOf('--entrypoint') + 1], '/usr/bin/timeout');
+    assert.deepEqual(check.slice(-3), ['10s', '/workspace/bin/backup-tools', 'check-once']);
+    return;
+  }
   assert.notEqual(result.status, 0, `restore-tools accepted ${reason}`);
   assert.match(result.stderr, mode === 'missing-binary' ? /backup-tools/ : mode === 'root-user' ? /non-root User/ : mode === 'source-tree' ? /source tree/ : mode === 'extra-workspace-file' ? /inventory/ : /metrics token/);
   if (mode === 'missing-token') {

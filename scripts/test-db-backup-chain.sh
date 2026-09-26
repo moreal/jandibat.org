@@ -40,9 +40,11 @@ printf '%s\n' '#!/bin/sh' \
  '   future) printf "backup_type\tstart_time\tend_time\tnot_future\nfull\tNULL\t2027-09-26 00:00:00\tfalse\n";;' \
  '   unverified_incremental) printf "backup_type\tstart_time\tend_time\tnot_future\nfull\tNULL\t2026-09-26 00:00:00\ttrue\nincremental\t2026-09-26 00:00:00\tNULL\tfalse\n";;' \
  '   gap) printf "backup_type\tstart_time\tend_time\tnot_future\nfull\tNULL\t2026-09-26 00:00:00\ttrue\nincremental\t2026-09-26 00:10:00\t2026-09-26 01:00:00\ttrue\n";;' \
+ '   fractional_future) printf "SET\nbackup_type\tstart_time\tend_time\tnot_future\nfull\tNULL\t2026-09-26 00:00:00\ttrue\nincremental\t2026-09-26 00:00:00\t2026-09-26 01:00:00.5\ttrue\n";;' \
  '   *) printf "SET\nbackup_type\tstart_time\tend_time\tnot_future\nfull\tNULL\t2026-09-26 00:00:00\ttrue\nincremental\t2026-09-26 00:00:00\t2026-09-26 01:00:00\ttrue\n";;' \
  '  esac;;' \
- ' *"AS checked_at"*) printf "checked_at\n2026-09-26 01:01:00\n";;' \
+ ' *"AS checked_at"*)' \
+ '  if [ "${CHAIN_CASE:-pass}" = fractional_future ]; then printf "checked_at\n2026-09-26 01:00:00\n"; else printf "checked_at\n2026-09-26 01:01:00\n"; fi;;' \
  ' *) exit 1;;' \
  'esac' >"$test_dir/sql"
 chmod 700 "$test_dir/sql"
@@ -64,7 +66,7 @@ run_case pass
 grep -Eq '"schemaVersion":1.*"chainId":"2026\.09\.26-010000\.00".*"collectionId":"jandibat_backup_v1".*"fullScheduleId":"9007199254740994".*"incrementalScheduleId":"9007199254740993".*"recoveryTimestamp":"2026-09-26T01:00:00Z".*"checkedAt":"2026-09-26T01:01:00Z".*"fileChecked":true.*"passed":true' "$test_dir/stdout" || fail 'safe result contract'
 [ ! -s "$test_dir/stderr" ] || fail 'success emitted stderr'
 
-for scenario in wrong_pair paused empty paginated missing_file no_full future unverified_incremental gap raw_allowed; do
+for scenario in wrong_pair paused empty paginated missing_file no_full future unverified_incremental gap raw_allowed fractional_future; do
  run_case "$scenario"
  [ "$status" -ne 0 ] || fail "$scenario accepted"
  [ ! -s "$test_dir/stdout" ] || fail "$scenario emitted stdout"

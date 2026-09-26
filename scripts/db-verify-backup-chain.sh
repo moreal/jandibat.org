@@ -166,6 +166,19 @@ awk '
  END {if (bad || !header || rows!=1) exit 1; gsub(/ /,"T",checked); print checked "Z"}
 ' "$capture_dir/stdout" >"$capture_dir/checked" || invalid
 checked=$(sed -n '1p' "$capture_dir/checked")
-awk -v checked="$checked" -v recovery="$recovery" 'BEGIN {exit checked<recovery}' || invalid
+awk -v checked="$checked" -v recovery="$recovery" '
+ function key(value, parts, count, whole, fraction) {
+  sub(/Z$/, "", value)
+  count=split(value, parts, ".")
+  if (count>2) exit 1
+  whole=parts[1]
+  gsub(/[-:T]/, "", whole)
+  fraction=(count==2 ? parts[2] : "")
+  if (length(fraction)>9) exit 1
+  while (length(fraction)<9) fraction=fraction "0"
+  return "T" whole fraction
+ }
+ BEGIN {exit key(checked)<key(recovery)}
+' || invalid
 
 printf '{"schemaVersion":1,"chainId":"%s","collectionId":"jandibat_backup_v1","fullScheduleId":"%s","incrementalScheduleId":"%s","recoveryTimestamp":"%s","checkedAt":"%s","fileChecked":true,"passed":true}\n' "$chain_id" "$full_id" "$inc_id" "$recovery" "$checked"

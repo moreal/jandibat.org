@@ -22,9 +22,9 @@ done
 [ "$JANDIBAT_WORKER_PASSWORD" != "$JANDIBAT_MAINTENANCE_PASSWORD" ] || invalid
 
 backup_inputs=0
-for value in "${JANDIBAT_BACKUP_BOOTSTRAP_PASSWORD-unset}" "${JANDIBAT_BACKUP_RUNNER_PASSWORD-unset}" "${JANDIBAT_BACKUP_VERIFIER_PASSWORD-unset}"; do
- [ "$value" = unset ] || backup_inputs=$((backup_inputs + 1))
-done
+[ "${JANDIBAT_BACKUP_BOOTSTRAP_PASSWORD+x}" != x ] || backup_inputs=$((backup_inputs + 1))
+[ "${JANDIBAT_BACKUP_RUNNER_PASSWORD+x}" != x ] || backup_inputs=$((backup_inputs + 1))
+[ "${JANDIBAT_BACKUP_VERIFIER_PASSWORD+x}" != x ] || backup_inputs=$((backup_inputs + 1))
 case "$backup_inputs" in 0|3) :;; *) invalid;; esac
 if [ "$backup_inputs" -eq 3 ]; then
  for value in "$JANDIBAT_BACKUP_BOOTSTRAP_PASSWORD" "$JANDIBAT_BACKUP_RUNNER_PASSWORD" "$JANDIBAT_BACKUP_VERIFIER_PASSWORD"; do
@@ -71,6 +71,79 @@ expect_one() {
  value=$(sql_value "$COCKROACH_ROOT_URL" "SET allow_unsafe_internals = true; $1")
  [ "$value" = 1 ] || { echo 'database backup metadata contract mismatch' >&2; exit 1; }
 }
+audit_database_grants() {
+ database=$1
+ case "$database" in ''|*[!A-Za-z0-9_.-]*) echo 'database backup grant audit unsupported identifier' >&2; exit 1;; esac
+ sql "$COCKROACH_ROOT_URL" "USE \"$database\";
+SELECT database_name, schema_name, object_name, object_type, grantee, privilege_type, is_grantable
+FROM [SHOW GRANTS FOR jandibat_backup_bootstrap, jandibat_backup_runner, jandibat_backup_verifier]
+ORDER BY database_name, schema_name, object_name, object_type, grantee, privilege_type;"
+ awk -F '\t' -v db="$database" '
+  function allow(schema, object, kind, grantee, privilege, grantable) {
+   expected[db FS schema FS object FS kind FS grantee FS privilege FS grantable]=1
+  }
+  BEGIN {
+   allow("public", "NULL", "schema", "public", "CREATE", "f")
+   allow("public", "NULL", "schema", "public", "USAGE", "f")
+   if (db=="defaultdb") {
+    allow("NULL", "NULL", "database", "jandibat_backup_bootstrap", "CONNECT", "f")
+    allow("jandibat_backup_admin", "NULL", "schema", "jandibat_backup_bootstrap", "USAGE", "f")
+    allow("jandibat_backup_admin", "connection_policy", "table", "jandibat_backup_bootstrap", "SELECT", "f")
+    allow("jandibat_backup_admin", "connection_policy", "table", "jandibat_backup_bootstrap", "INSERT", "f")
+    allow("jandibat_backup_admin", "connection_live_digest", "table", "jandibat_backup_bootstrap", "SELECT", "f")
+   } else if (db=="jandibat") {
+    allow("NULL", "NULL", "database", "jandibat_backup_runner", "BACKUP", "f")
+   } else if (db=="system") {
+    allow("public", "comments", "table", "public", "SELECT", "f")
+   }
+  }
+  NR==1 && $0=="SET" { next }
+  $1=="database_name" && $2=="schema_name" && $3=="object_name" && $4=="object_type" && $5=="grantee" && $6=="privilege_type" && $7=="is_grantable" { header++; next }
+  {
+   if (NF!=7 || $1!=db) { bad=1; next }
+   grantable=($7=="false" ? "f" : ($7=="true" ? "t" : $7))
+   key=$1 FS $2 FS $3 FS $4 FS $5 FS $6 FS grantable
+   if (!(key in expected) || ++seen[key]!=1) bad=1
+  }
+  END {
+   if (header!=1) bad=1
+   for (key in expected) if (seen[key]!=1) bad=1
+   exit bad
+  }
+ ' "$capture_dir/stdout" || { echo 'database backup effective grant mismatch' >&2; exit 1; }
+ for grantee in public jandibat_backup_bootstrap jandibat_backup_runner jandibat_backup_verifier; do
+  if [ "$grantee" = public ]; then
+   predicate="object_type IN ('tables', 'schemas')"
+  else
+   predicate='role IS DISTINCT FROM grantee OR for_all_roles'
+  fi
+  value=$(sql_value "$COCKROACH_ROOT_URL" "USE \"$database\"; SELECT IF((SELECT count(*) FROM [SHOW DEFAULT PRIVILEGES FOR GRANTEE $grantee] WHERE $predicate) = 0, 1, 0);")
+  [ "$value" = 1 ] || { echo 'database backup default grant mismatch' >&2; exit 1; }
+  if [ "$database" = defaultdb ]; then
+   value=$(sql_value "$COCKROACH_ROOT_URL" "USE defaultdb; SELECT IF((SELECT count(*) FROM [SHOW DEFAULT PRIVILEGES FOR GRANTEE $grantee IN SCHEMA jandibat_backup_admin]) = 0, 1, 0);")
+   [ "$value" = 1 ] || { echo 'database backup private default grant mismatch' >&2; exit 1; }
+  fi
+ done
+}
+expect_private_grants() {
+ target=$1
+ kind=$2
+ case "$kind" in
+  schema) bootstrap_privilege="privilege_type = 'USAGE'"; bootstrap_count=1;;
+  table) bootstrap_privilege="privilege_type IN ('SELECT', 'INSERT')"; bootstrap_count=2;;
+  view) bootstrap_privilege="privilege_type = 'SELECT'"; bootstrap_count=1;;
+ esac
+ expect_one "SELECT IF(
+ (SELECT count(*) FROM [SHOW GRANTS ON $target] WHERE NOT (
+  (grantee = 'root' AND privilege_type = 'ALL' AND is_grantable) OR
+  (grantee = 'admin' AND privilege_type = 'ALL' AND is_grantable) OR
+  (grantee = 'jandibat_backup_bootstrap' AND $bootstrap_privilege AND NOT is_grantable)
+ )) = 0 AND
+ (SELECT count(*) FROM [SHOW GRANTS ON $target] WHERE grantee = 'root' AND privilege_type = 'ALL' AND is_grantable) = 1 AND
+ (SELECT count(*) FROM [SHOW GRANTS ON $target] WHERE grantee = 'admin' AND privilege_type = 'ALL' AND is_grantable) = 1 AND
+ (SELECT count(*) FROM [SHOW GRANTS ON $target] WHERE grantee = 'jandibat_backup_bootstrap' AND $bootstrap_privilege AND NOT is_grantable) = $bootstrap_count,
+ 1, 0);"
+}
 sql "$COCKROACH_ROOT_URL" 'CREATE DATABASE IF NOT EXISTS jandibat;'
 sql "$COCKROACH_ROOT_URL" "CREATE USER IF NOT EXISTS jandibat_migrator; ALTER USER jandibat_migrator WITH PASSWORD '$JANDIBAT_MIGRATOR_PASSWORD';"
 sql "$COCKROACH_ROOT_URL" "CREATE USER IF NOT EXISTS jandibat_api; ALTER USER jandibat_api WITH PASSWORD '$JANDIBAT_API_PASSWORD';"
@@ -111,16 +184,19 @@ CREATE VIEW defaultdb.jandibat_backup_admin.connection_live_digest AS
  expect_one "SELECT IF((SELECT count(*) FROM information_schema.columns WHERE table_catalog = 'defaultdb' AND table_schema = 'jandibat_backup_admin' AND table_name = 'connection_policy') = 4, 1, 0);"
  expect_one "SELECT IF((SELECT count(*) FROM information_schema.columns WHERE table_catalog = 'defaultdb' AND table_schema = 'jandibat_backup_admin' AND table_name = 'connection_live_digest' AND ((column_name = 'connection_name' AND data_type = 'text') OR (column_name = 'catalog_digest' AND data_type = 'text'))) = 2 AND (SELECT count(*) FROM information_schema.columns WHERE table_catalog = 'defaultdb' AND table_schema = 'jandibat_backup_admin' AND table_name = 'connection_live_digest') = 2, 1, 0);"
  expect_one "SELECT IF((SELECT count(*) FROM information_schema.columns WHERE table_catalog = 'defaultdb' AND table_schema = 'jandibat_backup_admin' AND table_name = 'connection_policy' AND column_default IS NOT NULL) = 0, 1, 0);"
- expect_one "SELECT IF((SELECT count(*) FROM [SHOW CREATE TABLE defaultdb.jandibat_backup_admin.connection_policy] WHERE create_statement LIKE '%CONSTRAINT connection_policy_pkey PRIMARY KEY (connection_name ASC)%' AND create_statement LIKE '%CONSTRAINT check_connection_name CHECK (connection_name = ''jandibat_backup_v1'':::STRING)%' AND create_statement LIKE '%CONSTRAINT check_policy_version CHECK (policy_version = 1:::INT8)%' AND create_statement LIKE '%CONSTRAINT check_input_digest CHECK (input_digest ~ ''^[0-9a-f]{64}$'':::STRING)%' AND create_statement LIKE '%CONSTRAINT check_catalog_digest CHECK (catalog_digest ~ ''^[0-9a-f]{64}$'':::STRING)%') = 1, 1, 0);"
- expect_one "SELECT IF((SELECT count(*) FROM [SHOW CONSTRAINTS FROM defaultdb.jandibat_backup_admin.connection_policy]) = 5, 1, 0);"
+ expect_one "SELECT IF((SELECT count(*) FROM [SHOW CONSTRAINTS FROM defaultdb.jandibat_backup_admin.connection_policy] WHERE validated AND (
+  (constraint_name = 'connection_policy_pkey' AND constraint_type = 'PRIMARY KEY' AND details = 'PRIMARY KEY (connection_name ASC)') OR
+  (constraint_name = 'check_connection_name' AND constraint_type = 'CHECK' AND details = 'CHECK ((connection_name = ''jandibat_backup_v1''::STRING))') OR
+  (constraint_name = 'check_policy_version' AND constraint_type = 'CHECK' AND details = 'CHECK ((policy_version = 1))') OR
+  (constraint_name = 'check_input_digest' AND constraint_type = 'CHECK' AND details = 'CHECK ((input_digest ~ ''^[0-9a-f]{64}$''::STRING))') OR
+  (constraint_name = 'check_catalog_digest' AND constraint_type = 'CHECK' AND details = 'CHECK ((catalog_digest ~ ''^[0-9a-f]{64}$''::STRING))')
+ )) = 5 AND (SELECT count(*) FROM [SHOW CONSTRAINTS FROM defaultdb.jandibat_backup_admin.connection_policy]) = 5, 1, 0);"
  expect_one "SELECT IF((SELECT count(*) FROM information_schema.views WHERE table_catalog = 'defaultdb' AND table_schema = 'jandibat_backup_admin' AND table_name = 'connection_live_digest' AND view_definition = 'SELECT connection_name, sha256(connection_details) AS catalog_digest FROM system.public.external_connections WHERE connection_name = ''jandibat_backup_v1''') = 1, 1, 0);"
  expect_one "SELECT IF((SELECT count(*) FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace JOIN pg_catalog.pg_roles r ON r.oid = c.relowner WHERE n.nspname = 'jandibat_backup_admin' AND c.relname IN ('connection_policy', 'connection_live_digest') AND r.rolname = 'root') = 2, 1, 0);"
  expect_one "SELECT IF((SELECT count(*) FROM system.role_members WHERE member IN ('jandibat_backup_bootstrap', 'jandibat_backup_runner', 'jandibat_backup_verifier')) = 0, 1, 0);"
  expect_one "SELECT IF((SELECT count(*) FROM [SHOW GRANTS ON SCHEMA defaultdb.jandibat_backup_admin] WHERE grantee = 'public') = 0, 1, 0);"
  expect_one "SELECT IF((SELECT count(*) FROM [SHOW GRANTS ON TABLE defaultdb.jandibat_backup_admin.connection_policy] WHERE grantee = 'public') = 0, 1, 0);"
  expect_one "SELECT IF((SELECT count(*) FROM [SHOW GRANTS ON TABLE defaultdb.jandibat_backup_admin.connection_live_digest] WHERE grantee = 'public') = 0, 1, 0);"
- expect_one "SELECT IF((SELECT count(*) FROM [SHOW DEFAULT PRIVILEGES] WHERE grantee = 'public' AND object_type IN ('tables', 'schemas')) = 0, 1, 0);"
- expect_one "SELECT IF((SELECT count(*) FROM [SHOW DEFAULT PRIVILEGES] WHERE grantee IN ('jandibat_backup_bootstrap', 'jandibat_backup_runner', 'jandibat_backup_verifier')) = 0, 1, 0);"
  expect_one "SELECT IF((SELECT count(*) FROM [SHOW SYSTEM GRANTS] WHERE grantee = 'public') = 0, 1, 0);"
  expect_one "SELECT IF((SELECT count(*) FROM [SHOW GRANTS ON DATABASE jandibat] WHERE grantee = 'public' AND privilege_type IN ('ALL', 'BACKUP', 'RESTORE')) = 0, 1, 0);"
  sql "$COCKROACH_ROOT_URL" "CREATE USER IF NOT EXISTS jandibat_backup_bootstrap; ALTER USER jandibat_backup_bootstrap WITH PASSWORD '$JANDIBAT_BACKUP_BOOTSTRAP_PASSWORD';"
@@ -141,8 +217,19 @@ GRANT SELECT ON TABLE defaultdb.jandibat_backup_admin.connection_live_digest TO 
  expect_one "SELECT IF((SELECT count(*) FROM [SHOW SYSTEM GRANTS] WHERE grantee IN ('jandibat_backup_bootstrap', 'jandibat_backup_runner', 'jandibat_backup_verifier') AND NOT (grantee = 'jandibat_backup_bootstrap' AND privilege_type = 'EXTERNALCONNECTION' AND NOT is_grantable)) = 0 AND (SELECT count(*) FROM [SHOW SYSTEM GRANTS] WHERE grantee = 'jandibat_backup_bootstrap' AND privilege_type = 'EXTERNALCONNECTION' AND NOT is_grantable) = 1, 1, 0);"
  expect_one "SELECT IF((SELECT count(*) FROM [SHOW GRANTS ON DATABASE jandibat] WHERE grantee IN ('jandibat_backup_bootstrap', 'jandibat_backup_runner', 'jandibat_backup_verifier') AND NOT (grantee = 'jandibat_backup_runner' AND privilege_type = 'BACKUP' AND NOT is_grantable)) = 0 AND (SELECT count(*) FROM [SHOW GRANTS ON DATABASE jandibat] WHERE grantee = 'jandibat_backup_runner' AND privilege_type = 'BACKUP' AND NOT is_grantable) = 1, 1, 0);"
  expect_one "SELECT IF((SELECT count(*) FROM [SHOW GRANTS ON DATABASE defaultdb] WHERE grantee IN ('jandibat_backup_bootstrap', 'jandibat_backup_runner', 'jandibat_backup_verifier') AND NOT (grantee = 'jandibat_backup_bootstrap' AND privilege_type = 'CONNECT' AND NOT is_grantable)) = 0 AND (SELECT count(*) FROM [SHOW GRANTS ON DATABASE defaultdb] WHERE grantee = 'jandibat_backup_bootstrap' AND privilege_type = 'CONNECT' AND NOT is_grantable) = 1, 1, 0);"
- expect_one "SELECT IF((SELECT count(*) FROM [SHOW GRANTS ON SCHEMA defaultdb.jandibat_backup_admin] WHERE grantee IN ('jandibat_backup_bootstrap', 'jandibat_backup_runner', 'jandibat_backup_verifier', 'public') AND NOT (grantee = 'jandibat_backup_bootstrap' AND privilege_type = 'USAGE' AND NOT is_grantable)) = 0 AND (SELECT count(*) FROM [SHOW GRANTS ON SCHEMA defaultdb.jandibat_backup_admin] WHERE grantee = 'jandibat_backup_bootstrap' AND privilege_type = 'USAGE' AND NOT is_grantable) = 1, 1, 0);"
- expect_one "SELECT IF((SELECT count(*) FROM [SHOW GRANTS ON TABLE defaultdb.jandibat_backup_admin.connection_policy] WHERE grantee IN ('jandibat_backup_bootstrap', 'jandibat_backup_runner', 'jandibat_backup_verifier', 'public') AND NOT (grantee = 'jandibat_backup_bootstrap' AND privilege_type IN ('SELECT', 'INSERT') AND NOT is_grantable)) = 0 AND (SELECT count(*) FROM [SHOW GRANTS ON TABLE defaultdb.jandibat_backup_admin.connection_policy] WHERE grantee = 'jandibat_backup_bootstrap' AND privilege_type IN ('SELECT', 'INSERT') AND NOT is_grantable) = 2, 1, 0);"
- expect_one "SELECT IF((SELECT count(*) FROM [SHOW GRANTS ON TABLE defaultdb.jandibat_backup_admin.connection_live_digest] WHERE grantee IN ('jandibat_backup_bootstrap', 'jandibat_backup_runner', 'jandibat_backup_verifier', 'public') AND NOT (grantee = 'jandibat_backup_bootstrap' AND privilege_type = 'SELECT' AND NOT is_grantable)) = 0 AND (SELECT count(*) FROM [SHOW GRANTS ON TABLE defaultdb.jandibat_backup_admin.connection_live_digest] WHERE grantee = 'jandibat_backup_bootstrap' AND privilege_type = 'SELECT' AND NOT is_grantable) = 1, 1, 0);"
+ expect_private_grants 'SCHEMA defaultdb.jandibat_backup_admin' schema
+ expect_private_grants 'TABLE defaultdb.jandibat_backup_admin.connection_policy' table
+ expect_private_grants 'TABLE defaultdb.jandibat_backup_admin.connection_live_digest' view
+ sql "$COCKROACH_ROOT_URL" 'SELECT database_name FROM [SHOW DATABASES] ORDER BY database_name;'
+ cp "$capture_dir/stdout" "$capture_dir/databases"
+ seen_defaultdb=false seen_jandibat=false seen_system=false
+ while IFS= read -r database; do
+  [ "$database" != database_name ] || continue
+  case "$database" in defaultdb) seen_defaultdb=true;; jandibat) seen_jandibat=true;; system) seen_system=true;; esac
+  audit_database_grants "$database"
+ done <"$capture_dir/databases"
+ [ "$seen_defaultdb" = true ] && [ "$seen_jandibat" = true ] && [ "$seen_system" = true ] || {
+  echo 'database backup grant inventory incomplete' >&2; exit 1;
+ }
 fi
 echo 'database accounts bootstrapped'

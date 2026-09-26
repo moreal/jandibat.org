@@ -12,6 +12,7 @@ import (
 )
 
 const maxPlanRetentionInput = 1 << 20
+const maxPlanRetentionObjectKeys = 32
 
 // This mode reports catalog chronology only. It has no path from stdin to a
 // version inventory, file-check evidence, or an actionable retention plan.
@@ -87,15 +88,22 @@ func scanUniqueJSONValue(decoder *json.Decoder, depth int) bool {
 	}
 	switch delim {
 	case '{':
-		seen := map[string]bool{}
+		seen := make([]string, 0, 8)
 		for decoder.More() {
 			keyToken, err := decoder.Token()
 			key, ok := keyToken.(string)
-			canonicalKey := strings.ToLower(key)
-			if err != nil || !ok || seen[canonicalKey] || !scanUniqueJSONValue(decoder, depth+1) {
+			if err != nil || !ok || len(seen) >= maxPlanRetentionObjectKeys {
 				return false
 			}
-			seen[canonicalKey] = true
+			for _, previous := range seen {
+				if strings.EqualFold(previous, key) {
+					return false
+				}
+			}
+			if !scanUniqueJSONValue(decoder, depth+1) {
+				return false
+			}
+			seen = append(seen, key)
 		}
 	case '[':
 		for decoder.More() {

@@ -67,18 +67,20 @@ func TestPlanRetentionRejectsUnsafeOrIncompleteInputWithoutEcho(t *testing.T) {
 	now := time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)
 	good := `{"schemaVersion":1,"catalog":{"Namespace":{"Bucket":"bucket","Prefix":"prefix/"},"Pages":[{"Complete":true,"Chains":[{"ID":"chain","Full":{"ID":"full","At":"2026-08-20T12:00:00Z","ObjectIDs":["obj"]},"Incrementals":[{"ID":"inc","From":"2026-08-20T12:00:00Z","Through":"2026-09-27T11:30:00Z","ObjectIDs":["obj2"]}]}]}]}}`
 	for name, input := range map[string]string{
-		"missing catalog":           `{"schemaVersion":1}`,
-		"wrong version":             strings.Replace(good, `"schemaVersion":1`, `"schemaVersion":2`, 1),
-		"mapping input":             good[:len(good)-1] + `,"versionedObjects":[{"key":"secret-key","versionId":"secret-version"}]}`,
-		"approval input":            good[:len(good)-1] + `,"approvalHash":"secret-hash"}`,
-		"duplicate nested field":    strings.Replace(good, `"Bucket":"bucket"`, `"Bucket":"bucket","Bucket":"other"`, 1),
-		"case alias active backup":  strings.Replace(good, `"Namespace":`, `"ActiveBackup":true,"activebackup":false,"Namespace":`, 1),
-		"case alias completed page": strings.Replace(good, `"Complete":true`, `"Complete":false,"complete":true`, 1),
-		"case alias chain identity": strings.Replace(good, `"ID":"chain"`, `"ID":"secret-chain","id":"chain"`, 1),
-		"second document":           good + good,
-		"incomplete page":           strings.Replace(good, `"Complete":true`, `"Complete":false`, 1),
-		"coverage gap":              strings.Replace(good, `"At":"2026-08-20T12:00:00Z"`, `"At":"2026-09-01T12:00:00Z"`, 1),
-		"oversized":                 good + strings.Repeat(" ", maxPlanRetentionInput),
+		"missing catalog":              `{"schemaVersion":1}`,
+		"wrong version":                strings.Replace(good, `"schemaVersion":1`, `"schemaVersion":2`, 1),
+		"mapping input":                good[:len(good)-1] + `,"versionedObjects":[{"key":"secret-key","versionId":"secret-version"}]}`,
+		"approval input":               good[:len(good)-1] + `,"approvalHash":"secret-hash"}`,
+		"duplicate nested field":       strings.Replace(good, `"Bucket":"bucket"`, `"Bucket":"bucket","Bucket":"other"`, 1),
+		"case alias active backup":     strings.Replace(good, `"Namespace":`, `"ActiveBackup":true,"activebackup":false,"Namespace":`, 1),
+		"unicode alias active restore": strings.Replace(good, `"Namespace":`, `"ActiveReſtore":true,"ActiveRestore":false,"Namespace":`, 1),
+		"unicode alias bucket":         strings.Replace(good, `"Bucket":"bucket"`, `"BucKet":"secret-bucket","Bucket":"bucket"`, 1),
+		"case alias completed page":    strings.Replace(good, `"Complete":true`, `"Complete":false,"complete":true`, 1),
+		"case alias chain identity":    strings.Replace(good, `"ID":"chain"`, `"ID":"secret-chain","id":"chain"`, 1),
+		"second document":              good + good,
+		"incomplete page":              strings.Replace(good, `"Complete":true`, `"Complete":false`, 1),
+		"coverage gap":                 strings.Replace(good, `"At":"2026-08-20T12:00:00Z"`, `"At":"2026-09-01T12:00:00Z"`, 1),
+		"oversized":                    good + strings.Repeat(" ", maxPlanRetentionInput),
 	} {
 		t.Run(name, func(t *testing.T) {
 			var out bytes.Buffer

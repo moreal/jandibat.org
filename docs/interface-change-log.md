@@ -27,6 +27,25 @@ API 계약 변경 시 이 파일과 GraphQL SDL(도메인) 또는 `openapi/jandi
   로컬 Cockroach를 검사합니다. ARM64 수동 실행은 명시적 보조 실험이며
   다른 호스트의 종료 코드 77은 PASS가 아닌 SKIP입니다.
 
+## 2026-09-26 — 백업 스케줄 생성의 안전한 소비 경계
+
+호환성: 내부 runner 스크립트가 위 `schedule_policy_v1` 투영만 읽도록 변경합니다.
+공개 GraphQL/OpenAPI 계약은 바뀌지 않습니다.
+
+- runner는 root 소유 뷰의 정의·소유권·SELECT 권한을 확인한 뒤, 10진 문자열 ID의
+  두 방향 연결, 고정 label/owner/cron/명령/상태/실패·중복 실행 정책과
+  `metric_disabled=true`를 정확히 검사합니다. 첫 전체 백업 전의 연결된 증분
+  PAUSED 상태만 허용하며 이를 복구 가능 증거로 다루지 않습니다.
+- 빈 상태에서만 하나의 SQL 연결과 트랜잭션으로 후보를 재조회하고
+  `CREATE SCHEDULE IF NOT EXISTS`를 동시 생성 경계로 사용합니다. `COMMIT`
+  성공 및 생성된 두 ID를 확인한 뒤 독립된 조회에서 동일한 두 ID와 정책을
+  다시 확인해야 성공합니다. 충돌, 건너뛴 CREATE, 40001, 불확실한 COMMIT은
+  실패하며 자동 재시도·채택·ALTER/DROP은 없습니다.
+- 운영 runner는 비관리자 역할이므로 관리자 전용
+  `updates_cluster_last_backup_time_metric` 옵션을 생성 SQL에서 제외합니다.
+  RPO는 향후 파일 검사된 체인 결과만을 기준으로 하며, 이 단계는 실제 복구
+  가능 시각이나 배포 준비 상태를 선언하지 않습니다.
+
 ## 2026-09-26 — 백업 연결 정책의 비공개 메타데이터 계약
 
 호환성: 기존 네 애플리케이션 계정 bootstrap에는 호환되는 opt-in 추가입니다. 세 백업

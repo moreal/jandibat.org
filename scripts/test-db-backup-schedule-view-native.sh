@@ -14,7 +14,7 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 umask 077
-fail() { echo "schedule-view ARM64 fixture failed: $1" >&2; exit 1; }
+fail() { echo "schedule-view fixture failed: $1" >&2; exit 1; }
 
 command -v docker >/dev/null 2>&1 || fail 'Docker unavailable'
 host_os=$(uname -s)
@@ -101,10 +101,21 @@ $view_sql
 GRANT USAGE ON SCHEMA defaultdb.jandibat_backup_admin TO jandibat_backup_runner, jandibat_backup_verifier;
 GRANT SELECT ON TABLE defaultdb.jandibat_backup_admin.schedule_policy_v1 TO jandibat_backup_runner, jandibat_backup_verifier;"
 
-sql_as jandibat_backup_runner "CREATE SCHEDULE jandibat_backup_schedule_v1
- FOR BACKUP DATABASE jandibat INTO 'external://jandibat_backup_v1'
- WITH revision_history RECURRING '10 * * * *' FULL BACKUP '10 0 * * *'
- WITH SCHEDULE OPTIONS first_run = 'now', on_execution_failure = 'retry', on_previous_running = 'wait';"
+cat >"$test_dir/cockroach-wrapper" <<'WRAPPER'
+#!/bin/sh
+exec docker exec -i "$TEST_CONTAINER" /cockroach/cockroach "$@" \
+ --insecure --host=127.0.0.1:26257 --user=jandibat_backup_runner
+WRAPPER
+chmod 700 "$test_dir/cockroach-wrapper"
+for run in 1 2; do
+ if ! env TEST_CONTAINER="$container" COCKROACH_SQL_BIN="$test_dir/cockroach-wrapper" \
+  BACKUP_RUNNER_DATABASE_URL='postgresql://jandibat_backup_runner@127.0.0.1:26257/jandibat?sslmode=disable' \
+  sh "$root/scripts/db-configure-backup-schedule.sh" >"$test_dir/output" 2>"$test_dir/error"; then
+  reason=$(sed -n 's/^backup schedule .* (\([a-z-]*\))$/\1/p' "$test_dir/error")
+  [ -z "$reason" ] || fail "runner schedule $reason phase"
+  fail 'runner schedule preflight'
+ fi
+done
 sql_as root "CREATE SCHEDULE jandibat_backup_schedule_v1
  FOR BACKUP DATABASE jandibat INTO 'nodelocal://1/other-owner-label'
  WITH revision_history RECURRING '10 * * * *' FULL BACKUP '10 0 * * *';

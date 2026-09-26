@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, statSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -182,7 +182,16 @@ case "$1" in
         echo db-fixture-id;;
       5) echo api-fixture-id;;
       6) echo worker-fixture-id;;
-      7) echo maintenance-fixture-id;;
+      7)
+        previous=
+        for arg do
+          if [ "$previous" = --env-file ]; then
+            cp -p "$arg" "$FIXTURES/maintenance-env"
+            break
+          fi
+          previous=$arg
+        done
+        echo maintenance-fixture-id;;
     esac;;
   exec)
     case "$*" in
@@ -199,6 +208,9 @@ case "$1" in
         if [ "$FAIL_MODE" = headers ]; then echo 'Content-Security-Policy: connect-src https://wrong.example.test' >&2
         else echo "Content-Security-Policy: connect-src 'self' https://api.example.test" >&2; fi;;
       *'api-fixture-id'*'/livez'*) if [ "$FAIL_MODE" = api-health ]; then exit 1; fi; echo ok;;
+      *'maintenance-fixture-id'*'/livez'*)
+        if [ ! -f "$FIXTURES/maintenance-env" ]; then exit 1; fi
+        echo ok;;
     esac ;;
   inspect)
     case "$*" in
@@ -236,6 +248,10 @@ esac
     return { ...result,
       dockerRuns: readFileSync(join(scratch, 'docker-runs'), 'utf8'),
       nixBuilds: readFileSync(join(scratch, 'nix-builds'), 'utf8').trim().split('\n'),
+      maintenanceEnv: existsSync(join(scratch, 'maintenance-env'))
+        ? readFileSync(join(scratch, 'maintenance-env'), 'utf8') : null,
+      maintenanceEnvMode: existsSync(join(scratch, 'maintenance-env'))
+        ? statSync(join(scratch, 'maintenance-env')).mode & 0o777 : null,
     };
   } finally {
     rmSync(scratch, { recursive: true, force: true });
@@ -266,6 +282,27 @@ test('image smoke migrations advance with enough fixture SQL memory', () => {
   const result = runtimeFailure('db-migration-memory');
   assert.equal(result.status, 1, result.stderr);
   assert.match(result.stderr, /image smoke failed: dependency loss readyz: api/);
+});
+
+test('maintenance receives a private ephemeral pseudonym key and reaches runtime checks', () => {
+  const result = runtimeFailure('dependency-ready');
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /image smoke failed: dependency loss readyz: api/);
+  assert.equal(result.maintenanceEnvMode, 0o600);
+  const match = result.maintenanceEnv?.match(/^DELETION_PSEUDONYM_KEY=([A-Za-z0-9_-]+)\n$/);
+  assert.ok(match, 'maintenance env file must contain one URL-safe key');
+  assert.equal(Buffer.from(match[1], 'base64url').length, 32);
+  const runs = result.dockerRuns.trim().split('\n');
+  const maintenance = runs.find(line => line.includes('jandibat-maintenance:nix'));
+  const envFile = maintenance?.match(/--env-file (\S+)/)?.[1];
+  assert.ok(envFile, 'maintenance must receive the private env file');
+  assert.equal(existsSync(envFile), false, 'smoke scratch must be removed on exit');
+  assert.doesNotMatch(maintenance, /DELETION_PSEUDONYM_KEY/);
+  for (const run of runs.filter(line => !line.includes('jandibat-maintenance:nix'))) {
+    assert.doesNotMatch(run, /--env-file|DELETION_PSEUDONYM_KEY/);
+  }
+  assert.ok(!`${result.stdout}${result.stderr}${result.dockerRuns}`.includes(match[1]),
+    'key value must not appear in output or Docker argv');
 });
 
 test('API proxy launches explicitly with only metrics configuration before the DB fixture starts', () => {

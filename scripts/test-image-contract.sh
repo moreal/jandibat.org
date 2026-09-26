@@ -273,9 +273,17 @@ docker exec -e MIGRATION_DATABASE_URL=postgresql://root@localhost:26257/image_sm
 processes=
 for spec in api:8080:DATABASE_URL worker:8081:WORKER_DATABASE_URL maintenance:8082:MAINTENANCE_DATABASE_URL; do
 	name=${spec%%:*} rest=${spec#*:} port=${rest%%:*} variable=${rest#*:}
+	if [ "$name" = maintenance ]; then
+		phase='maintenance pseudonym key fixture'
+		(umask 077; node -e "process.stdout.write('DELETION_PSEUDONYM_KEY=' + require('node:crypto').randomBytes(32).toString('base64url') + '\n')" >"$scratch/maintenance.env")
+		set -- --env-file "$scratch/maintenance.env"
+	else
+		set --
+	fi
 	phase="$name container start"
 	container=$(docker run -d --network "$network" --read-only --tmpfs /tmp:rw,nosuid,nodev \
 		-e APP_ENV=development -e "$variable=postgresql://root@database:26257/image_smoke?sslmode=disable" \
+		"$@" \
 		"jandibat-$name:nix")
 	containers="$containers $container"
 	processes="$processes $name:$container:$port"

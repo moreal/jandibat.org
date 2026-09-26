@@ -5,6 +5,19 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
+const fakeEffectiveLogConfig = `sinks:
+  file-groups:
+    default:
+    ops:
+    sql-audit:
+    security:
+    sql-auth:
+    sql-exec:
+  stderr:
+capture-stray-errors:
+  enable: true
+`;
+
 test('fixture keeps the reviewed effective log routes and every audit channel', () => {
   assert.ok(existsSync('scripts/fixtures/cockroach-backup-logging.yaml'), 'reviewed logging policy missing');
   const config = readFileSync('scripts/fixtures/cockroach-backup-logging.yaml', 'utf8');
@@ -117,6 +130,7 @@ case "$*" in
     exit 99;;
   *"debug check-log-config"*)
     [ "$TEST_FAILURE" = log ] && exit 99
+    sed -n 'p' "$TEST_EFFECTIVE"
     exit 0;;
 esac
 exit 0
@@ -129,6 +143,8 @@ exit 0
       writeFileSync(join(dir, name), source);
       chmodSync(join(dir, name), 0o700);
     }
+    const effective = join(dir, 'effective.yaml');
+    writeFileSync(effective, fakeEffectiveLogConfig);
     for (const [failure, reason, phases] of [
       ['image', 'Cockroach image availability', ['Cockroach image availability']],
       ['certificate', 'certificate generation', ['Cockroach image availability', 'certificate generation']],
@@ -139,7 +155,7 @@ exit 0
       ['db', 'DB start', ['Cockroach image availability', 'certificate generation', 'host node key readability', 'CA certificate copy', 'PKCS#12 creation', 'log config validation', 'S3Proxy startup', 'DB start']],
     ]) {
       const result = spawnSync('sh', ['scripts/test-db-backup-roles-secure.sh'], {
-        encoding: 'utf8', env: { ...process.env, TEST_FAILURE: failure, PATH: `${dir}:${process.env.PATH}` },
+        encoding: 'utf8', env: { ...process.env, TEST_FAILURE: failure, TEST_EFFECTIVE: effective, PATH: `${dir}:${process.env.PATH}` },
       });
       assert.equal(result.status, 1, failure);
       assert.ok(result.stderr.includes(`RED: ${reason} (details redacted)`), failure);
@@ -173,7 +189,7 @@ case "$*" in
     esac
     printf '%s\n' "$*" >>"$TEST_CERT_RUNS"
     exit 0;;
-  *"debug check-log-config"*) printf '%s\n' "$@" >"$TEST_LOG_VALIDATE_ARGS"; exit 0;;
+  *"debug check-log-config"*) printf '%s\n' "$@" >"$TEST_LOG_VALIDATE_ARGS"; sed -n 'p' "$TEST_EFFECTIVE"; exit 0;;
   *"start-single-node"*) printf '%s\n' "$@" >"$TEST_LOG_START_ARGS"; exit 99;;
 esac
 exit 0
@@ -190,8 +206,10 @@ exit 0
     const certRuns = join(dir, 'cert-runs');
     const validateArgs = join(dir, 'validate-args');
     const startArgs = join(dir, 'start-args');
+    const effective = join(dir, 'effective.yaml');
+    writeFileSync(effective, fakeEffectiveLogConfig);
     const result = spawnSync('sh', ['scripts/test-db-backup-roles-secure.sh'], {
-      encoding: 'utf8', env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, TEST_HOST_ID: hostId, TEST_CERT_RUNS: certRuns, TEST_LOG_VALIDATE_ARGS: validateArgs, TEST_LOG_START_ARGS: startArgs },
+      encoding: 'utf8', env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, TEST_HOST_ID: hostId, TEST_CERT_RUNS: certRuns, TEST_LOG_VALIDATE_ARGS: validateArgs, TEST_LOG_START_ARGS: startArgs, TEST_EFFECTIVE: effective },
     });
     assert.equal(result.status, 1);
     assert.match(result.stderr, /RED: DB start \(details redacted\)/);
@@ -284,6 +302,64 @@ test('fixture sentinel scanner detects raw and RFC 3986 encoded credentials with
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('fixture sentinel scanner detects 48 repeated reserved bytes after percent encoding', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'backup-fixture-long-encoded-'));
+  try {
+    writeFileSync(join(dir, 'sink.log'), '%2B'.repeat(48));
+    const result = spawnSync('sh', ['-c', '. scripts/backup-fixture-client.sh; fixture_has_sentinel "$LOG_DIR"'], {
+      encoding: 'utf8', env: { ...process.env, LOG_DIR: dir, synthetic_secret: '+'.repeat(48) },
+    });
+    assert.equal(result.status, 0);
+    assert.equal(result.stdout, '');
+    assert.equal(result.stderr, '');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('effective log policy requires every configured file sink and stray capture', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'backup-fixture-sinks-'));
+  try {
+    const effective = join(dir, 'effective.yaml');
+    writeFileSync(effective, `sinks:
+  file-groups:
+    default:
+      channels: {INFO: [DEV]}
+    ops:
+      channels: {WARNING: [OPS]}
+    sql-audit:
+      channels: {INFO: [SENSITIVE_ACCESS]}
+    security:
+      channels: {INFO: [USER_ADMIN, PRIVILEGES]}
+    sql-auth:
+      channels: {INFO: [SESSIONS]}
+    sql-exec:
+      channels: {INFO: [SQL_EXEC]}
+  stderr:
+    channels: {INFO: [DEV]}
+capture-stray-errors:
+  enable: true
+`);
+    const sinks = ['cockroach.test.log', 'cockroach-ops.test.log', 'cockroach-sql-audit.test.log',
+      'cockroach-security.test.log', 'cockroach-sql-auth.test.log', 'cockroach-sql-exec.test.log',
+      'cockroach-stderr.log', 'container.log'];
+    for (const name of sinks) writeFileSync(join(dir, name), ['cockroach-ops.test.log', 'cockroach-stderr.log', 'container.log'].includes(name) ? '' : 'event\n');
+    const run = () => spawnSync('sh', ['-c', '. scripts/backup-fixture-client.sh; fixture_check_log_sinks "$EFFECTIVE" "$LOG_DIR"'], {
+      encoding: 'utf8', env: { ...process.env, EFFECTIVE: effective, LOG_DIR: dir },
+    });
+    assert.equal(run().status, 0);
+    const canonical = readFileSync(effective, 'utf8');
+    writeFileSync(effective, canonical.replace('    security:', '\n    security:'));
+    assert.equal(run().status, 0, 'blank line in effective YAML rejected');
+    writeFileSync(effective, canonical);
+    for (const name of sinks) {
+      rmSync(join(dir, name));
+      assert.equal(run().status, 1, `missing ${name} accepted`);
+      writeFileSync(join(dir, name), ['cockroach-ops.test.log', 'cockroach-stderr.log', 'container.log'].includes(name) ? '' : 'event\n');
+    }
+    writeFileSync(join(dir, 'cockroach-sql-auth.test.log'), '');
+    assert.equal(run().status, 1, 'empty SQL auth sink accepted');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('secure DB cleanup leaves the container for log scanning before removal', () => {
   const dir = mkdtempSync(join(tmpdir(), 'backup-fixture-quiesce-'));
   try {
@@ -340,6 +416,51 @@ test('secure DB cleanup rejects an empty server-log copy', () => {
       encoding: 'utf8', env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, LOG_DIR: dir },
     });
     assert.equal(result.status, 1);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('failed DB start still quiesces and removes its created disposable container', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'backup-fixture-partial-start-'));
+  try {
+    const calls = join(dir, 'lifecycle');
+    const marker = join(dir, 'db-created');
+    writeFileSync(join(dir, 'uname'), '#!/bin/sh\ncase "$1" in -s) echo Linux;; -m) echo x86_64;; esac\n');
+    writeFileSync(join(dir, 'docker'), `#!/bin/sh
+case "$*" in
+  *"cert create-ca"*|*"cert create-node"*|*"cert create-client"*)
+    for arg do case "$arg" in type=bind,src=*,dst=/certs) cert_dir=\${arg#type=bind,src=}; cert_dir=\${cert_dir%,dst=/certs};; esac; done
+    case "$*" in
+      *"cert create-ca"*) printf ca >"$cert_dir/ca.crt";;
+      *"cert create-node"*) printf node >"$cert_dir/node.crt"; printf key >"$cert_dir/node.key";;
+    esac
+    exit 0;;
+  *"debug check-log-config"*) sed -n 'p' "$TEST_EFFECTIVE"; exit 0;;
+  *"start-single-node"*) printf '%s\\n' start >>"$TEST_CALLS"; touch "$TEST_MARKER"; exit 99;;
+esac
+case "$1" in
+  image) exit 0;;
+  container) [ -f "$TEST_MARKER" ] && exit 0; exit 1;;
+  stop|wait|cp|logs|rm)
+    printf '%s\\n' "$1" >>"$TEST_CALLS"
+    [ "$1" = rm ] && rm -f "$TEST_MARKER"
+    exit 0;;
+esac
+exit 99
+`);
+    writeFileSync(join(dir, 's3proxy'), '#!/bin/sh\nexit 0\n');
+    writeFileSync(join(dir, 'mc'), '#!/bin/sh\nexit 0\n');
+    writeFileSync(join(dir, 'openssl'), '#!/bin/sh\nexit 0\n');
+    for (const name of ['uname', 'docker', 's3proxy', 'mc', 'openssl']) chmodSync(join(dir, name), 0o700);
+    const effective = join(dir, 'effective.yaml');
+    writeFileSync(effective, fakeEffectiveLogConfig);
+    const result = spawnSync('sh', ['scripts/test-db-backup-roles-secure.sh'], {
+      encoding: 'utf8', env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, TEST_CALLS: calls, TEST_MARKER: marker, TEST_EFFECTIVE: effective },
+    });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /RED: DB start \(details redacted\)/);
+    assert.deepEqual(readFileSync(calls, 'utf8').trim().split('\n'), ['start', 'stop', 'wait', 'cp', 'logs', 'rm']);
+    assert.equal(existsSync(marker), false);
+    assert.equal(result.stdout, '');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

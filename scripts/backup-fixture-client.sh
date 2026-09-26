@@ -56,7 +56,7 @@ fixture_stop_container() {
 
 fixture_percent_encode() {
  # Encode bytes without placing a credential in a process argument.
- printf '%s' "$1" | od -An -tx1 | awk '
+ printf '%s' "$1" | od -v -An -tx1 | awk '
   { for (i=1; i<=NF; i++) {
       h=tolower($i); n=(index("0123456789abcdef",substr(h,1,1))-1)*16+index("0123456789abcdef",substr(h,2,1))-1
       if ((n>=48 && n<=57) || (n>=65 && n<=90) || (n>=97 && n<=122) || n==45 || n==46 || n==95 || n==126)
@@ -103,6 +103,66 @@ fixture_quiesce_collect_logs() {
   echo 'RED: secure fixture final log collection or cleanup incomplete (details redacted)' >&2
  fi
  return "$result"
+}
+
+fixture_effective_log_groups() {
+ awk '
+  BEGIN {
+   expected["default"]=1; expected["ops"]=1; expected["sql-audit"]=1
+   expected["security"]=1; expected["sql-auth"]=1; expected["sql-exec"]=1
+  }
+  {
+   line=$0; sub(/\r$/, "", line)
+   indent=match(line, /[^ ]/) - 1
+   sub(/^[ ]+/, "", line); sub(/[ ]+$/, "", line)
+   if (line=="" || line ~ /^#/) next
+   if (in_groups && indent<=groups_indent) in_groups=0
+   if (in_sinks && indent<=sinks_indent && line!="sinks:") in_sinks=0
+   if (in_capture && indent<=capture_indent && line!="capture-stray-errors:") in_capture=0
+   if (in_groups && indent==groups_indent+2 && line ~ /^[a-z][a-z0-9-]*:$/) {
+    name=line; sub(/:$/, "", name)
+    if (!(name in expected) || ++seen[name]!=1) bad=1
+   }
+   if (in_sinks && indent==sinks_indent+2) {
+    if (line=="file-groups:") { in_groups=1; groups_indent=indent }
+    if (line=="stderr:") stderr=1
+    if (line ~ /^(fluent-servers|http-servers|otlp-servers):/) bad=1
+   }
+   if (in_capture && indent==capture_indent+2 && line=="enable: true") stray=1
+   if (line=="sinks:") { in_sinks=1; sinks_indent=indent }
+   if (line=="capture-stray-errors:") { in_capture=1; capture_indent=indent }
+  }
+  END {
+   for (name in expected) if (seen[name]!=1) bad=1
+   if (bad || !stderr || !stray) exit 1
+   for (name in expected) print name
+  }
+ ' "$1"
+}
+
+fixture_check_log_sinks() {
+ effective=$1
+ log_dir=$2
+ groups=$(fixture_effective_log_groups "$effective") || return 1
+ for group in $groups; do
+  if [ "$group" = default ]; then prefix='cockroach.'; else prefix="cockroach-$group."; fi
+  found=false
+  nonempty=false
+  for file in "$log_dir"/"$prefix"*.log; do
+   [ -e "$file" ] || continue
+   [ -f "$file" ] && [ -r "$file" ] || return 1
+   found=true
+   [ -s "$file" ] && nonempty=true
+  done
+  [ "$found" = true ] || return 1
+  # OPS WARNING is quiet on healthy runs; other configured channels are
+  # deliberately exercised by the fixture and must contain events.
+  if [ "$group" != ops ] && [ "$nonempty" != true ]; then return 1; fi
+ done
+ # Stray capture and container stderr may be empty, but both must be copied.
+ for file in "$log_dir/cockroach-stderr.log" "$log_dir/container.log"; do
+  [ -f "$file" ] && [ -r "$file" ] || return 1
+ done
 }
 
 fixture_audit_markers() {

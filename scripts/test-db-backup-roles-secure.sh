@@ -17,7 +17,7 @@ cockroach_image='cockroachdb/cockroach:v26.2.5@sha256:771325a0586bf61d53322d24f5
 fixture_dir=$(mktemp -d)
 fixture_id=$(basename "$fixture_dir")
 db="jandibat-backup-db-$fixture_id"
-db_created=false
+db_creation_attempted=false
 s3proxy_pid=
 audit_expected=false
 fail() { echo "RED: $1 (details redacted)" >&2; exit 1; }
@@ -35,9 +35,13 @@ scan_capture() {
 }
 cleanup() {
  status=$?
- if [ "$db_created" = true ]; then
+ if [ "$db_creation_attempted" = true ]; then
   fixture_quiesce_collect_logs "$db" "$fixture_dir/db-logs" || status=1
   scan_capture "$fixture_dir/db-logs" 'server log'
+  if ! fixture_check_log_sinks "$fixture_dir/log-config-check" "$fixture_dir/db-logs"; then
+   echo 'RED: configured server log sink unavailable (details redacted)' >&2
+   status=1
+  fi
   if [ "$audit_expected" = true ] && ! fixture_audit_markers "$fixture_dir/db-logs"; then
    echo 'RED: positive SQL/security/sensitive audit marker missing (details redacted)' >&2
    status=1
@@ -62,7 +66,7 @@ cleanup() {
    if [ -f "$output" ]; then scan_capture "$output" 'client output'; fi
   done
  fi
- if [ "$db_created" = true ] && ! docker rm "$db" >/dev/null 2>&1; then
+ if [ "$db_creation_attempted" = true ] && ! docker rm "$db" >/dev/null 2>&1; then
   echo 'RED: secure fixture container removal incomplete (details redacted)' >&2
   status=1
  fi
@@ -114,6 +118,7 @@ docker run --rm --mount "type=bind,src=$fixture_log_config_dir,dst=/fixture-logg
  --entrypoint /cockroach/cockroach "$cockroach_image" debug check-log-config \
  --log-config-file=/fixture-logging/cockroach-backup-logging.yaml \
  >"$fixture_dir/log-config-check" 2>&1 || fail 'log config validation'
+fixture_effective_log_groups "$fixture_dir/log-config-check" >/dev/null || fail 'log config validation'
 
 synthetic_access=$(awk 'BEGIN { for (i=0;i<44;i++) printf "K" }')
 synthetic_secret=$(awk 'BEGIN { for (i=0;i<44;i++) printf "S" }')
@@ -152,6 +157,7 @@ echo 'PHASE: S3Proxy startup' >&2
 s3proxy --properties "$fixture_dir/s3proxy.properties" >"$fixture_dir/s3proxy-output" 2>&1 &
 s3proxy_pid=$!
 echo 'PHASE: DB start' >&2
+db_creation_attempted=true
 docker run -d --name "$db" --network host \
  --env SSL_CERT_FILE=/certs/ca.crt \
  --mount "type=bind,src=$fixture_dir/certs,dst=/certs,readonly" \
@@ -159,7 +165,6 @@ docker run -d --name "$db" --network host \
  --entrypoint /cockroach/cockroach "$cockroach_image" start-single-node \
  --certs-dir=/certs --log-config-file=/fixture-logging/cockroach-backup-logging.yaml \
  --listen-addr=127.0.0.1:26259 --http-addr=127.0.0.1:8089 >/dev/null 2>&1 || fail 'DB start'
-db_created=true
 
 client() { fixture_client "$@"; }
 sql_as() {

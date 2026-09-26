@@ -3,6 +3,23 @@
 API 계약 변경 시 이 파일과 GraphQL SDL(도메인) 또는 `openapi/jandibat.yaml`(HTTP edge)을 같은 변경에 포함합니다.
 각 항목에는 날짜, 호환성, 영향받는 operation/schema, 백엔드·프론트엔드 후속 작업을 기록합니다.
 
+## 2026-09-26 — 백업 스케줄 정책의 읽기 전용 투영
+
+호환성: 백업 계정 opt-in 경로에 내부 뷰를 추가합니다. 애플리케이션 계정만 설정하는
+기존 bootstrap과 공개 GraphQL/OpenAPI 계약은 바뀌지 않습니다.
+
+- root가 기존 private schema에 `defaultdb.jandibat_backup_admin.schedule_policy_v1`을
+  만들고 재실행마다 정의의 SHA-256, 소유권, 열 수와 정확한 권한을 검사합니다.
+  뷰는 `SHOW SCHEDULES`에서 고정 label 또는 외부 연결 이름에 닿는 모든 후보를
+  선택해 스케줄 ID와 두 연결 ID를 10진 문자열로, 나머지 정책은 boolean으로
+  투영합니다. 원문 명령, 저장소 URI, 오류 상태 문자열은 노출하지 않습니다.
+- runner와 verifier는 private schema USAGE와 이 뷰의 SELECT만 받습니다.
+  `system.scheduled_jobs` 직접 SELECT나 admin/root 권한을 받지 않습니다.
+  verifier는 뷰 정의·소유권·권한을 재검사하고 원본 테이블 접근 거부를 확인합니다.
+- Coordination은 이 뷰와 역할 검증을 소유합니다. 스케줄 생성과 백업 체인
+  검증의 소비 계약은 별도 단계에서 이 안전한 투영을 사용합니다. 이 변경만으로
+  실제 복구 가능 시각이나 배포 준비 상태를 선언하지 않습니다.
+
 ## 2026-09-26 — 백업 연결 정책의 비공개 메타데이터 계약
 
 호환성: 기존 네 애플리케이션 계정 bootstrap에는 호환되는 opt-in 추가입니다. 세 백업

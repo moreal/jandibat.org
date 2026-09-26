@@ -51,12 +51,16 @@ ORDER BY database_name, schema_name, object_name, object_type, grantee, privileg
   BEGIN {
    if (db!="jandibat") allow("public", "NULL", "schema", "public", "CREATE", "f")
    allow("public", "NULL", "schema", "public", "USAGE", "f")
-   if (db=="defaultdb") {
+  if (db=="defaultdb") {
     allow("NULL", "NULL", "database", "jandibat_backup_bootstrap", "CONNECT", "f")
     allow("jandibat_backup_admin", "NULL", "schema", "jandibat_backup_bootstrap", "USAGE", "f")
     allow("jandibat_backup_admin", "connection_policy", "table", "jandibat_backup_bootstrap", "SELECT", "f")
     allow("jandibat_backup_admin", "connection_policy", "table", "jandibat_backup_bootstrap", "INSERT", "f")
     allow("jandibat_backup_admin", "connection_live_digest", "table", "jandibat_backup_bootstrap", "SELECT", "f")
+    allow("jandibat_backup_admin", "NULL", "schema", "jandibat_backup_runner", "USAGE", "f")
+    allow("jandibat_backup_admin", "NULL", "schema", "jandibat_backup_verifier", "USAGE", "f")
+    allow("jandibat_backup_admin", "schedule_policy_v1", "table", "jandibat_backup_runner", "SELECT", "f")
+    allow("jandibat_backup_admin", "schedule_policy_v1", "table", "jandibat_backup_verifier", "SELECT", "f")
    } else if (db=="jandibat") {
     allow("NULL", "NULL", "database", "jandibat_backup_runner", "BACKUP", "f")
    } else if (db=="system") {
@@ -125,6 +129,22 @@ audit_database_grants system
 expect_denied 'SET allow_unsafe_internals = true; SELECT connection_name FROM defaultdb.jandibat_backup_admin.connection_policy WHERE false;'
 expect_denied 'SET allow_unsafe_internals = true; SELECT connection_name FROM defaultdb.jandibat_backup_admin.connection_live_digest WHERE false;'
 expect_denied 'SET allow_unsafe_internals = true; SELECT connection_details FROM system.external_connections WHERE false;'
+expect_denied 'SET allow_unsafe_internals = true; SELECT id FROM system.scheduled_jobs WHERE false;'
+expect_one "SELECT IF((SELECT count(*) FROM information_schema.views WHERE table_catalog = 'defaultdb' AND table_schema = 'jandibat_backup_admin' AND table_name = 'schedule_policy_v1' AND sha256(view_definition) = '22618fec289bcb499108404f98ce9a05d2701e6bfeeacd491d399171f483085c') = 1, 1, 0);"
+expect_one "SELECT IF((SELECT count(*) FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace JOIN pg_catalog.pg_roles r ON r.oid = c.relowner WHERE n.nspname = 'jandibat_backup_admin' AND c.relname = 'schedule_policy_v1' AND r.rolname = 'root') = 1, 1, 0);"
+expect_one "SELECT IF((SELECT count(*) FROM [SHOW GRANTS ON TABLE defaultdb.jandibat_backup_admin.schedule_policy_v1] WHERE NOT (
+ (grantee IN ('root', 'admin') AND privilege_type = 'ALL' AND is_grantable) OR
+ (grantee IN ('jandibat_backup_runner', 'jandibat_backup_verifier') AND privilege_type = 'SELECT' AND NOT is_grantable)
+)) = 0 AND (SELECT count(*) FROM [SHOW GRANTS ON TABLE defaultdb.jandibat_backup_admin.schedule_policy_v1]) = 4, 1, 0);"
+expect_one "SELECT IF((SELECT count(*) FROM [SHOW GRANTS ON SCHEMA defaultdb.jandibat_backup_admin] WHERE NOT (
+ (grantee IN ('root', 'admin') AND privilege_type = 'ALL' AND is_grantable) OR
+ (grantee IN ('jandibat_backup_bootstrap', 'jandibat_backup_runner', 'jandibat_backup_verifier') AND privilege_type = 'USAGE' AND NOT is_grantable)
+)) = 0 AND (SELECT count(*) FROM [SHOW GRANTS ON SCHEMA defaultdb.jandibat_backup_admin]) = 5, 1, 0);"
+sql 'SELECT * FROM defaultdb.jandibat_backup_admin.schedule_policy_v1 LIMIT 0;'
+[ "$(sed -n '1p' "$capture_dir/stdout")" = 'schedule_id	dependent_id	unpause_id	label_ok	owner_ok	active_ok	initial_pause_ok	incremental_cron_ok	full_cron_ok	overlap_wait	retry_soon	metric_disabled	incremental_command_ok	full_command_ok' ] || {
+ echo 'backup schedule view shape mismatch' >&2; exit 1;
+}
+[ "$(wc -l <"$capture_dir/stdout")" -eq 1 ] || { echo 'backup schedule view shape mismatch' >&2; exit 1; }
 sql 'SELECT grantee, privilege_type, is_grantable FROM [SHOW GRANTS ON EXTERNAL CONNECTION jandibat_backup_v1] ORDER BY grantee, privilege_type;'
 awk -F '\t' '
  NR==1 { if ($1!="grantee" || $2!="privilege_type" || $3!="is_grantable") bad=1; next }

@@ -85,12 +85,16 @@ ORDER BY database_name, schema_name, object_name, object_type, grantee, privileg
   BEGIN {
    if (db!="jandibat") allow("public", "NULL", "schema", "public", "CREATE", "f")
    allow("public", "NULL", "schema", "public", "USAGE", "f")
-   if (db=="defaultdb") {
+  if (db=="defaultdb") {
     allow("NULL", "NULL", "database", "jandibat_backup_bootstrap", "CONNECT", "f")
     allow("jandibat_backup_admin", "NULL", "schema", "jandibat_backup_bootstrap", "USAGE", "f")
     allow("jandibat_backup_admin", "connection_policy", "table", "jandibat_backup_bootstrap", "SELECT", "f")
     allow("jandibat_backup_admin", "connection_policy", "table", "jandibat_backup_bootstrap", "INSERT", "f")
     allow("jandibat_backup_admin", "connection_live_digest", "table", "jandibat_backup_bootstrap", "SELECT", "f")
+    allow("jandibat_backup_admin", "NULL", "schema", "jandibat_backup_runner", "USAGE", "f")
+    allow("jandibat_backup_admin", "NULL", "schema", "jandibat_backup_verifier", "USAGE", "f")
+    allow("jandibat_backup_admin", "schedule_policy_v1", "table", "jandibat_backup_runner", "SELECT", "f")
+    allow("jandibat_backup_admin", "schedule_policy_v1", "table", "jandibat_backup_verifier", "SELECT", "f")
    } else if (db=="jandibat") {
     allow("NULL", "NULL", "database", "jandibat_backup_runner", "BACKUP", "f")
    } else if (db=="system") {
@@ -144,20 +148,30 @@ expect_private_grants() {
  target=$1
  kind=$2
  case "$kind" in
-  schema) bootstrap_privilege="privilege_type = 'USAGE'"; bootstrap_count=1;;
+  schema) bootstrap_privilege="privilege_type = 'USAGE'"; bootstrap_count=1;
+          consumer_predicate="OR (grantee IN ('jandibat_backup_runner', 'jandibat_backup_verifier') AND privilege_type = 'USAGE' AND NOT is_grantable)";
+          consumer_count="AND (SELECT count(*) FROM [SHOW GRANTS ON $target] WHERE grantee IN ('jandibat_backup_runner', 'jandibat_backup_verifier') AND privilege_type = 'USAGE' AND NOT is_grantable) = 2";;
   table) bootstrap_privilege="privilege_type IN ('SELECT', 'INSERT')"; bootstrap_count=2;;
   view) bootstrap_privilege="privilege_type = 'SELECT'"; bootstrap_count=1;;
+  schedule_view) bootstrap_privilege='false'; bootstrap_count=0;
+          consumer_predicate="OR (grantee IN ('jandibat_backup_runner', 'jandibat_backup_verifier') AND privilege_type = 'SELECT' AND NOT is_grantable)";
+          consumer_count="AND (SELECT count(*) FROM [SHOW GRANTS ON $target] WHERE grantee IN ('jandibat_backup_runner', 'jandibat_backup_verifier') AND privilege_type = 'SELECT' AND NOT is_grantable) = 2";;
  esac
+ consumer_predicate=${consumer_predicate:-}
+ consumer_count=${consumer_count:-}
  expect_one "SELECT IF(
  (SELECT count(*) FROM [SHOW GRANTS ON $target] WHERE NOT (
   (grantee = 'root' AND privilege_type = 'ALL' AND is_grantable) OR
   (grantee = 'admin' AND privilege_type = 'ALL' AND is_grantable) OR
   (grantee = 'jandibat_backup_bootstrap' AND $bootstrap_privilege AND NOT is_grantable)
+  $consumer_predicate
  )) = 0 AND
  (SELECT count(*) FROM [SHOW GRANTS ON $target] WHERE grantee = 'root' AND privilege_type = 'ALL' AND is_grantable) = 1 AND
  (SELECT count(*) FROM [SHOW GRANTS ON $target] WHERE grantee = 'admin' AND privilege_type = 'ALL' AND is_grantable) = 1 AND
- (SELECT count(*) FROM [SHOW GRANTS ON $target] WHERE grantee = 'jandibat_backup_bootstrap' AND $bootstrap_privilege AND NOT is_grantable) = $bootstrap_count,
+ (SELECT count(*) FROM [SHOW GRANTS ON $target] WHERE grantee = 'jandibat_backup_bootstrap' AND $bootstrap_privilege AND NOT is_grantable) = $bootstrap_count
+ $consumer_count,
  1, 0);"
+ consumer_predicate= consumer_count=
 }
 sql "$COCKROACH_ROOT_URL" 'CREATE DATABASE IF NOT EXISTS jandibat;'
 sql "$COCKROACH_ROOT_URL" "CREATE USER IF NOT EXISTS jandibat_migrator; ALTER USER jandibat_migrator WITH PASSWORD '$JANDIBAT_MIGRATOR_PASSWORD';"
@@ -196,6 +210,34 @@ CREATE VIEW defaultdb.jandibat_backup_admin.connection_live_digest AS
   1:1:1) :;;
   *) echo 'database backup metadata contract mismatch' >&2; exit 1;;
  esac
+ # This fixed, root-owned view is the only schedule-catalog projection visible
+ # to the runner and verifier. Never expose raw command JSON or state text.
+ schedule_view_count=$(sql_value "$COCKROACH_ROOT_URL" "SELECT count(*) AS schedule_view_count FROM information_schema.views WHERE table_catalog = 'defaultdb' AND table_schema = 'jandibat_backup_admin' AND table_name = 'schedule_policy_v1';")
+ case "$schedule_view_count" in
+  0)
+   sql "$COCKROACH_ROOT_URL" "SET allow_unsafe_internals = true;
+CREATE VIEW defaultdb.jandibat_backup_admin.schedule_policy_v1 AS
+SELECT id::STRING AS schedule_id,
+ COALESCE(command->>'dependent_schedule_id', '') AS dependent_id,
+ COALESCE(command->>'unpause_on_success', '') AS unpause_id,
+ (label = 'jandibat_backup_schedule_v1') AS label_ok,
+ (owner = 'jandibat_backup_runner') AS owner_ok,
+ (schedule_status = 'ACTIVE' AND next_run IS NOT NULL AND (state IS NULL OR state = '')) AS active_ok,
+ (schedule_status = 'PAUSED' AND next_run IS NULL AND state = 'Waiting for initial backup to complete') AS initial_pause_ok,
+ (recurrence = '10 * * * *') AS incremental_cron_ok,
+ (recurrence = '10 0 * * *') AS full_cron_ok,
+ (on_previous_running = 'WAIT') AS overlap_wait,
+ (on_execution_failure = 'RETRY_SOON') AS retry_soon,
+ (NOT COALESCE((command->>'updates_last_backup_metric')::BOOL, false)) AS metric_disabled,
+ (command->>'backup_statement' = 'BACKUP DATABASE jandibat INTO LATEST IN ''external://jandibat_backup_v1'' WITH OPTIONS (revision_history = true, detached)') AS incremental_command_ok,
+ (command->>'backup_statement' = 'BACKUP DATABASE jandibat INTO ''external://jandibat_backup_v1'' WITH OPTIONS (detached)') AS full_command_ok
+FROM [SHOW SCHEDULES]
+WHERE label = 'jandibat_backup_schedule_v1'
+ OR (command->>'backup_statement') LIKE '%external://jandibat_backup_v1%';"
+   ;;
+  1) :;;
+  *) echo 'database backup schedule view inventory mismatch' >&2; exit 1;;
+ esac
  # Structural checks are deliberately read-only on an existing installation.
  expect_one "SELECT IF((SELECT count(*) FROM [SHOW SCHEMAS FROM defaultdb] WHERE schema_name = 'jandibat_backup_admin' AND owner = 'root') = 1, 1, 0);"
  expect_one "SELECT IF((SELECT count(*) FROM information_schema.columns WHERE table_catalog = 'defaultdb' AND table_schema = 'jandibat_backup_admin' AND table_name = 'connection_policy' AND ((column_name = 'connection_name' AND data_type = 'text' AND is_nullable = 'NO') OR (column_name = 'policy_version' AND data_type = 'bigint' AND is_nullable = 'NO') OR (column_name IN ('input_digest', 'catalog_digest') AND data_type = 'text' AND is_nullable = 'NO'))) = 4, 1, 0);"
@@ -210,11 +252,14 @@ CREATE VIEW defaultdb.jandibat_backup_admin.connection_live_digest AS
   (constraint_name = 'check_catalog_digest' AND constraint_type = 'CHECK' AND details = 'CHECK ((catalog_digest ~ ''^[0-9a-f]{64}$''::STRING))')
  )) = 5 AND (SELECT count(*) FROM [SHOW CONSTRAINTS FROM defaultdb.jandibat_backup_admin.connection_policy]) = 5, 1, 0);"
  expect_one "SELECT IF((SELECT count(*) FROM information_schema.views WHERE table_catalog = 'defaultdb' AND table_schema = 'jandibat_backup_admin' AND table_name = 'connection_live_digest' AND view_definition = 'SELECT connection_name, sha256(connection_details) AS catalog_digest FROM system.public.external_connections WHERE connection_name = ''jandibat_backup_v1''') = 1, 1, 0);"
- expect_one "SELECT IF((SELECT count(*) FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace JOIN pg_catalog.pg_roles r ON r.oid = c.relowner WHERE n.nspname = 'jandibat_backup_admin' AND c.relname IN ('connection_policy', 'connection_live_digest') AND r.rolname = 'root') = 2, 1, 0);"
+ expect_one "SELECT IF((SELECT count(*) FROM information_schema.views WHERE table_catalog = 'defaultdb' AND table_schema = 'jandibat_backup_admin' AND table_name = 'schedule_policy_v1' AND sha256(view_definition) = '22618fec289bcb499108404f98ce9a05d2701e6bfeeacd491d399171f483085c') = 1, 1, 0);"
+ expect_one "SELECT IF((SELECT count(*) FROM information_schema.columns WHERE table_catalog = 'defaultdb' AND table_schema = 'jandibat_backup_admin' AND table_name = 'schedule_policy_v1') = 14, 1, 0);"
+ expect_one "SELECT IF((SELECT count(*) FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace JOIN pg_catalog.pg_roles r ON r.oid = c.relowner WHERE n.nspname = 'jandibat_backup_admin' AND c.relname IN ('connection_policy', 'connection_live_digest', 'schedule_policy_v1') AND r.rolname = 'root') = 3, 1, 0);"
  expect_one "SELECT IF((SELECT count(*) FROM system.role_members WHERE member IN ('jandibat_backup_bootstrap', 'jandibat_backup_runner', 'jandibat_backup_verifier')) = 0, 1, 0);"
  expect_one "SELECT IF((SELECT count(*) FROM [SHOW GRANTS ON SCHEMA defaultdb.jandibat_backup_admin] WHERE grantee = 'public') = 0, 1, 0);"
  expect_one "SELECT IF((SELECT count(*) FROM [SHOW GRANTS ON TABLE defaultdb.jandibat_backup_admin.connection_policy] WHERE grantee = 'public') = 0, 1, 0);"
  expect_one "SELECT IF((SELECT count(*) FROM [SHOW GRANTS ON TABLE defaultdb.jandibat_backup_admin.connection_live_digest] WHERE grantee = 'public') = 0, 1, 0);"
+ expect_one "SELECT IF((SELECT count(*) FROM [SHOW GRANTS ON TABLE defaultdb.jandibat_backup_admin.schedule_policy_v1] WHERE grantee = 'public') = 0, 1, 0);"
  expect_one "SELECT IF((SELECT count(*) FROM [SHOW SYSTEM GRANTS] WHERE grantee = 'public') = 0, 1, 0);"
  expect_one "SELECT IF((SELECT count(*) FROM [SHOW GRANTS ON DATABASE jandibat] WHERE grantee = 'public' AND privilege_type IN ('ALL', 'BACKUP', 'RESTORE')) = 0, 1, 0);"
  sql "$COCKROACH_ROOT_URL" "CREATE USER IF NOT EXISTS jandibat_backup_bootstrap; ALTER USER jandibat_backup_bootstrap WITH PASSWORD '$JANDIBAT_BACKUP_BOOTSTRAP_PASSWORD';"
@@ -226,6 +271,8 @@ GRANT CONNECT ON DATABASE defaultdb TO jandibat_backup_bootstrap;
 GRANT USAGE ON SCHEMA defaultdb.jandibat_backup_admin TO jandibat_backup_bootstrap;
 GRANT SELECT, INSERT ON TABLE defaultdb.jandibat_backup_admin.connection_policy TO jandibat_backup_bootstrap;
 GRANT SELECT ON TABLE defaultdb.jandibat_backup_admin.connection_live_digest TO jandibat_backup_bootstrap;'
+ sql "$COCKROACH_ROOT_URL" 'GRANT USAGE ON SCHEMA defaultdb.jandibat_backup_admin TO jandibat_backup_runner, jandibat_backup_verifier;
+GRANT SELECT ON TABLE defaultdb.jandibat_backup_admin.schedule_policy_v1 TO jandibat_backup_runner, jandibat_backup_verifier;'
  sql "$BACKUP_BOOTSTRAP_DATABASE_URL" 'SELECT current_user();' jandibat_backup_bootstrap
  sql "$BACKUP_RUNNER_DATABASE_URL" 'SELECT current_user();' jandibat_backup_runner
  sql "$BACKUP_VERIFIER_DATABASE_URL" 'SELECT current_user();' jandibat_backup_verifier
@@ -238,6 +285,7 @@ GRANT SELECT ON TABLE defaultdb.jandibat_backup_admin.connection_live_digest TO 
  expect_private_grants 'SCHEMA defaultdb.jandibat_backup_admin' schema
  expect_private_grants 'TABLE defaultdb.jandibat_backup_admin.connection_policy' table
  expect_private_grants 'TABLE defaultdb.jandibat_backup_admin.connection_live_digest' view
+ expect_private_grants 'TABLE defaultdb.jandibat_backup_admin.schedule_policy_v1' schedule_view
  sql "$COCKROACH_ROOT_URL" 'SELECT database_name FROM [SHOW DATABASES] ORDER BY database_name;'
  cp "$capture_dir/stdout" "$capture_dir/databases"
  seen_defaultdb=false seen_jandibat=false seen_system=false

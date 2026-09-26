@@ -30,7 +30,7 @@ if grep -q 'system.role_members' "$TEST_SQL_CURRENT" &&
 fi
 case "$COCKROACH_URL" in
  *jandibat_backup_verifier@*)
-  if grep -Eq 'SELECT connection_name FROM defaultdb.jandibat_backup_admin|SELECT connection_details FROM system.external_connections' "$TEST_SQL_CURRENT"; then
+  if grep -Eq 'SELECT connection_name FROM defaultdb.jandibat_backup_admin|SELECT connection_details FROM system.external_connections|SELECT id FROM system.scheduled_jobs' "$TEST_SQL_CURRENT"; then
    [ "${TEST_EXTRA_METADATA_ACCESS:-}" != 1 ] || exit 0
    echo 'SQLSTATE: 42501' >&2
    exit 1
@@ -38,6 +38,10 @@ case "$COCKROACH_URL" in
 esac
 if grep -q 'information_schema.schemata WHERE catalog_name' "$TEST_SQL_CURRENT" && grep -q '::STRING' "$TEST_SQL_CURRENT"; then
  printf 'state\n%s\n' "${TEST_STATE:-0:0:0}"
+ exit 0
+fi
+if grep -q "table_name = 'schedule_policy_v1'" "$TEST_SQL_CURRENT" && grep -q 'AS schedule_view_count' "$TEST_SQL_CURRENT"; then
+ printf 'schedule_view_count\n%s\n' "${TEST_SCHEDULE_VIEW_COUNT:-0}"
  exit 0
 fi
 if grep -q 'SELECT database_name FROM \[SHOW DATABASES\]' "$TEST_SQL_CURRENT"; then
@@ -72,13 +76,23 @@ if grep -q 'SHOW GRANTS FOR jandibat_backup_bootstrap' "$TEST_SQL_CURRENT"; then
    printf 'defaultdb\tjandibat_backup_admin\tNULL\tschema\tjandibat_backup_bootstrap\tUSAGE\tf\n'
    printf 'defaultdb\tjandibat_backup_admin\tconnection_policy\ttable\tjandibat_backup_bootstrap\tSELECT\tf\n'
    printf 'defaultdb\tjandibat_backup_admin\tconnection_policy\ttable\tjandibat_backup_bootstrap\tINSERT\tf\n'
-   printf 'defaultdb\tjandibat_backup_admin\tconnection_live_digest\ttable\tjandibat_backup_bootstrap\tSELECT\tf\n';;
+   printf 'defaultdb\tjandibat_backup_admin\tconnection_live_digest\ttable\tjandibat_backup_bootstrap\tSELECT\tf\n'
+   for role in jandibat_backup_runner jandibat_backup_verifier; do
+    printf 'defaultdb\tjandibat_backup_admin\tNULL\tschema\t%s\tUSAGE\tf\n' "$role"
+    if [ "${TEST_MISSING_SCHEDULE_GRANT:-}" != 1 ] || [ "$role" != jandibat_backup_verifier ]; then
+     printf 'defaultdb\tjandibat_backup_admin\tschedule_policy_v1\ttable\t%s\tSELECT\tf\n' "$role"
+    fi
+   done
+   [ "${TEST_EXTRA_SCHEDULE_TABLE_GRANT:-}" != 1 ] || printf 'defaultdb\tjandibat_backup_admin\tschedule_policy_v1\ttable\tjandibat_backup_runner\tINSERT\tf\n'
+   ;;
   jandibat)
    printf 'jandibat\tNULL\tNULL\tdatabase\tjandibat_backup_runner\tBACKUP\tf\n'
    if [ "${TEST_BAD_OBJECT:-}" = extra_app_table_grant ] || [ "${TEST_EXTRA_APP_GRANT:-}" = 1 ]; then
     printf 'jandibat\tpublic\tapp_probe\ttable\tjandibat_backup_verifier\tSELECT\tf\n'
    fi;;
-  system) printf 'system\tpublic\tcomments\ttable\tpublic\tSELECT\tf\n';;
+  system)
+   printf 'system\tpublic\tcomments\ttable\tpublic\tSELECT\tf\n'
+   [ "${TEST_EXTRA_SYSTEM_SCHEDULED_JOBS_GRANT:-}" != 1 ] || printf 'system\tpublic\tscheduled_jobs\ttable\tjandibat_backup_verifier\tSELECT\tf\n';;
  esac
  exit 0
 fi
@@ -115,6 +129,8 @@ if grep -q 'SELECT IF(' "$TEST_SQL_CURRENT"; then
   missing_private_schema) grep -q 'SHOW SCHEMAS FROM defaultdb' "$TEST_SQL_CURRENT" && { printf 'valid\n0\n'; exit 0; };;
   wrong_owner) grep -q 'pg_catalog.pg_class' "$TEST_SQL_CURRENT" && { printf 'valid\n0\n'; exit 0; };;
   wrong_view_predicate) grep -q 'view_definition' "$TEST_SQL_CURRENT" && { printf 'valid\n0\n'; exit 0; };;
+  wrong_schedule_view_definition) grep -q 'schedule_policy_v1' "$TEST_SQL_CURRENT" && grep -q 'view_definition' "$TEST_SQL_CURRENT" && { printf 'valid\n0\n'; exit 0; };;
+  wrong_schedule_view_owner) grep -q 'schedule_policy_v1' "$TEST_SQL_CURRENT" && grep -q 'pg_catalog.pg_class' "$TEST_SQL_CURRENT" && { printf 'valid\n0\n'; exit 0; };;
   nullable_digest) grep -q 'information_schema.columns' "$TEST_SQL_CURRENT" && { printf 'valid\n0\n'; exit 0; };;
   unexpected_public_grant) grep -q 'SHOW GRANTS ON SCHEMA' "$TEST_SQL_CURRENT" && { printf 'valid\n0\n'; exit 0; };;
   extra_role_membership) grep -q 'system.role_members' "$TEST_SQL_CURRENT" && { printf 'valid\n0\n'; exit 0; };;
@@ -129,6 +145,10 @@ if grep -q 'SELECT IF(' "$TEST_SQL_CURRENT"; then
   header_named_schema_default) grep -q 'IN SCHEMA "schema_name"' "$TEST_SQL_CURRENT" && grep -q 'USE "jandibat"' "$TEST_SQL_CURRENT" && { printf 'valid\n0\n'; exit 0; };;
  esac
  printf 'valid\n1\n'
+ exit 0
+fi
+if grep -q 'SELECT \* FROM defaultdb.jandibat_backup_admin.schedule_policy_v1 LIMIT 0' "$TEST_SQL_CURRENT"; then
+ printf 'schedule_id\tdependent_id\tunpause_id\tlabel_ok\towner_ok\tactive_ok\tinitial_pause_ok\tincremental_cron_ok\tfull_cron_ok\toverlap_wait\tretry_soon\tmetric_disabled\tincremental_command_ok\tfull_command_ok\n'
  exit 0
 fi
 if grep -q 'SELECT current_user()' "$TEST_SQL_CURRENT"; then
@@ -234,9 +254,12 @@ for expected in \
  'CREATE SCHEMA defaultdb.jandibat_backup_admin AUTHORIZATION root' \
  'CREATE TABLE defaultdb.jandibat_backup_admin.connection_policy' \
  'CREATE VIEW defaultdb.jandibat_backup_admin.connection_live_digest' \
+ 'CREATE VIEW defaultdb.jandibat_backup_admin.schedule_policy_v1' \
  'SET allow_unsafe_internals = true' \
  'GRANT SYSTEM EXTERNALCONNECTION TO jandibat_backup_bootstrap' \
- 'GRANT BACKUP ON DATABASE jandibat TO jandibat_backup_runner'; do
+ 'GRANT BACKUP ON DATABASE jandibat TO jandibat_backup_runner' \
+ 'GRANT USAGE ON SCHEMA defaultdb.jandibat_backup_admin TO jandibat_backup_runner, jandibat_backup_verifier' \
+ 'GRANT SELECT ON TABLE defaultdb.jandibat_backup_admin.schedule_policy_v1 TO jandibat_backup_runner, jandibat_backup_verifier'; do
  grep -Fq "$expected" "$TEST_SQL_LOG" || fail "missing backup SQL: $expected"
 done
 if grep -Eiq 'CREATE OR REPLACE|CREATE (SCHEMA|TABLE|VIEW) IF NOT EXISTS defaultdb.jandibat_backup_admin' "$TEST_SQL_LOG"; then
@@ -247,9 +270,9 @@ for state in 1:0:0 1:1:0 0:1:1; do
  if run_bootstrap env TEST_STATE="$state"; then fail "partial existing object state $state accepted"; fi
  if grep -Eq '^CREATE (SCHEMA|TABLE|VIEW) ' "$TEST_SQL_LOG"; then fail "partial existing object state $state replaced"; fi
 done
-for bad in missing_private_schema wrong_owner wrong_view_predicate nullable_digest unexpected_public_grant unexpected_public_system_grant extra_role_membership public_default_grant extra_app_table_grant cross_creator_default_grant wrong_fixed_name_constraint unrelated_private_grant other_schema_default_grant other_named_schema_default_grant header_named_schema_default bad_schema_header; do
+for bad in missing_private_schema wrong_owner wrong_view_predicate wrong_schedule_view_definition wrong_schedule_view_owner nullable_digest unexpected_public_grant unexpected_public_system_grant extra_role_membership public_default_grant extra_app_table_grant cross_creator_default_grant wrong_fixed_name_constraint unrelated_private_grant other_schema_default_grant other_named_schema_default_grant header_named_schema_default bad_schema_header; do
  : >"$TEST_SQL_LOG"
- if run_bootstrap env TEST_STATE=1:1:1 TEST_BAD_OBJECT="$bad"; then fail "$bad accepted"; fi
+ if run_bootstrap env TEST_STATE=1:1:1 TEST_SCHEDULE_VIEW_COUNT=1 TEST_BAD_OBJECT="$bad"; then fail "$bad accepted"; fi
  if grep -Eq '^CREATE (SCHEMA|TABLE|VIEW) ' "$TEST_SQL_LOG"; then fail "$bad replaced existing object"; fi
 done
 if ! env COCKROACH_SQL_BIN=cockroach BACKUP_VERIFIER_DATABASE_URL='postgresql://jandibat_backup_verifier@localhost/jandibat' \
@@ -264,6 +287,14 @@ if env TEST_EXTRA_MEMBERSHIP=1 COCKROACH_SQL_BIN=cockroach BACKUP_VERIFIER_DATAB
  sh scripts/db-verify-backup-roles.sh >"$test_dir/output" 2>&1; then fail 'verifier accepted role membership'; fi
 if env TEST_EXTRA_APP_GRANT=1 COCKROACH_SQL_BIN=cockroach BACKUP_VERIFIER_DATABASE_URL='postgresql://jandibat_backup_verifier@localhost/jandibat' \
  sh scripts/db-verify-backup-roles.sh >"$test_dir/output" 2>&1; then fail 'verifier accepted app-table authority'; fi
+for bad in wrong_schedule_view_definition wrong_schedule_view_owner; do
+ if env TEST_BAD_OBJECT="$bad" COCKROACH_SQL_BIN=cockroach BACKUP_VERIFIER_DATABASE_URL='postgresql://jandibat_backup_verifier@localhost/jandibat' \
+  sh scripts/db-verify-backup-roles.sh >"$test_dir/output" 2>&1; then fail "verifier accepted $bad"; fi
+done
+for fault in TEST_MISSING_SCHEDULE_GRANT TEST_EXTRA_SCHEDULE_TABLE_GRANT TEST_EXTRA_SYSTEM_SCHEDULED_JOBS_GRANT; do
+ if env "$fault=1" COCKROACH_SQL_BIN=cockroach BACKUP_VERIFIER_DATABASE_URL='postgresql://jandibat_backup_verifier@localhost/jandibat' \
+  sh scripts/db-verify-backup-roles.sh >"$test_dir/output" 2>&1; then fail "verifier accepted $fault"; fi
+done
 if env TEST_EXTRA_METADATA_ACCESS=1 COCKROACH_SQL_BIN=cockroach BACKUP_VERIFIER_DATABASE_URL='postgresql://jandibat_backup_verifier@localhost/jandibat' \
  sh scripts/db-verify-backup-roles.sh >"$test_dir/output" 2>&1; then fail 'verifier accepted private metadata access'; fi
 if env TEST_EXTRA_DEFAULT_GRANT=1 COCKROACH_SQL_BIN=cockroach BACKUP_VERIFIER_DATABASE_URL='postgresql://jandibat_backup_verifier@localhost/jandibat' \

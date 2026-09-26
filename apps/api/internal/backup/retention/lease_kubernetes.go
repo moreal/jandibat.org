@@ -71,6 +71,15 @@ func (l *KubernetesLease) update(ctx context.Context, record KubernetesLeaseReco
 	if result.Namespace != record.Namespace || result.Name != record.Name || result.ResourceVersion == "" || result.ResourceVersion == record.ResourceVersion || result.HolderIdentity != record.HolderIdentity || result.LeaseDurationSeconds != record.LeaseDurationSeconds || !result.RenewTime.Equal(record.RenewTime) {
 		return "", errors.New("kubernetes Lease CAS response mismatch")
 	}
+	// A successful HTTP response can arrive after the holder's 30-second
+	// window, or after cancellation. Never report that ambiguous state live.
+	if err := ctx.Err(); err != nil {
+		return "", errors.New("kubernetes Lease CAS outcome uncertain after cancellation")
+	}
+	now := l.now()
+	if now.IsZero() || now.Before(record.RenewTime) || !now.Before(record.RenewTime.Add(leaseDuration)) {
+		return "", errors.New("kubernetes Lease CAS response arrived after expiry")
+	}
 	return result.ResourceVersion, nil
 }
 
@@ -97,35 +106,35 @@ func (l *KubernetesLease) Acquire(ctx context.Context, holder string, duration t
 	return l.update(ctx, record)
 }
 
-func (l *KubernetesLease) ownCurrent(ctx context.Context, holder, resourceVersion string) (KubernetesLeaseRecord, error) {
+func (l *KubernetesLease) ownCurrent(ctx context.Context, holder, resourceVersion string) (KubernetesLeaseRecord, time.Time, error) {
 	if ctx == nil || holder == "" || resourceVersion == "" {
-		return KubernetesLeaseRecord{}, errors.New("invalid Kubernetes Lease holder token")
+		return KubernetesLeaseRecord{}, time.Time{}, errors.New("invalid Kubernetes Lease holder token")
 	}
 	record, err := l.read(ctx)
 	if err != nil {
-		return KubernetesLeaseRecord{}, err
+		return KubernetesLeaseRecord{}, time.Time{}, err
 	}
 	if record.HolderIdentity != holder || record.ResourceVersion != resourceVersion || record.LeaseDurationSeconds != int32(leaseDuration/time.Second) || record.RenewTime.IsZero() {
-		return KubernetesLeaseRecord{}, errors.New("kubernetes Lease holder or resourceVersion changed")
+		return KubernetesLeaseRecord{}, time.Time{}, errors.New("kubernetes Lease holder or resourceVersion changed")
 	}
 	now := l.now()
 	if now.IsZero() || now.Before(record.RenewTime) || !now.Before(record.RenewTime.Add(leaseDuration)) {
-		return KubernetesLeaseRecord{}, errors.New("kubernetes Lease expired; operator recovery required")
+		return KubernetesLeaseRecord{}, time.Time{}, errors.New("kubernetes Lease expired; operator recovery required")
 	}
-	return record, nil
+	return record, now, nil
 }
 
 func (l *KubernetesLease) Renew(ctx context.Context, holder, resourceVersion string) (string, error) {
-	record, err := l.ownCurrent(ctx, holder, resourceVersion)
+	record, checkedAt, err := l.ownCurrent(ctx, holder, resourceVersion)
 	if err != nil {
 		return "", err
 	}
-	record.RenewTime = l.now().UTC()
+	record.RenewTime = checkedAt.UTC()
 	return l.update(ctx, record)
 }
 
 func (l *KubernetesLease) Release(ctx context.Context, holder, resourceVersion string) error {
-	record, err := l.ownCurrent(ctx, holder, resourceVersion)
+	record, _, err := l.ownCurrent(ctx, holder, resourceVersion)
 	if err != nil {
 		return err
 	}

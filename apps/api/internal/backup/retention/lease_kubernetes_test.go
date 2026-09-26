@@ -151,6 +151,66 @@ func TestKubernetesLeaseRefusesClockRegression(t *testing.T) {
 	}
 }
 
+func TestKubernetesLeaseRenewCannotUseLaterClockToResurrectExpiry(t *testing.T) {
+	adapter, api, now := newLeaseAdapter(t)
+	token, err := adapter.Acquire(context.Background(), "retention-job", 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstRead := true
+	adapter.now = func() time.Time {
+		if firstRead {
+			firstRead = false
+			return now.Add(10 * time.Second)
+		}
+		return now.Add(40 * time.Second)
+	}
+	if _, err := adapter.Renew(context.Background(), "retention-job", token); err == nil {
+		t.Fatal("clock jump resurrected expired lease")
+	}
+	if api.record.HolderIdentity != "retention-job" {
+		t.Fatal("uncertain renewal cleared holder")
+	}
+}
+
+func TestKubernetesLeaseDelayedCASResponseNeverClaimsLiveHolder(t *testing.T) {
+	for _, operation := range []string{"acquire", "renew", "release"} {
+		t.Run(operation, func(t *testing.T) {
+			adapter, api, now := newLeaseAdapter(t)
+			var token string
+			if operation != "acquire" {
+				var err error
+				token, err = adapter.Acquire(context.Background(), "retention-job", 30*time.Second)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			api.beforeUpdate = func() { *now = now.Add(31 * time.Second) }
+			var err error
+			switch operation {
+			case "acquire":
+				_, err = adapter.Acquire(context.Background(), "retention-job", 30*time.Second)
+			case "renew":
+				_, err = adapter.Renew(context.Background(), "retention-job", token)
+			case "release":
+				err = adapter.Release(context.Background(), "retention-job", token)
+			}
+			if err == nil {
+				t.Fatal("delayed CAS response reported success")
+			}
+		})
+	}
+}
+
+func TestKubernetesLeaseCancelledCASResponseIsUncertain(t *testing.T) {
+	adapter, api, _ := newLeaseAdapter(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	api.beforeUpdate = cancel // fake API returns success despite cancellation.
+	if _, err := adapter.Acquire(ctx, "retention-job", 30*time.Second); err == nil {
+		t.Fatal("cancelled CAS response reported success")
+	}
+}
+
 func TestKubernetesLeaseConflictAndAPIErrorFailClosedWithoutDetails(t *testing.T) {
 	adapter, api, _ := newLeaseAdapter(t)
 	api.beforeUpdate = func() { api.record.ResourceVersion = "99" }

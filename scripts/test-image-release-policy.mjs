@@ -672,7 +672,7 @@ else process.exit(2);
   assert.ok(f.trace().some(a => a[0] === 'grype' && a[1] === `docker:${imageId}`));
 });
 
-for (const failure of ['none', 'build', 'create', 'collision']) {
+for (const failure of ['none', 'build', 'create', 'collision', 'wrong-driver']) {
 const uncertainOwnership = ['create', 'collision'].includes(failure);
 test(`release packaging ${uncertainOwnership ? 'preserves uncertain builder after' : 'cleans owned builder after'} ${failure === 'none' ? 'success' : failure + ' failure'}`, t => {
   const dir = fixture(t);
@@ -714,7 +714,14 @@ if (a[1] === 'create') {
  if (process.env.FAILURE === 'collision') { fs.writeFileSync(process.env.BUILDER_STATE, name); console.error('existing instance: another owner won the race'); process.exit(8); }
  fs.writeFileSync(process.env.BUILDER_STATE, name); console.log(name); process.exit(process.env.FAILURE === 'create' ? 8 : 0);
 }
-if (a[1] === 'inspect') { if (!fs.existsSync(process.env.BUILDER_STATE)) process.exit(4); console.log('docker-container'); process.exit(0); }
+if (a[1] === 'inspect') {
+ if (a.includes('--format')) { console.error('unknown flag: --format'); process.exit(2); }
+ if (!fs.existsSync(process.env.BUILDER_STATE)) process.exit(4);
+ if (!a.includes('--bootstrap')) process.exit(19);
+ console.log('Name: ' + fs.readFileSync(process.env.BUILDER_STATE, 'utf8'));
+ console.log('Driver: ' + (process.env.FAILURE === 'wrong-driver' ? 'docker' : 'docker-container'));
+ process.exit(0);
+}
 if (a[1] === 'build') {
  if (!fs.existsSync(process.env.BUILDER_STATE) || a[a.indexOf('--builder')+1] !== fs.readFileSync(process.env.BUILDER_STATE,'utf8')) { console.error('Docker exporter is not supported for the docker driver'); process.exit(5); }
  const context = a.at(-1);
@@ -738,11 +745,15 @@ if (a[1] === 'rm') { if (a.at(-1) !== fs.readFileSync(process.env.BUILDER_STATE,
 process.exit(7);
 `);
   const result = invoke('build-release-images.sh', env, [join(dir, 'evidence')]);
-  assert.equal(result.status, uncertainOwnership ? 8 : failure === 'build' ? 9 : 0, result.stderr);
+  assert.equal(result.status, uncertainOwnership ? 8 : failure === 'build' ? 9 : failure === 'wrong-driver' ? 1 : 0, result.stderr);
   const calls = readFileSync(env.TRACE,'utf8').trim().split('\n').map(JSON.parse);
   const creation = calls.find(a => a[1] === 'create');
   assert.match(creation[creation.indexOf('--driver-opt')+1], /^image=moby\/buildkit:v[0-9.]+@sha256:[0-9a-f]{64}$/);
   const builder = creation[creation.indexOf('--name')+1];
+  if (!uncertainOwnership) {
+    assert.equal(readFileSync(join(dir, 'evidence/buildx-driver.txt'), 'utf8').trim(), failure === 'wrong-driver' ? 'docker' : 'docker-container');
+  }
+  if (failure === 'wrong-driver') assert.equal(calls.filter(a => a[1] === 'build').length, 0);
   assert.equal(calls.filter(a => a[1] === 'rm').length, uncertainOwnership ? 0 : 1);
   if (uncertainOwnership) assert.equal(readFileSync(env.BUILDER_STATE, 'utf8'), builder);
   else assert.equal(calls.at(-1).at(-1), builder);

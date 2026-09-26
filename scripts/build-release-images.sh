@@ -55,7 +55,7 @@ trap 'exit 143' TERM HUP
 # The default docker driver cannot export this archive. Select our own
 # docker-container builder explicitly without changing the user's active one.
 # Pin the server; record the client and enforce the release baseline of Buildx
-# >= 0.23 for OCI contexts, formatted driver inspection and reproducible export.
+# >= 0.23 for OCI contexts and reproducible export.
 docker buildx version >"$evidence/buildx-version.txt"
 if ! awk '$2 ~ /^v[0-9]+\.[0-9]+\.[0-9]+/ { split(substr($2, 2), v, "."); ok = v[1] > 0 || v[2] >= 23 } END { exit !ok }' "$evidence/buildx-version.txt"; then
 	echo 'release packaging requires Docker Buildx >= 0.23' >&2
@@ -80,7 +80,17 @@ else
 	echo "builder creation failed; preserving any uncertain state for $restore_builder" >&2
 	exit "$create_status"
 fi
-docker buildx inspect "$restore_builder" --bootstrap --format '{{.Driver}}' >"$evidence/buildx-driver.txt"
+builder_inspection=$(docker buildx inspect "$restore_builder" --bootstrap)
+printf '%s\n' "$builder_inspection" | awk '
+	/^Driver:[[:space:]]+/ {
+		if (found++ || NF != 2) invalid = 1
+		driver = $2
+	}
+	END {
+		if (invalid || found != 1) exit 1
+		print driver
+	}
+' >"$evidence/buildx-driver.txt"
 test "$(cat "$evidence/buildx-driver.txt")" = docker-container
 api_extract_container=$(docker create --entrypoint /busybox "$api_image_id")
 maintenance_extract_container=$(docker create --entrypoint /busybox "$maintenance_image_id")

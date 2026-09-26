@@ -60,7 +60,7 @@ func (l *KubernetesLease) read(ctx context.Context) (KubernetesLeaseRecord, erro
 	return record, nil
 }
 
-func (l *KubernetesLease) update(ctx context.Context, record KubernetesLeaseRecord) (string, error) {
+func (l *KubernetesLease) update(ctx context.Context, record KubernetesLeaseRecord, previousExpiresAt time.Time) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -79,6 +79,9 @@ func (l *KubernetesLease) update(ctx context.Context, record KubernetesLeaseReco
 	now := l.now()
 	if now.IsZero() || now.Before(record.RenewTime) || !now.Before(record.RenewTime.Add(leaseDuration)) {
 		return "", errors.New("kubernetes Lease CAS response arrived after expiry")
+	}
+	if !previousExpiresAt.IsZero() && !now.Before(previousExpiresAt) {
+		return "", errors.New("kubernetes Lease prior holder expired during CAS update")
 	}
 	return result.ResourceVersion, nil
 }
@@ -103,7 +106,7 @@ func (l *KubernetesLease) Acquire(ctx context.Context, holder string, duration t
 	record.HolderIdentity = holder
 	record.LeaseDurationSeconds = int32(leaseDuration / time.Second)
 	record.RenewTime = now.UTC()
-	return l.update(ctx, record)
+	return l.update(ctx, record, time.Time{})
 }
 
 func (l *KubernetesLease) ownCurrent(ctx context.Context, holder, resourceVersion string) (KubernetesLeaseRecord, time.Time, error) {
@@ -129,8 +132,9 @@ func (l *KubernetesLease) Renew(ctx context.Context, holder, resourceVersion str
 	if err != nil {
 		return "", err
 	}
+	previousExpiresAt := record.RenewTime.Add(leaseDuration)
 	record.RenewTime = checkedAt.UTC()
-	return l.update(ctx, record)
+	return l.update(ctx, record, previousExpiresAt)
 }
 
 func (l *KubernetesLease) Release(ctx context.Context, holder, resourceVersion string) error {
@@ -138,7 +142,8 @@ func (l *KubernetesLease) Release(ctx context.Context, holder, resourceVersion s
 	if err != nil {
 		return err
 	}
+	previousExpiresAt := record.RenewTime.Add(leaseDuration)
 	record.HolderIdentity = ""
-	_, err = l.update(ctx, record)
+	_, err = l.update(ctx, record, previousExpiresAt)
 	return err
 }

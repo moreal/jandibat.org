@@ -202,6 +202,22 @@ func TestKubernetesLeaseDelayedCASResponseNeverClaimsLiveHolder(t *testing.T) {
 	}
 }
 
+func TestKubernetesLeaseRenewCannotResurrectPriorExpiredHolder(t *testing.T) {
+	adapter, api, now := newLeaseAdapter(t)
+	token, err := adapter.Acquire(context.Background(), "retention-job", 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	*now = now.Add(29 * time.Second)
+	api.beforeUpdate = func() { *now = now.Add(2 * time.Second) } // past old T+30, before proposed new T+59.
+	if _, err := adapter.Renew(context.Background(), "retention-job", token); err == nil {
+		t.Fatal("renewal resurrected old expired holder")
+	}
+	if api.record.HolderIdentity != "retention-job" {
+		t.Fatal("uncertain holder was released")
+	}
+}
+
 func TestKubernetesLeaseCancelledCASResponseIsUncertain(t *testing.T) {
 	adapter, api, _ := newLeaseAdapter(t)
 	ctx, cancel := context.WithCancel(context.Background())

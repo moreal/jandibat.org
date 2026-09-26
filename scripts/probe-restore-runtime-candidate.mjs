@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { createHash, randomUUID } from 'node:crypto';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -56,6 +56,14 @@ function hashPath(rootfs, path) {
   return { path, sha256: fileSha(containedFile(rootfs, path)) };
 }
 
+function atomicEvidence(output, evidence) {
+  const temporary = `${output}.${randomUUID()}.tmp`;
+  try {
+    writeFileSync(temporary, JSON.stringify(evidence, null, 2) + '\n', { mode: 0o644, flag: 'wx' });
+    renameSync(temporary, output);
+  } finally { rmSync(temporary, { force: true }); }
+}
+
 function parseOsRelease(rootfs) {
   const path = join(rootfs, 'etc/os-release');
   const lines = readFileSync(path, 'utf8').split('\n');
@@ -92,14 +100,18 @@ function unpack(source, childDigest, directory) {
   return join(bundle, 'rootfs');
 }
 
-function elf(rootfs, path) {
-  const target = resolve(rootfs, `.${path}`);
+function elf(rootfs, path, executable = false) {
+  const target = containedFile(rootfs, path);
+  const header = command('readelf', ['-h', target]).stdout;
+  required(/Machine:\s*Advanced Micro Devices X86-64/.test(header), 'amd64 ELF');
   const program = command('readelf', ['-l', target]).stdout;
   const dynamic = command('readelf', ['-d', target]).stdout;
   const interpreter = program.match(/Requesting program interpreter:\s*([^\]]+)/)?.[1];
   const needed = [...dynamic.matchAll(/\(NEEDED\).*\[([^\]]+)\]/g)].map(match => match[1]);
-  required(interpreter && absolute(interpreter), 'ELF interpreter');
-  required(needed.length, 'ELF dependencies');
+  if (executable) {
+    required(interpreter && absolute(interpreter), 'ELF interpreter');
+    required(needed.length, 'ELF dependencies');
+  }
   return { interpreter, needed };
 }
 
@@ -132,6 +144,38 @@ function validate(evidence, sourceSha) {
     required(evidence.donor[key]?.length, `donor ${key}`);
     for (const item of evidence.donor[key]) required(absolute(item.path) && hex(item.sha256), `donor ${key} hash`);
   }
+  required(evidence.donor.nativeFiles.some(item => item.path === '/cockroach/cockroach'), 'Cockroach executable');
+  required(evidence.donor.licenses.some(item => /^(\/cockroach\/|\/licenses\/|\/usr\/share\/licenses\/cockroach)/i.test(item.path)
+    && /\/(LICENSE|NOTICE|COPYING)([.-]|$)/i.test(item.path)), 'Cockroach license or notice');
+  const nativePaths = evidence.donor.nativeFiles.map(item => item.path);
+  assert.equal(new Set(nativePaths).size, nativePaths.length, 'duplicate vendor native path');
+  for (const path of nativePaths) required(path === '/cockroach/cockroach' || /^\/cockroach\/.+\.so(\.[A-Za-z0-9._-]+)?$/.test(path), 'vendor native path');
+  required(evidence.donor.nativeDecisions?.length, 'vendor native decisions');
+  const decisions = evidence.donor.nativeDecisions;
+  assert.equal(new Set(decisions.map(item => item.path)).size, decisions.length, 'duplicate vendor decision');
+  assert.deepEqual(decisions.filter(item => item.decision === 'include').map(item => item.path).sort(), [...nativePaths].sort(), 'vendor inclusion decisions');
+  for (const item of decisions) {
+    required(absolute(item.path) && item.path.startsWith('/cockroach/') && hex(item.sha256), 'vendor decision path/hash');
+    if (item.decision === 'include') {
+      const native = evidence.donor.nativeFiles.find(file => file.path === item.path);
+      required(native && native.sha256 === item.sha256, 'included native bytes');
+      assert.equal(item.reason, item.path === '/cockroach/cockroach' ? 'main-executable' : 'vendor-elf-library');
+    } else {
+      assert.equal(item.decision, 'exclude');
+      required(item.path !== '/cockroach/cockroach' && !/\.so(\.[A-Za-z0-9._-]+)?$/.test(item.path), 'excluded vendor ELF');
+      if (item.reason === 'license-copied-separately') {
+        required(evidence.donor.licenses.some(file => file.path === item.path && file.sha256 === item.sha256), 'separate license bytes');
+      } else assert.equal(item.reason, 'non-ELF');
+    }
+  }
+  required(Array.isArray(evidence.donor.elfClosure), 'vendor ELF closure');
+  assert.deepEqual(evidence.donor.elfClosure.map(item => item.path).sort(), [...nativePaths].sort(), 'vendor ELF closure paths');
+  const mainElf = evidence.donor.elfClosure.find(item => item.path === '/cockroach/cockroach');
+  assert.deepEqual(mainElf.needed, evidence.donor.needed, 'main ELF dependencies');
+  for (const entry of evidence.donor.elfClosure) {
+    required(Array.isArray(entry.needed), 'ELF needed list');
+    for (const name of entry.needed) required(/^[A-Za-z0-9._+-]+\.so(\.[A-Za-z0-9._+-]+)?$/.test(name), 'ELF dependency name');
+  }
   required(evidence.packages?.length, 'RPM package inventory');
   const rpmNames = new Set();
   for (const pkg of evidence.packages) {
@@ -144,17 +188,25 @@ function validate(evidence, sourceSha) {
     for (const item of evidence[key]) required(absolute(item.path) && hex(item.sha256), `${key} path/hash`);
   }
   required(evidence.rpmdb.some(item => /\/(rpmdb\.sqlite|Packages)$/.test(item.path)), 'RPM database file');
-  const baseNeeded = evidence.donor.needed.filter(name => !evidence.donor.nativeFiles.some(item => item.path.endsWith(`/${name}`)));
+  const baseNeeded = evidence.donor.elfClosure.flatMap(item => item.needed)
+    .filter(name => !evidence.donor.nativeFiles.some(item => item.path.endsWith(`/${name}`)));
   for (const path of [evidence.donor.interpreter, ...baseNeeded.map(name => evidence.ownership.find(item => item.path.endsWith(`/${name}`))?.path)]) {
     const ownership = evidence.ownership.find(item => item.path === path);
     required(ownership && rpmNames.has(ownership.package), `package owner for ${path}`);
   }
   assert.equal(evidence.applets.bootstrapSourceSha256, bootstrapSourceSha256);
-  required(evidence.applets.names?.length, 'BusyBox applets');
+  assert.deepEqual(evidence.applets.names, applets, 'frozen BusyBox applets');
   assert.equal(evidence.scan.tool, 'grype');
   assert.equal(evidence.scan.failOn, 'high');
   required(evidence.scan.databaseBuilt, 'Grype database metadata');
   assert.ok(Array.isArray(evidence.scan.matches));
+  for (const match of evidence.scan.matches) {
+    assert.deepEqual(Object.keys(match).sort(), ['fixState', 'id', 'package', 'severity']);
+    required(/^[A-Za-z0-9._:-]+$/.test(match.id), 'vulnerability ID');
+    required(['Critical', 'High', 'Medium', 'Low', 'Negligible', 'Unknown'].includes(match.severity), 'severity');
+    required(typeof match.package === 'string' && match.package.length > 0, 'matched package');
+    required(typeof match.fixState === 'string', 'fix state');
+  }
   assert.deepEqual(Object.keys(evidence.toolVersions ?? {}).sort(), ['grype', 'readelf', 'rpm', 'skopeo', 'syft', 'umoci']);
   for (const value of Object.values(evidence.toolVersions)) required(typeof value === 'string' && value.length > 0 && value.length < 160, 'tool version');
   if (evidence.scan.matches.some(match => ['High', 'Critical'].includes(match.severity))) assert.equal(evidence.status, 'rejected');
@@ -162,7 +214,7 @@ function validate(evidence, sourceSha) {
   return evidence;
 }
 
-function probe(output) {
+function probe() {
   assert.equal(process.platform, 'linux', 'probe requires Linux');
   assert.equal(process.arch, 'x64', 'probe requires amd64');
   const sourceSha = command('git', ['rev-parse', 'HEAD']).stdout.trim();
@@ -179,13 +231,31 @@ function probe(output) {
     const catalog = JSON.parse(readFileSync(baseSyft, 'utf8'));
     const scan = command('grype', [`sbom:${baseSyft}`, '--fail-on', 'high', '-o', 'json'], { allowFailure: true });
     const findings = JSON.parse(scan.stdout);
-    const donorElf = elf(donorRoot, '/cockroach/cockroach');
+    const donorElf = elf(donorRoot, '/cockroach/cockroach', true);
     const runtimeFiles = pathsUnder(runtimeRoot);
-    const ownership = [donorElf.interpreter, ...donorElf.needed.map(name => runtimeFiles.find(path => path.endsWith(`/${name}`)))]
-      .filter(Boolean).map(path => ({ path, package: owner(runtimeRoot, path) }));
     const donorFiles = pathsUnder(donorRoot);
-    const nativeFiles = ['/cockroach/cockroach', ...donorElf.needed.map(name => donorFiles.find(path => path.startsWith('/cockroach/') && path.endsWith(`/${name}`))).filter(Boolean)]
-      .map(path => hashPath(donorRoot, path));
+    for (const path of donorFiles.filter(path => path.startsWith('/cockroach/'))) {
+      if (path === '/cockroach/cockroach' || /\.so(\.[A-Za-z0-9._-]+)?$/.test(path)) required(regular(donorRoot, path), 'unreadable vendor native file');
+    }
+    const vendorPaths = donorFiles.filter(path => path.startsWith('/cockroach/') && regular(donorRoot, path));
+    const vendorElfPaths = vendorPaths.filter(path => command('readelf', ['-h', containedFile(donorRoot, path)], { allowFailure: true }).status === 0);
+    for (const path of vendorElfPaths) required(path === '/cockroach/cockroach' || /\.so(\.[A-Za-z0-9._-]+)?$/.test(path), 'unclassified vendor ELF');
+    for (const path of vendorPaths) required(!/\.so(\.[A-Za-z0-9._-]+)?$/.test(path) || vendorElfPaths.includes(path), 'unclassified vendor native file');
+    const nativePaths = ['/cockroach/cockroach', ...vendorElfPaths.filter(path => path !== '/cockroach/cockroach')];
+    const elfClosure = nativePaths.map(path => ({ path, needed: path === '/cockroach/cockroach' ? donorElf.needed : elf(donorRoot, path).needed }));
+    const nativeFiles = nativePaths.map(path => hashPath(donorRoot, path));
+    const baseNeeded = [...new Set(elfClosure.flatMap(item => item.needed)
+      .filter(name => !nativePaths.some(path => path.endsWith(`/${name}`))))];
+    const basePaths = [donorElf.interpreter, ...baseNeeded.map(name => runtimeFiles.find(path => path.endsWith(`/${name}`)))];
+    required(basePaths.every(Boolean), 'base native dependency');
+    const ownership = basePaths.map(path => ({ path, package: owner(runtimeRoot, path) }));
+    const licensePaths = donorFiles.filter(path => regular(donorRoot, path) &&
+      (/^\/(cockroach\/licenses|licenses)\//.test(path) ||
+       (/^(\/cockroach\/|\/usr\/share\/licenses\/cockroach)/i.test(path) && /\/(LICENSE|NOTICE|COPYING)([.-]|$)/i.test(path))));
+    const nativeDecisions = vendorPaths.map(path => ({ ...hashPath(donorRoot, path),
+      decision: nativePaths.includes(path) ? 'include' : 'exclude',
+      reason: path === '/cockroach/cockroach' ? 'main-executable' : nativePaths.includes(path) ? 'vendor-elf-library'
+        : licensePaths.includes(path) ? 'license-copied-separately' : 'non-ELF' }));
     const dbStatus = command('grype', ['db', 'status']).stdout;
     const databaseBuilt = dbStatus.match(/^Built:\s*(\S+)/m)?.[1] ?? '';
     const toolVersions = Object.fromEntries(['skopeo', 'syft', 'grype', 'umoci', 'readelf', 'rpm']
@@ -193,8 +263,8 @@ function probe(output) {
     const evidence = {
       schema: 1, sourceSha, status: 'candidate',
       runtime: { source: runtimeSource, ...runtime, os: 'linux', architecture: 'amd64', osRelease: parseOsRelease(runtimeRoot) },
-      donor: { source: donorSource, amd64Digest: donor.amd64Digest, ...donorElf, nativeFiles,
-        licenses: inventory(donorRoot, ['cockroach/licenses', 'licenses', 'usr/share/licenses']) },
+      donor: { source: donorSource, amd64Digest: donor.amd64Digest, ...donorElf, elfClosure, nativeFiles, nativeDecisions,
+        licenses: licensePaths.map(path => hashPath(donorRoot, path)) },
       packages: catalog.artifacts.filter(pkg => pkg.type === 'rpm').map(pkg => ({ name: pkg.name, version: pkg.version, type: 'rpm' })),
       rpmdb: inventory(runtimeRoot, ['usr/lib/sysimage/rpm', 'var/lib/rpm']), ownership,
       trust: ['/etc/ssl/certs/ca-certificates.crt', '/etc/pki/tls/certs/ca-bundle.crt', '/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem']
@@ -206,28 +276,37 @@ function probe(output) {
           package: match.artifact?.name ?? '', fixState: match.vulnerability.fix?.state ?? '' })),
         databaseBuilt }, toolVersions,
     };
-    if (scan.status !== 0 || evidence.scan.matches.some(match => ['High', 'Critical'].includes(match.severity))) evidence.status = 'rejected';
-    try { validate(evidence, sourceSha); } catch { evidence.status = 'rejected'; }
-    writeFileSync(output, JSON.stringify(evidence, null, 2) + '\n', { mode: 0o644 });
+    const hasBlockingFinding = evidence.scan.matches.some(match => ['High', 'Critical'].includes(match.severity));
+    if (scan.status !== 0 && !hasBlockingFinding) throw new Error('scanner failed without blocking match');
+    if (hasBlockingFinding) evidence.status = 'rejected';
     validate(evidence, sourceSha);
-    if (evidence.status !== 'candidate') throw new Error('candidate rejected');
+    return evidence;
   } finally { rmSync(scratch, { recursive: true, force: true }); }
 }
 
-try {
-  if (process.argv[2] === '--validate-evidence') {
+if (process.argv[2] === '--validate-evidence') {
+  try {
     assert.equal(process.argv.length, 4);
     const sourceSha = command('git', ['rev-parse', 'HEAD']).stdout.trim();
     validate(JSON.parse(readFileSync(process.argv[3], 'utf8')), sourceSha);
-  } else {
+  } catch {
+    process.stderr.write('restore runtime probe rejected: invalid evidence\n');
+    process.exitCode = 1;
+  }
+} else {
+  try {
     assert.equal(process.argv.length, 3);
-    probe(process.argv[2]);
+    const evidence = probe();
+    atomicEvidence(process.argv[2], evidence);
+    if (evidence.status !== 'candidate') process.exitCode = 1;
+  } catch {
+    if (process.argv.length === 3) {
+      try {
+        const sourceSha = command('git', ['rev-parse', 'HEAD']).stdout.trim();
+        atomicEvidence(process.argv[2], { schema: 1, sourceSha, status: 'rejected', phase: 'inspection' });
+      } catch { /* the output path itself may be unusable */ }
+    }
+    process.stderr.write('restore runtime probe rejected: inspection failed\n');
+    process.exitCode = 1;
   }
-} catch (error) {
-  if (process.argv[2] !== '--validate-evidence' && process.argv.length === 3 && !existsSync(process.argv[2])) {
-    const sourceSha = command('git', ['rev-parse', 'HEAD']).stdout.trim();
-    writeFileSync(process.argv[2], JSON.stringify({ schema: 1, sourceSha, status: 'rejected', phase: 'inspection' }) + '\n', { mode: 0o644 });
-  }
-  process.stderr.write(`restore runtime probe rejected: ${error.message?.replace(/[^A-Za-z0-9 _/.:,-]/g, '') ?? 'invalid evidence'}\n`);
-  process.exitCode = 1;
 }

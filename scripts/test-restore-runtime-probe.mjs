@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync, execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,7 +21,20 @@ function evidence() {
       osRelease: { ID: 'rhel', VERSION_ID: '10.0' } },
     donor: { source: `cockroachdb/cockroach:v26.2.5@${donorDigest}`,
       amd64Digest: donorDigest, interpreter: '/lib64/ld-linux-x86-64.so.2',
-      needed: ['libc.so.6'], nativeFiles: [{ path: '/cockroach/cockroach', sha256: 'c'.repeat(64) }],
+      needed: ['libvendor.so'],
+      elfClosure: [
+        { path: '/cockroach/cockroach', needed: ['libvendor.so'] },
+        { path: '/cockroach/lib/libvendor.so', needed: ['libc.so.6'] },
+      ],
+      nativeFiles: [
+        { path: '/cockroach/cockroach', sha256: 'c'.repeat(64) },
+        { path: '/cockroach/lib/libvendor.so', sha256: '2'.repeat(64) },
+      ],
+      nativeDecisions: [
+        { path: '/cockroach/cockroach', sha256: 'c'.repeat(64), decision: 'include', reason: 'main-executable' },
+        { path: '/cockroach/lib/libvendor.so', sha256: '2'.repeat(64), decision: 'include', reason: 'vendor-elf-library' },
+        { path: '/cockroach/licenses/LICENSE', sha256: 'd'.repeat(64), decision: 'exclude', reason: 'license-copied-separately' },
+      ],
       licenses: [{ path: '/cockroach/licenses/LICENSE', sha256: 'd'.repeat(64) }] },
     packages: [{ name: 'glibc', version: '2.39', type: 'rpm' }],
     rpmdb: [{ path: '/usr/lib/sysimage/rpm/rpmdb.sqlite', sha256: 'e'.repeat(64) }],
@@ -30,7 +43,7 @@ function evidence() {
     trust: [{ path: '/etc/pki/tls/certs/ca-bundle.crt', sha256: 'f'.repeat(64) }],
     baseLicenses: [{ path: '/usr/share/licenses/glibc/LICENSES', sha256: '1'.repeat(64) }],
     applets: { bootstrapSourceSha256: bootstrapDigest,
-      names: ['awk', 'chmod', 'mktemp', 'rm', 'tail', 'tr'] },
+      names: ['awk', 'chmod', 'cp', 'mktemp', 'rm', 'sed', 'sha256sum', 'sh', 'tail', 'tr'] },
     scan: { tool: 'grype', failOn: 'high', matches: [], databaseBuilt: '2026-09-26T00:00:00Z' },
     toolVersions: { skopeo: '1.24', syft: '1.0', grype: '1.0', umoci: '0.4', readelf: '2.42', rpm: '4.19' },
   };
@@ -63,12 +76,20 @@ for (const [name, mutate] of [
   ['missing donor license', e => { e.donor.licenses = []; }],
   ['missing base license', e => { e.baseLicenses = []; }],
   ['missing trust', e => { e.trust = []; }],
-  ['High finding', e => { e.scan.matches = [{ severity: 'High', id: 'CVE-TEST' }]; }],
-  ['Critical finding', e => { e.scan.matches = [{ severity: 'Critical', id: 'CVE-TEST' }]; }],
+  ['High finding', e => { e.scan.matches = [{ severity: 'High', id: 'CVE-TEST', package: 'glibc', fixState: 'unknown' }]; }],
+  ['Critical finding', e => { e.scan.matches = [{ severity: 'Critical', id: 'CVE-TEST', package: 'glibc', fixState: 'unknown' }]; }],
   ['wrong bootstrap source digest', e => { e.applets.bootstrapSourceSha256 = '0'.repeat(64); }],
   ['wrong source SHA', e => { e.sourceSha = '0'.repeat(40); }],
   ['secret-bearing evidence', e => { e.password = 'do-not-upload'; }],
   ['missing tool versions', e => { delete e.toolVersions; }],
+  ['incomplete BusyBox applets', e => { e.applets.names = ['sh']; }],
+  ['malformed scan match', e => { e.scan.matches = [{}]; }],
+  ['unrelated native file', e => { e.donor.nativeFiles.push({ path: '/cockroach/unrelated', sha256: '3'.repeat(64) }); }],
+  ['missing transitive closure', e => { e.donor.elfClosure.pop(); }],
+  ['unowned transitive library', e => { e.ownership = e.ownership.filter(item => !item.path.endsWith('/libc.so.6')); }],
+  ['OS-only donor license', e => { e.donor.licenses = [{ path: '/usr/share/licenses/glibc/LICENSES', sha256: 'd'.repeat(64) }]; }],
+  ['missing native inclusion decision', e => { e.donor.nativeDecisions = e.donor.nativeDecisions.filter(item => item.path !== '/cockroach/lib/libvendor.so'); }],
+  ['vendor ELF marked excluded', e => { e.donor.nativeDecisions[1].decision = 'exclude'; }],
 ]) {
   test(`rejects ${name} even with otherwise clean scan`, () => {
     const value = evidence();
@@ -102,4 +123,52 @@ test('unsupported host writes a sanitized rejected artifact without registry acc
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('failure replaces a stale candidate atomically', () => {
+  if (process.platform === 'linux' && process.arch === 'x64') return;
+  const dir = mkdtempSync(join(tmpdir(), 'jandibat-probe-stale-'));
+  try {
+    const path = join(dir, 'candidate.json');
+    writeFileSync(path, JSON.stringify(evidence()));
+    const result = spawnSync('sh', [script, path], { cwd: root, encoding: 'utf8' });
+    assert.notEqual(result.status, 0);
+    assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')),
+      { schema: 1, sourceSha, status: 'rejected', phase: 'inspection' });
+    assert.equal(readdirSync(dir).length, 1, 'temporary evidence file remains');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('malformed scanner-shaped JSON cannot appear in stderr', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'jandibat-probe-malformed-'));
+  try {
+    const path = join(dir, 'scan.json');
+    writeFileSync(path, '{"matches":[{"password":"SENSITIVE-MARKER"}]}');
+    const result = spawnSync('sh', [script, '--validate-evidence', path], { cwd: root, encoding: 'utf8' });
+    assert.notEqual(result.status, 0);
+    assert.doesNotMatch(result.stderr, /SENSITIVE-MARKER|password|matches/i);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('malformed registry tool output replaces the artifact without leaking diagnostics', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'jandibat-probe-tool-'));
+  try {
+    const bin = join(dir, 'bin');
+    mkdirSync(bin);
+    const platform = join(dir, 'platform.cjs');
+    writeFileSync(platform, "Object.defineProperty(process, 'platform', {value:'linux'}); Object.defineProperty(process, 'arch', {value:'x64'});\n");
+    const skopeo = join(bin, 'skopeo');
+    writeFileSync(skopeo, '#!/bin/sh\nprintf \'{"password":"SENSITIVE-MARKER"\'\n');
+    chmodSync(skopeo, 0o755);
+    const path = join(dir, 'candidate.json');
+    writeFileSync(path, JSON.stringify(evidence()));
+    const result = spawnSync('sh', [script, path], {
+      cwd: root, encoding: 'utf8',
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, NODE_OPTIONS: `--require=${platform}` },
+    });
+    assert.notEqual(result.status, 0);
+    assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')),
+      { schema: 1, sourceSha, status: 'rejected', phase: 'inspection' });
+    assert.doesNotMatch(result.stderr + readFileSync(path, 'utf8'), /SENSITIVE-MARKER|password/i);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

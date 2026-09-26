@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -247,5 +248,78 @@ func TestMetricsScrapeDoesNotWaitForChecker(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("checker loop did not stop")
+	}
+}
+
+func TestMetricsScrapeDoesNotWaitForRecordPersistence(t *testing.T) {
+	now := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	path := filepath.Join(t.TempDir(), "verified.json")
+	state, err := NewVerificationState(path, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := CheckResult{ChainID: "chain_1", CollectionID: "collection_1", RecoveryTimestamp: now.Add(-time.Minute), FileChecked: true}
+	if err := state.Check(context.Background(), func(context.Context) (CheckResult, error) { return first, nil }); err != nil {
+		t.Fatal(err)
+	}
+	tokenFile := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tokenFile, []byte(testToken), 0600); err != nil {
+		t.Fatal(err)
+	}
+	h, err := NewVerificationMetricsHandler(state, tokenFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	persisted, release := make(chan struct{}), make(chan struct{})
+	releaseOnce := sync.OnceFunc(func() { close(release) })
+	defer releaseOnce()
+	state.persist = func(path string, record verificationRecord) error {
+		// Exercise the real atomic file replace, then hold its caller before
+		// in-memory publication. A scrape must still use the old snapshot.
+		err := replaceRecord(path, record)
+		close(persisted)
+		<-release
+		return err
+	}
+	now = now.Add(time.Minute)
+	second := CheckResult{ChainID: "chain_1", CollectionID: "collection_1", RecoveryTimestamp: now, FileChecked: true}
+	done := make(chan error, 1)
+	go func() {
+		done <- state.Check(context.Background(), func(context.Context) (CheckResult, error) { return second, nil })
+	}()
+	select {
+	case <-persisted:
+	case <-time.After(time.Second):
+		t.Fatal("record replacement did not finish")
+	}
+	r := httptest.NewRequest("GET", "/metrics", nil)
+	r.Header.Set("Authorization", "Bearer "+testToken)
+	scraped := make(chan *httptest.ResponseRecorder, 1)
+	go func() { w := httptest.NewRecorder(); h.ServeHTTP(w, r); scraped <- w }()
+	select {
+	case w := <-scraped:
+		if w.Code != 200 || !strings.Contains(w.Body.String(), "jandibat_backup_verified_recovery_timestamp_seconds 1790337540\n") {
+			t.Fatalf("blocked-persistence scrape: %d %q", w.Code, w.Body.String())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("scrape blocked on record persistence")
+	}
+	releaseOnce()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("check did not finish")
+	}
+	if !state.LastVerified().Equal(second.RecoveryTimestamp) {
+		t.Fatal("new recovery was not published")
+	}
+	reloaded, err := NewVerificationState(path, clock)
+	if err != nil || !reloaded.LastVerified().Equal(second.RecoveryTimestamp) {
+		t.Fatalf("real record not replaced: %v, %v", reloaded, err)
 	}
 }

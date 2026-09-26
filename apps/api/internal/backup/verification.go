@@ -50,6 +50,7 @@ type VerificationState struct {
 	mu      sync.RWMutex
 	path    string
 	now     func() time.Time
+	persist func(string, verificationRecord) error
 	record  verificationRecord
 }
 
@@ -57,7 +58,7 @@ func NewVerificationState(path string, now func() time.Time) (*VerificationState
 	if path == "" || now == nil {
 		return nil, errors.New("invalid verification configuration")
 	}
-	s := &VerificationState{path: path, now: now}
+	s := &VerificationState{path: path, now: now, persist: replaceRecord}
 	data, err := readBoundedFile(path, maxRecordSize)
 	if errors.Is(err, os.ErrNotExist) {
 		return s, nil
@@ -140,9 +141,9 @@ func (s *VerificationState) Check(ctx context.Context, checker Checker) error {
 		result, checkErr = checker(ctx)
 	}
 	now := s.now().UTC()
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
 	next := s.record
+	s.mu.RUnlock()
 	next.LastCheckAt = now
 	next.CheckHealthy = false
 	if checkErr == nil && result.FileChecked && validID(result.ChainID) && validID(result.CollectionID) &&
@@ -155,12 +156,16 @@ func (s *VerificationState) Check(ctx context.Context, checker Checker) error {
 	} else {
 		checkErr = errors.New("verification check failed")
 	}
-	if err := replaceRecord(s.path, next); err != nil {
+	if err := s.persist(s.path, next); err != nil {
 		// A failed write cannot establish fresh durable evidence.
+		s.mu.Lock()
 		s.record.CheckHealthy = false
+		s.mu.Unlock()
 		return errors.New("cannot store verification record")
 	}
+	s.mu.Lock()
 	s.record = next
+	s.mu.Unlock()
 	if checkErr != nil {
 		return errors.New("verification check failed")
 	}

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -13,10 +14,14 @@ import (
 type fakeLease struct {
 	busy, lost                 bool
 	acquires, releases, renews int
+	acquireErr                 error
 }
 
 func (l *fakeLease) Acquire(_ context.Context, holder string, duration time.Duration) (string, error) {
 	l.acquires++
+	if l.acquireErr != nil {
+		return "", l.acquireErr
+	}
 	if holder == "" || duration != 30*time.Second || l.busy {
 		return "", errors.New("lease unavailable")
 	}
@@ -212,6 +217,59 @@ func TestExecuteRechecksLeaseAfterSlowPreflightBeforeDelete(t *testing.T) {
 	}
 }
 
+func TestExecuteRechecksActiveJobsImmediatelyBeforeDelete(t *testing.T) {
+	f := newExecutionFixture(t)
+	checks := 0
+	f.deps.ActiveJobs = func(context.Context) (bool, error) {
+		checks++
+		return checks >= 2, nil // a manual backup starts while inventory is read.
+	}
+	if _, err := Execute(context.Background(), f.request, f.deps); err == nil {
+		t.Fatal("newly active backup accepted")
+	}
+	if len(f.deleted) != 0 || f.lease.releases != 0 {
+		t.Fatalf("delete or release under active job: deleted=%v lease=%+v", f.deleted, f.lease)
+	}
+}
+
+func TestExecuteRefusesUnconfirmedFinalExactVersionDelete(t *testing.T) {
+	f := newExecutionFixture(t)
+	first := f.deps.DeleteVersion
+	deletes := 0
+	f.deps.DeleteVersion = func(ctx context.Context, target TargetVersion) error {
+		deletes++
+		if deletes == 2 {
+			return nil
+		} // S3 adapter reports success but exact version survives.
+		return first(ctx, target)
+	}
+	if _, err := Execute(context.Background(), f.request, f.deps); err == nil {
+		t.Fatal("unconfirmed final version accepted")
+	}
+	if f.lease.releases != 0 || !f.lease.busy {
+		t.Fatalf("lease released after unconfirmed delete: %+v", f.lease)
+	}
+	journal, _, err := readJournal(f.request.JournalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(journal.Completed) != 1 || journal.InFlight == nil || *journal.InFlight != f.request.Plan.Targets[1] {
+		t.Fatalf("unverified version marked complete: %+v", journal)
+	}
+}
+
+func TestExecuteRedactsLeaseAcquireFailure(t *testing.T) {
+	f := newExecutionFixture(t)
+	f.lease.acquireErr = errors.New("secret-sentinel-in-adapter-error")
+	_, err := Execute(context.Background(), f.request, f.deps)
+	if err == nil || strings.Contains(err.Error(), "secret-sentinel") {
+		t.Fatalf("lease error leaked sensitive data: %v", err)
+	}
+	if len(f.deleted) != 0 {
+		t.Fatal("deleted without lease")
+	}
+}
+
 func TestExecuteNeverTakesExpiredOrHeldLease(t *testing.T) {
 	f := newExecutionFixture(t)
 	f.lease.busy = true
@@ -251,7 +309,7 @@ func TestExecuteResumesOnlyRemainingVersionsAfterExplicitLeaseRecovery(t *testin
 	checks := 0
 	f.deps.ActiveJobs = func(context.Context) (bool, error) {
 		checks++
-		if checks == 2 {
+		if checks == 3 {
 			cancel()
 		} // first delete has been durably journaled.
 		return false, nil

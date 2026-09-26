@@ -93,7 +93,7 @@ func Execute(ctx context.Context, request ExecuteRequest, deps ExecuteDependenci
 	// The lease adapter, not the executor, owns the non-stealable CAS invariant.
 	token, err := deps.Lease.Acquire(ctx, request.HolderIdentity, leaseDuration)
 	if err != nil {
-		return empty, fmt.Errorf("retention lease unavailable: %w", err)
+		return empty, errors.New("retention lease unavailable")
 	}
 	if token == "" {
 		return empty, errors.New("retention lease returned no resourceVersion")
@@ -161,8 +161,38 @@ func Execute(ctx context.Context, request ExecuteRequest, deps ExecuteDependenci
 		if err != nil || token == "" {
 			return empty, errors.New("retention lease lost before deletion: operator recovery required")
 		}
+		if active, err := deps.ActiveJobs(ctx); err != nil || active {
+			return empty, errors.New("retention active-job state changed before deletion: operator recovery required")
+		}
+		if err := ctx.Err(); err != nil {
+			return empty, err
+		}
 		if err := deleteWithRenewal(ctx, deps, request.HolderIdentity, &token, target); err != nil {
 			return empty, errors.New("retention delete unconfirmed: operator recovery required")
+		}
+		// A nil S3 return alone is not evidence that the exact version has
+		// disappeared. Keep InFlight until a complete fresh listing agrees.
+		postDelete, err := deps.Inventory(ctx)
+		if err != nil {
+			return empty, errors.New("retention post-delete inventory unavailable: operator recovery required")
+		}
+		remaining, err := flatVersions(postDelete)
+		if err != nil {
+			return empty, errors.New("retention post-delete inventory incomplete: operator recovery required")
+		}
+		expectedRemaining := make([]ObjectVersion, 0, len(journal.Inventory))
+		completed := make(map[string]bool, len(journal.Completed)+1)
+		for _, done := range journal.Completed {
+			completed[done.Key+"\x00"+done.VersionID] = true
+		}
+		completed[target.Key+"\x00"+target.VersionID] = true
+		for _, object := range journal.Inventory {
+			if !completed[object.Key+"\x00"+object.VersionID] {
+				expectedRemaining = append(expectedRemaining, object)
+			}
+		}
+		if !equalVersions(expectedRemaining, remaining) {
+			return empty, errors.New("retention exact version deletion unconfirmed: operator recovery required")
 		}
 		journal.InFlight = nil
 		journal.Completed = append(journal.Completed, target)

@@ -11,7 +11,7 @@ for value in "${BACKUP_BOOTSTRAP_DATABASE_URL:-}" "${BACKUP_S3_ENDPOINT:-}" \
  "${BACKUP_S3_PATH_STYLE:-}" "${BACKUP_S3_ACCESS_KEY_ID:-}" \
  "${BACKUP_S3_SECRET_ACCESS_KEY:-}"; do
  [ -n "$value" ] || invalid
- if ! printf '%s' "$value" | od -An -tu1 | awk '
+ if ! printf '%s' "$value" | od -v -An -tu1 | awk '
   { for (i=1; i<=NF; i++) if ($i < 32 || $i == 127) bad=1 }
   END { exit bad }
  '; then invalid; fi
@@ -50,7 +50,7 @@ trap 'exit 143' TERM HUP
 # Encode UTF-8 bytes, not shell characters. The generated URI contains only
 # unreserved bytes and uppercase escapes, so it is safe inside one SQL literal.
 encode() {
- printf '%s' "$1" | od -An -tu1 | awk '
+ printf '%s' "$1" | od -v -An -tu1 | awk '
   { for (i=1; i<=NF; i++) {
     n=$i+0
     if ((n>=65&&n<=90)||(n>=97&&n<=122)||(n>=48&&n<=57)||n==45||n==46||n==95||n==126)
@@ -73,6 +73,23 @@ sql() {
  [ "$(wc -c <"$capture_dir/stderr")" -le 65536 ] || failed
 }
 
+expect_ack() {
+ [ ! -s "$capture_dir/stderr" ] || failed
+ awk -v phase="$1" '
+  BEGIN {
+   if (phase=="create") {
+    n=6; expected[1]="SET"; expected[2]="SET"; expected[3]="BEGIN"
+    expected[4]="CREATE EXTERNAL CONNECTION"; expected[5]="INSERT 0 1"; expected[6]="COMMIT"
+   } else if (phase=="grant") {
+    n=4; expected[1]="SET"; expected[2]="BEGIN"
+    expected[3]="GRANT"; expected[4]="COMMIT"
+   } else exit 1
+  }
+  { if (NR>n || $0!=expected[NR]) bad=1 }
+  END { exit bad || NR!=n }
+ ' "$capture_dir/stdout" || failed
+}
+
 read_state() {
  sql "SET allow_unsafe_internals = true;
 BEGIN;
@@ -85,16 +102,21 @@ SELECT current_user() AS actor,
  COALESCE((SELECT catalog_digest FROM defaultdb.jandibat_backup_admin.connection_live_digest WHERE connection_name = 'jandibat_backup_v1'), '') AS live_digest;
 COMMIT;"
  awk -F '\t' '
-  $0=="SET" {set++;next} $0=="BEGIN" {begin++;next} $0=="COMMIT" {commit++;next}
-  $0=="actor\tlive_count\tpolicy_count\tpolicy_version\tinput_digest\tcatalog_digest\tlive_digest" {header++;next}
-  NF==7 {row++;print $1 "|" $2 "|" $3 "|" $4 "|" $5 "|" $6 "|" $7;next}
+  NR==1 {if ($0!="SET") bad=1;next}
+  NR==2 {if ($0!="BEGIN") bad=1;next}
+  NR==3 {if ($0!="actor\tlive_count\tpolicy_count\tpolicy_version\tinput_digest\tcatalog_digest\tlive_digest") bad=1;next}
+  NR==4 {if (NF!=7) bad=1;else print $1 "|" $2 "|" $3 "|" $4 "|" $5 "|" $6 "|" $7;next}
+  NR==5 {if ($0!="COMMIT") bad=1;next}
   {bad=1}
-  END {if (bad||set!=1||begin!=1||commit!=1||header!=1||row!=1) exit 1}
+  END {if (bad||NR!=5) exit 1}
  ' "$capture_dir/stdout" >"$capture_dir/parsed" || invalid
  IFS='|' read -r actor live_count policy_count policy_version stored_input stored_catalog live_digest <"$capture_dir/parsed" || invalid
  [ "$actor" = jandibat_backup_bootstrap ] || invalid
  case "$live_count:$policy_count" in
-  0:0) state=absent;;
+  0:0)
+   [ -z "$policy_version" ] && [ -z "$stored_input" ] &&
+    [ -z "$stored_catalog" ] && [ -z "$live_digest" ] || invalid
+   state=absent;;
   1:1)
    [ "$policy_version" = 1 ] || invalid
    for digest in "$stored_input" "$stored_catalog" "$live_digest"; do
@@ -128,6 +150,7 @@ read_grants() {
 read_state
 if [ "$state" = absent ]; then
  sql "SET allow_unsafe_internals = true;
+SET autocommit_before_ddl = false;
 BEGIN;
 CREATE EXTERNAL CONNECTION jandibat_backup_v1 AS '$uri';
 INSERT INTO defaultdb.jandibat_backup_admin.connection_policy
@@ -135,6 +158,7 @@ INSERT INTO defaultdb.jandibat_backup_admin.connection_policy
  VALUES ('jandibat_backup_v1', 1, '$input_digest',
   (SELECT catalog_digest FROM defaultdb.jandibat_backup_admin.connection_live_digest WHERE connection_name = 'jandibat_backup_v1'));
 COMMIT;"
+ expect_ack create
  # Never retry a failed or uncertain transaction in this invocation.
  read_state
  [ "$state" = matched ] || invalid
@@ -157,9 +181,11 @@ read_state
 [ "$state" = matched ] || invalid
 read_grants
 if [ "$runner_granted" = false ] || [ "$verifier_granted" = false ]; then
- sql 'BEGIN;
+ sql 'SET autocommit_before_ddl = false;
+BEGIN;
 GRANT USAGE ON EXTERNAL CONNECTION jandibat_backup_v1 TO jandibat_backup_runner, jandibat_backup_verifier;
 COMMIT;'
+ expect_ack grant
 fi
 read_state
 [ "$state" = matched ] || invalid

@@ -168,13 +168,26 @@ classify the fixed name and metadata:
 
 Fresh-create transaction on a single connection:
 
-1. `BEGIN`; CREATE fixed-name external connection from validated URI over stdin.
+1. `SET autocommit_before_ddl = false` in this same SQL session, then `BEGIN`;
+   CREATE fixed-name external connection from validated URI over stdin.
 2. INSERT exactly one version-1 metadata row using the local input digest and a
    scalar SELECT of `catalog_digest` from the root-owned view. A missing digest
    violates NOT NULL and rolls back; never use an INSERT SELECT that can insert
    zero rows successfully.
 3. `COMMIT`. A failure before commit rolls back both SQL objects. No UPSERT,
    ON CONFLICT, IF NOT EXISTS, metadata UPDATE or automatic adoption.
+
+The pinned v26.2.5 default can auto-commit before DDL inside an explicit
+transaction. A disposable CLI probe showed that an unset session can print
+`BEGIN`, `GRANT`, and `COMMIT` with exit 0 while also reporting an automatic
+commit and `25P01` warning. The session setting above is therefore required
+before both CREATE and the later GRANT transaction. Parse exact ordered TSV
+acknowledgments (`SET`, `SET`, `BEGIN`, `CREATE EXTERNAL CONNECTION`, `INSERT 0 1`,
+`COMMIT` for creation; `SET`, `BEGIN`, `GRANT`, `COMMIT` for grants) and require
+empty successful stderr. Missing, reordered, duplicate or extra output fails
+closed without replay. This probe establishes CLI framing, not native S3
+transaction atomicity; the Task 3 fixture must still prove the external
+connection and metadata commit or roll back together.
 
 The pre-read is not a lock. Concurrent CREATE/INSERT conflicts must leave at most
 one pair; a loser exits nonzero and a later explicit rerun reclassifies it.
@@ -190,7 +203,8 @@ and gives no new USAGE grants. A later matching rerun can repeat the check.
 
 Re-read both digests after CHECK. Reject unexpected grants or ownership; absent
 runner/verifier USAGE is the only resumable incomplete grant state. Grant the two
-USAGE privileges together in one transaction, then verify the full exact grant
+USAGE privileges together in one transaction after disabling
+`autocommit_before_ddl` in that session, then verify the full exact grant
 set and both digests again before fixed success output. This final postcondition
 does not create a lock against an administrator changing the connection later.
 Require operational serialization with any separately approved rotation; a

@@ -171,11 +171,25 @@ case "$1" in
     [ ! -f "$FIXTURES/run-count" ] || count=$(cat "$FIXTURES/run-count")
     count=$((count + 1))
     echo "$count" >"$FIXTURES/run-count"
-    case "$count" in 1) echo proxy-fixture-id;; 2) echo web-fixture-id;; 3) echo readonly-fixture-id;; 4) echo db-fixture-id;; 5) echo api-fixture-id;; 6) echo worker-fixture-id;; 7) echo maintenance-fixture-id;; esac;;
+    case "$count" in
+      1) echo proxy-fixture-id;;
+      2) echo web-fixture-id;;
+      3) echo readonly-fixture-id;;
+      4)
+        if [ "$FAIL_MODE" = db-migration-memory ]; then
+          case " $* " in *' --max-sql-memory=256MiB '*) touch "$FIXTURES/db-migration-memory-ok";; esac
+        fi
+        echo db-fixture-id;;
+      5) echo api-fixture-id;;
+      6) echo worker-fixture-id;;
+      7) echo maintenance-fixture-id;;
+    esac;;
   exec)
     case "$*" in
       *'proxy-fixture-id'*'/metrics'*) echo 'HTTP/1.1 403 Forbidden' >&2; exit 1;;
       *'CREATE DATABASE image_smoke'*) if [ "$FAIL_MODE" = db-create ] || [ "$FAIL_MODE" = archive-cache-miss ]; then exit 1; fi;;
+      *'/migrate.sh'*)
+        if [ "$FAIL_MODE" = db-migration-memory ] && [ ! -f "$FIXTURES/db-migration-memory-ok" ]; then exit 1; fi;;
       *'/healthz'*) case "$FAIL_MODE" in health*) exit 1;; esac; echo ok;;
       *'/config.json'*)
         if [ "$FAIL_MODE" = config ]; then echo '{"apiBaseUrl":"https://wrong.example.test"}';
@@ -246,6 +260,12 @@ test('archive rebuild rejects a changed SHA before Docker load', () => {
   assert.equal(result.status, 1, result.stderr);
   assert.match(result.stderr, /image smoke failed: archive rebuild: api/);
   assert.equal(result.dockerRuns, '');
+});
+
+test('image smoke migrations advance with enough fixture SQL memory', () => {
+  const result = runtimeFailure('db-migration-memory');
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /image smoke failed: dependency loss readyz: api/);
 });
 
 test('API proxy launches explicitly with only metrics configuration before the DB fixture starts', () => {

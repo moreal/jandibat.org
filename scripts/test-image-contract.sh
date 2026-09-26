@@ -255,7 +255,7 @@ db=$(docker run -d --network "$network" --network-alias database \
 	--mount "type=bind,src=$PWD/db/migrations,dst=/migrations,readonly" \
 	--mount "type=bind,src=$PWD/scripts/db-migrate-url.sh,dst=/migrate.sh,readonly" \
 	"$db_image" start-single-node --insecure --store=type=mem,size=0.25 \
-	--cache=64MiB --max-sql-memory=64MiB)
+	--cache=64MiB --max-sql-memory=256MiB)
 containers="$containers $db"
 phase='database fixture ready'
 for attempt in $(seq 1 60); do

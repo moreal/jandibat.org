@@ -130,8 +130,8 @@ expect_denied 'SET allow_unsafe_internals = true; SELECT connection_name FROM de
 expect_denied 'SET allow_unsafe_internals = true; SELECT connection_name FROM defaultdb.jandibat_backup_admin.connection_live_digest WHERE false;'
 expect_denied 'SET allow_unsafe_internals = true; SELECT connection_details FROM system.external_connections WHERE false;'
 expect_denied 'SET allow_unsafe_internals = true; SELECT id FROM system.scheduled_jobs WHERE false;'
-expect_one "SELECT IF((SELECT count(*) FROM information_schema.views WHERE table_catalog = 'defaultdb' AND table_schema = 'jandibat_backup_admin' AND table_name = 'schedule_policy_v1' AND sha256(view_definition) = '22618fec289bcb499108404f98ce9a05d2701e6bfeeacd491d399171f483085c') = 1, 1, 0);"
-expect_one "SELECT IF((SELECT count(*) FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace JOIN pg_catalog.pg_roles r ON r.oid = c.relowner WHERE n.nspname = 'jandibat_backup_admin' AND c.relname = 'schedule_policy_v1' AND r.rolname = 'root') = 1, 1, 0);"
+expect_one "USE defaultdb; SELECT IF((SELECT count(*) FROM information_schema.views WHERE table_catalog = 'defaultdb' AND table_schema = 'jandibat_backup_admin' AND table_name = 'schedule_policy_v1' AND sha256(view_definition) = '22618fec289bcb499108404f98ce9a05d2701e6bfeeacd491d399171f483085c') = 1, 1, 0);"
+expect_one "USE defaultdb; SELECT IF((SELECT count(*) FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace JOIN pg_catalog.pg_roles r ON r.oid = c.relowner WHERE n.nspname = 'jandibat_backup_admin' AND c.relname = 'schedule_policy_v1' AND r.rolname = 'root') = 1, 1, 0);"
 expect_one "SELECT IF((SELECT count(*) FROM [SHOW GRANTS ON TABLE defaultdb.jandibat_backup_admin.schedule_policy_v1] WHERE NOT (
  (grantee IN ('root', 'admin') AND privilege_type = 'ALL' AND is_grantable) OR
  (grantee IN ('jandibat_backup_runner', 'jandibat_backup_verifier') AND privilege_type = 'SELECT' AND NOT is_grantable)

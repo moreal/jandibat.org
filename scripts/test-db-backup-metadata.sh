@@ -80,7 +80,11 @@ if grep -q 'SHOW GRANTS FOR jandibat_backup_bootstrap' "$TEST_SQL_CURRENT"; then
    for role in jandibat_backup_runner jandibat_backup_verifier; do
     printf 'defaultdb\tjandibat_backup_admin\tNULL\tschema\t%s\tUSAGE\tf\n' "$role"
     if [ "${TEST_MISSING_SCHEDULE_GRANT:-}" != 1 ] || [ "$role" != jandibat_backup_verifier ]; then
-     printf 'defaultdb\tjandibat_backup_admin\tschedule_policy_v1\ttable\t%s\tSELECT\tf\n' "$role"
+     if [ "${TEST_SCHEDULE_GRANT_OPTION:-}" = 1 ] && [ "$role" = jandibat_backup_runner ]; then
+      printf 'defaultdb\tjandibat_backup_admin\tschedule_policy_v1\ttable\t%s\tSELECT\tt\n' "$role"
+     else
+      printf 'defaultdb\tjandibat_backup_admin\tschedule_policy_v1\ttable\t%s\tSELECT\tf\n' "$role"
+     fi
     fi
    done
    [ "${TEST_EXTRA_SCHEDULE_TABLE_GRANT:-}" != 1 ] || printf 'defaultdb\tjandibat_backup_admin\tschedule_policy_v1\ttable\tjandibat_backup_runner\tINSERT\tf\n'
@@ -97,11 +101,21 @@ if grep -q 'SHOW GRANTS FOR jandibat_backup_bootstrap' "$TEST_SQL_CURRENT"; then
  exit 0
 fi
 if grep -q 'SELECT IF(' "$TEST_SQL_CURRENT"; then
+ if [ "${COCKROACH_URL#*jandibat_backup_verifier@}" != "$COCKROACH_URL" ] &&
+  { grep -q 'sha256(view_definition)' "$TEST_SQL_CURRENT" || grep -q "c.relname = 'schedule_policy_v1'" "$TEST_SQL_CURRENT"; } &&
+  ! grep -q '^USE defaultdb;' "$TEST_SQL_CURRENT"; then
+  printf 'valid\n0\n'
+  exit 0
+ fi
  if [ "${TEST_EXTRA_SYSTEM_GRANT:-}" = 1 ] && grep -q 'SHOW SYSTEM GRANTS' "$TEST_SQL_CURRENT"; then
   printf 'valid\n0\n'
   exit 0
  fi
  if [ "${TEST_EXTRA_DATABASE_GRANT:-}" = 1 ] && grep -q 'SHOW GRANTS ON DATABASE jandibat' "$TEST_SQL_CURRENT"; then
+  printf 'valid\n0\n'
+  exit 0
+ fi
+ if [ "${TEST_EXTRA_SCHEDULE_VIEW_GRANTEE:-}" = 1 ] && grep -q 'SHOW GRANTS ON TABLE defaultdb.jandibat_backup_admin.schedule_policy_v1' "$TEST_SQL_CURRENT"; then
   printf 'valid\n0\n'
   exit 0
  fi
@@ -202,6 +216,8 @@ run_bootstrap() {
   "$@" sh scripts/db-bootstrap-roles.sh >"$test_dir/output" 2>&1
 }
 fail() { echo "FAIL: $1" >&2; exit 1; }
+view_digest=$(tr -d '\n' < scripts/fixtures/schedule-policy-v1.view-definition.txt | sha256sum | awk '{print $1}')
+[ "$view_digest" = 22618fec289bcb499108404f98ce9a05d2701e6bfeeacd491d399171f483085c ] || fail 'pinned schedule view definition fixture drifted'
 for role in BOOTSTRAP RUNNER VERIFIER; do
  : >"$TEST_SQL_LOG"
  if run_bootstrap env -u "JANDIBAT_BACKUP_${role}_PASSWORD"; then fail "partial $role backup input accepted"; fi
@@ -291,7 +307,7 @@ for bad in wrong_schedule_view_definition wrong_schedule_view_owner; do
  if env TEST_BAD_OBJECT="$bad" COCKROACH_SQL_BIN=cockroach BACKUP_VERIFIER_DATABASE_URL='postgresql://jandibat_backup_verifier@localhost/jandibat' \
   sh scripts/db-verify-backup-roles.sh >"$test_dir/output" 2>&1; then fail "verifier accepted $bad"; fi
 done
-for fault in TEST_MISSING_SCHEDULE_GRANT TEST_EXTRA_SCHEDULE_TABLE_GRANT TEST_EXTRA_SYSTEM_SCHEDULED_JOBS_GRANT; do
+for fault in TEST_MISSING_SCHEDULE_GRANT TEST_SCHEDULE_GRANT_OPTION TEST_EXTRA_SCHEDULE_TABLE_GRANT TEST_EXTRA_SCHEDULE_VIEW_GRANTEE TEST_EXTRA_SYSTEM_SCHEDULED_JOBS_GRANT; do
  if env "$fault=1" COCKROACH_SQL_BIN=cockroach BACKUP_VERIFIER_DATABASE_URL='postgresql://jandibat_backup_verifier@localhost/jandibat' \
   sh scripts/db-verify-backup-roles.sh >"$test_dir/output" 2>&1; then fail "verifier accepted $fault"; fi
 done

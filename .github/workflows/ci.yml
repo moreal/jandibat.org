@@ -92,6 +92,8 @@ jobs:
         run: nix develop --command make db-backup-roles-test
       - name: Verify linked backup schedule fail-closed preflight
         run: nix develop --command make db-backup-schedule-test
+      - name: Verify populated schedule view on native x86_64 CockroachDB
+        run: nix develop --command make db-backup-schedule-view-native-test
       - name: Probe isolated secure backup roles and synthetic S3 connection
         run: nix develop .#backup-fixture --command sh scripts/test-db-backup-roles-secure.sh
       - name: Verify production secret startup and live worker OAuth rejection

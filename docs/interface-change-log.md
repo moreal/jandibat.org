@@ -13,12 +13,19 @@ API 계약 변경 시 이 파일과 GraphQL SDL(도메인) 또는 `openapi/jandi
   뷰는 `SHOW SCHEDULES`에서 고정 label 또는 외부 연결 이름에 닿는 모든 후보를
   선택해 스케줄 ID와 두 연결 ID를 10진 문자열로, 나머지 정책은 boolean으로
   투영합니다. 원문 명령, 저장소 URI, 오류 상태 문자열은 노출하지 않습니다.
+  감사할 v26.2.5 정규화 정의는 `scripts/fixtures/schedule-policy-v1.view-definition.txt`에
+  고정합니다. 버전 변경 시 격리된 해당 버전에서 같은 CREATE VIEW를 실행하고
+  `information_schema.views.view_definition`의 정확한 한 행을 갱신한 뒤,
+  끝 개행을 제외한 SHA-256과 정책 검사를 함께 검토해야 합니다.
 - runner와 verifier는 private schema USAGE와 이 뷰의 SELECT만 받습니다.
   `system.scheduled_jobs` 직접 SELECT나 admin/root 권한을 받지 않습니다.
   verifier는 뷰 정의·소유권·권한을 재검사하고 원본 테이블 접근 거부를 확인합니다.
 - Coordination은 이 뷰와 역할 검증을 소유합니다. 스케줄 생성과 백업 체인
   검증의 소비 계약은 별도 단계에서 이 안전한 투영을 사용합니다. 이 변경만으로
   실제 복구 가능 시각이나 배포 준비 상태를 선언하지 않습니다.
+  Linux x86_64 CI의 `db-backup-schedule-view-native-test`는 실제 행이 채워진
+  로컬 Cockroach를 검사합니다. ARM64 수동 실행은 명시적 보조 실험이며
+  다른 호스트의 종료 코드 77은 PASS가 아닌 SKIP입니다.
 
 ## 2026-09-26 — 백업 연결 정책의 비공개 메타데이터 계약
 

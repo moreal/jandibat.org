@@ -55,6 +55,59 @@ test('non-Linux host reports a non-passing skip without contacting Docker', () =
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('fixture startup failures report ordered fixed phases without leaking details', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'backup-fixture-key-'));
+  try {
+    const fake = {
+      uname: '#!/bin/sh\ncase "$1" in -s) echo Linux;; -m) echo x86_64;; esac\n',
+      docker: `#!/bin/sh
+case "$*" in
+  *"cert create-ca"*|*"cert create-node"*|*"cert create-client"*)
+    if [ "$TEST_FAILURE" = certificate ] && [ "$1" = run ]; then
+      case "$*" in *"cert create-node"*) echo 'synthetic-secret /synthetic/private/path' >&2; exit 99;; esac
+    fi
+    for arg do
+      case "$arg" in type=bind,src=*,dst=/certs) cert_dir=\${arg#type=bind,src=}; cert_dir=\${cert_dir%,dst=/certs};; esac
+    done
+    case "$*" in
+      *"cert create-ca"*) printf 'ca' >"$cert_dir/ca.crt";;
+      *"cert create-node"*)
+        printf 'node' >"$cert_dir/node.crt"
+        [ "$TEST_FAILURE" = key ] || printf 'key' >"$cert_dir/node.key";;
+    esac
+    exit 0;;
+  *"start-single-node"*)
+    echo 'synthetic-secret /synthetic/private/path' >&2
+    exit 99;;
+esac
+exit 0
+`,
+      s3proxy: '#!/bin/sh\nexit 0\n',
+      mc: '#!/bin/sh\nexit 0\n',
+      openssl: '#!/bin/sh\necho synthetic-secret /synthetic/private/path >&2\n[ "$TEST_FAILURE" = pkcs ] && exit 99\nexit 0\n',
+    };
+    for (const [name, source] of Object.entries(fake)) {
+      writeFileSync(join(dir, name), source);
+      chmodSync(join(dir, name), 0o700);
+    }
+    for (const [failure, reason, phases] of [
+      ['certificate', 'certificate generation', ['certificate generation']],
+      ['key', 'host node key unreadable', ['certificate generation', 'host node key readability']],
+      ['pkcs', 'PKCS#12 creation', ['certificate generation', 'host node key readability', 'PKCS#12 creation']],
+      ['db', 'DB start', ['certificate generation', 'host node key readability', 'PKCS#12 creation', 'S3Proxy startup', 'DB start']],
+    ]) {
+      const result = spawnSync('sh', ['scripts/test-db-backup-roles-secure.sh'], {
+        encoding: 'utf8', env: { ...process.env, TEST_FAILURE: failure, PATH: `${dir}:${process.env.PATH}` },
+      });
+      assert.equal(result.status, 1, failure);
+      assert.ok(result.stderr.includes(`RED: ${reason} (details redacted)`), failure);
+      assert.deepEqual([...result.stderr.matchAll(/PHASE: ([^\n]+)/g)].map((match) => match[1]), phases, failure);
+      assert.doesNotMatch(result.stderr, /synthetic-secret|\/synthetic\/private\/path|backup-fixture-key-/, failure);
+      assert.equal(result.stdout, '', failure);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('bootstrap, runner and verifier have no root URL or private key', () => {
   const dir = mkdtempSync(join(tmpdir(), 'backup-fixture-client-'));
   try {

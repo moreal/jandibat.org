@@ -18,6 +18,7 @@ fixture_id=$(basename "$fixture_dir")
 db="jandibat-backup-db-$fixture_id"
 db_created=false
 s3proxy_pid=
+fail() { echo "RED: $1 (details redacted)" >&2; exit 1; }
 has_sentinel() {
  for sentinel in "${synthetic_secret:-}" "${synthetic_access:-}" "${rotated_secret:-}" "${keystore_password:-}" \
   "${password_a:-}" "${password_b:-}" "${password_c:-}" "${password_d:-}" \
@@ -80,19 +81,23 @@ done
 # The only container image is the repository-pinned secure Cockroach release.
 docker image inspect "$cockroach_image" >/dev/null 2>&1 || docker pull "$cockroach_image" >/dev/null
 
+echo 'PHASE: certificate generation' >&2
 docker run --rm --mount "type=bind,src=$fixture_dir/certs,dst=/certs" \
- --entrypoint /cockroach/cockroach "$cockroach_image" cert create-ca --certs-dir=/certs --ca-key=/certs/ca.key >/dev/null
+ --entrypoint /cockroach/cockroach "$cockroach_image" cert create-ca --certs-dir=/certs --ca-key=/certs/ca.key >/dev/null 2>&1 || fail 'certificate generation'
 docker run --rm --mount "type=bind,src=$fixture_dir/certs,dst=/certs" \
  --entrypoint /cockroach/cockroach "$cockroach_image" cert create-node localhost 127.0.0.1 \
- --certs-dir=/certs --ca-key=/certs/ca.key >/dev/null
+ --certs-dir=/certs --ca-key=/certs/ca.key >/dev/null 2>&1 || fail 'certificate generation'
 docker run --rm --mount "type=bind,src=$fixture_dir/certs,dst=/certs" \
  --entrypoint /cockroach/cockroach "$cockroach_image" cert create-client root \
- --certs-dir=/certs --ca-key=/certs/ca.key >/dev/null
+ --certs-dir=/certs --ca-key=/certs/ca.key >/dev/null 2>&1 || fail 'certificate generation'
+echo 'PHASE: host node key readability' >&2
+[ -r "$fixture_dir/certs/node.key" ] || fail 'host node key unreadable'
 cp "$fixture_dir/certs/ca.crt" "$fixture_dir/ca-only/ca.crt"
 keystore_password=$(awk 'BEGIN { for (i=0;i<44;i++) printf "P" }')
 export KEYSTORE_PASSWORD="$keystore_password"
+echo 'PHASE: PKCS#12 creation' >&2
 openssl pkcs12 -export -in "$fixture_dir/certs/node.crt" -inkey "$fixture_dir/certs/node.key" \
- -out "$fixture_dir/s3proxy.p12" -passout env:KEYSTORE_PASSWORD >/dev/null 2>&1
+ -out "$fixture_dir/s3proxy.p12" -passout env:KEYSTORE_PASSWORD >/dev/null 2>&1 || fail 'PKCS#12 creation'
 
 synthetic_access=$(awk 'BEGIN { for (i=0;i<44;i++) printf "K" }')
 synthetic_secret=$(awk 'BEGIN { for (i=0;i<44;i++) printf "S" }')
@@ -128,13 +133,15 @@ fixture_write_env
  printf 's3proxy.keystore-path=%s\ns3proxy.keystore-password=%s\n' "$fixture_dir/s3proxy.p12" "$keystore_password"
  printf 'jclouds.provider=filesystem\njclouds.filesystem.basedir=%s\n' "$fixture_dir/s3-data"
 } >"$fixture_dir/s3proxy.properties"
+echo 'PHASE: S3Proxy startup' >&2
 s3proxy --properties "$fixture_dir/s3proxy.properties" >"$fixture_dir/s3proxy-output" 2>&1 &
 s3proxy_pid=$!
+echo 'PHASE: DB start' >&2
 docker run -d --rm --name "$db" --network host \
  --env SSL_CERT_FILE=/certs/ca.crt \
  --mount "type=bind,src=$fixture_dir/certs,dst=/certs,readonly" \
  --entrypoint /cockroach/cockroach "$cockroach_image" start-single-node \
- --certs-dir=/certs --listen-addr=127.0.0.1:26259 --http-addr=127.0.0.1:8089 >/dev/null
+ --certs-dir=/certs --listen-addr=127.0.0.1:26259 --http-addr=127.0.0.1:8089 >/dev/null 2>&1 || fail 'DB start'
 db_created=true
 
 client() { fixture_client "$@"; }
@@ -150,7 +157,6 @@ sql_as() {
  esac
  printf '%s\n' "$statement" | client "$identity" -c "COCKROACH_URL=\"\$$url_var\" /cockroach/cockroach sql --set=errexit=true --format=tsv"
 }
-fail() { echo "RED: $1 (details redacted)" >&2; exit 1; }
 assert_denied() {
  role=$1
  label=$2

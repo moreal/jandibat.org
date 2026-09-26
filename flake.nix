@@ -242,7 +242,7 @@
             packages = with toolchain.pkgs; [ s3proxy minio-client openssl ];
           };
           images = toolchain.pkgs.mkShell {
-            packages = toolchain.shellPackages ++ (with toolchain.pkgs; [ syft grype skopeo ruby ]);
+            packages = toolchain.shellPackages ++ (with toolchain.pkgs; [ syft grype skopeo umoci binutils rpm ruby ]);
             shellHook = ''export YARN=yarn'';
           };
         });

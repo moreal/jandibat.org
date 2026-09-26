@@ -6,11 +6,11 @@ COCKROACH_DATABASE ?= jandibat
 install:
 	$(YARN) install --immutable
 
-check: openapi-check graphql-check ci-version-authority-check ci-nix-gates-test workflow-expression-check secret-scan shell-check db-cli-secret-boundary-test db-bootstrap-roles-test db-backup-metadata-test image-contract-validator-test image-release-policy-test image-runtime-contract-test adapter-sql-allowlist-check monitoring-check security-review-validator-test audit-verifier-test restore-verifier-test test-api test-api-race lint-api test-sdk test-web typecheck build-web
+check: openapi-check graphql-check ci-version-authority-check ci-nix-gates-test workflow-expression-check secret-scan shell-check db-cli-secret-boundary-test db-bootstrap-roles-test db-backup-metadata-test image-contract-validator-test image-release-policy-test restore-runtime-probe-test image-runtime-contract-test adapter-sql-allowlist-check monitoring-check security-review-validator-test audit-verifier-test restore-verifier-test test-api test-api-race lint-api test-sdk test-web typecheck build-web
 
 ci: nix-check install check
 
-.PHONY: images-build images-smoke image-contract-validator-test image-release-policy-test image-runtime-contract-test
+.PHONY: images-build images-smoke image-contract-validator-test image-release-policy-test restore-runtime-probe-test image-runtime-contract-test
 images-build:
 	nix build .#packages.x86_64-linux.api-image .#packages.x86_64-linux.worker-image .#packages.x86_64-linux.maintenance-image .#packages.x86_64-linux.web-image --no-link
 
@@ -22,6 +22,9 @@ image-contract-validator-test:
 
 image-release-policy-test:
 	node --test scripts/test-image-release-policy.mjs
+
+restore-runtime-probe-test:
+	node --test scripts/test-restore-runtime-probe.mjs
 
 image-runtime-contract-test:
 	sh scripts/test-image-runtime-contract.sh

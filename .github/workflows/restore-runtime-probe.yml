@@ -1,0 +1,30 @@
+name: Probe restore runtime candidate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  candidate:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+      - name: Cache the Nix store
+        uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
+      - name: Inspect candidate and donor without registry writes
+        run: nix develop .#images --command sh scripts/probe-restore-runtime-candidate.sh "$RUNNER_TEMP/candidate.json"
+      - name: Upload sanitized candidate evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: restore-runtime-candidate-${{ github.sha }}
+          path: ${{ runner.temp }}/candidate.json
+          if-no-files-found: error
+          retention-days: 30

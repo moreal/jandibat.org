@@ -101,6 +101,9 @@ from that identity, so verifier success does not claim continuous detection of
 defaults later changed in a hidden schema. The `jandibat.public` baseline has
 USAGE but no public CREATE after runtime role hardening; neither actor restores
 that CREATE grant.
+On a fresh database, backup-enabled root account bootstrap first revokes
+`CREATE` on `jandibat.public` from `public` before its grant audit; reruns of this
+REVOKE are safe, and the app-only bootstrap path remains unchanged.
 
 | Actor | Additional authority |
 | --- | --- |

@@ -85,10 +85,14 @@ ORDER BY database_name, schema_name, object_name, object_type, grantee, privileg
 WHERE schema_name NOT IN ('crdb_internal', 'information_schema', 'pg_catalog', 'pg_extension')
 ORDER BY schema_name;"
  cp "$capture_dir/stdout" "$capture_dir/schemas"
- while IFS= read -r schema; do
-  [ "$schema" != schema_name ] || continue
-  audit_schema_defaults "$schema"
- done <"$capture_dir/schemas"
+ {
+  IFS= read -r schema_header && [ "$schema_header" = schema_name ] || {
+   echo 'backup schema inventory malformed' >&2; exit 1;
+  }
+  while IFS= read -r schema; do
+   audit_schema_defaults "$schema"
+  done
+ } <"$capture_dir/schemas"
  for grantee in public jandibat_backup_bootstrap jandibat_backup_runner jandibat_backup_verifier; do
   if [ "$grantee" = public ]; then
    predicate="object_type IN ('tables', 'schemas')"

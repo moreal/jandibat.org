@@ -116,15 +116,19 @@ WHERE schema_name NOT IN ('crdb_internal', 'information_schema', 'pg_catalog', '
 ORDER BY schema_name;"
  cp "$capture_dir/stdout" "$capture_dir/schemas"
  seen_public=false
- while IFS= read -r schema; do
-  [ "$schema" != schema_name ] || continue
-  case "$schema" in ''|*[!A-Za-z0-9_.-]*) echo 'database backup default grant audit unsupported schema' >&2; exit 1;; esac
-  [ "$schema" != public ] || seen_public=true
-  for grantee in public jandibat_backup_bootstrap jandibat_backup_runner jandibat_backup_verifier; do
-   value=$(sql_value "$COCKROACH_ROOT_URL" "USE \"$database\"; SELECT IF((SELECT count(*) FROM [SHOW DEFAULT PRIVILEGES FOR GRANTEE $grantee IN SCHEMA \"$schema\"]) = 0, 1, 0);")
-   [ "$value" = 1 ] || { echo 'database backup schema default grant mismatch' >&2; exit 1; }
+ {
+  IFS= read -r schema_header && [ "$schema_header" = schema_name ] || {
+   echo 'database backup schema inventory malformed' >&2; exit 1;
+  }
+  while IFS= read -r schema; do
+   case "$schema" in ''|*[!A-Za-z0-9_.-]*) echo 'database backup default grant audit unsupported schema' >&2; exit 1;; esac
+   [ "$schema" != public ] || seen_public=true
+   for grantee in public jandibat_backup_bootstrap jandibat_backup_runner jandibat_backup_verifier; do
+    value=$(sql_value "$COCKROACH_ROOT_URL" "USE \"$database\"; SELECT IF((SELECT count(*) FROM [SHOW DEFAULT PRIVILEGES FOR GRANTEE $grantee IN SCHEMA \"$schema\"]) = 0, 1, 0);")
+    [ "$value" = 1 ] || { echo 'database backup schema default grant mismatch' >&2; exit 1; }
+   done
   done
- done <"$capture_dir/schemas"
+ } <"$capture_dir/schemas"
  [ "$seen_public" = true ] || { echo 'database backup schema inventory incomplete' >&2; exit 1; }
  for grantee in public jandibat_backup_bootstrap jandibat_backup_runner jandibat_backup_verifier; do
   if [ "$grantee" = public ]; then
@@ -168,6 +172,9 @@ sql "$API_DATABASE_URL" 'SELECT current_user();' jandibat_api
 sql "$WORKER_DATABASE_URL" 'SELECT current_user();' jandibat_worker
 sql "$MAINTENANCE_DATABASE_URL" 'SELECT current_user();' jandibat_maintenance
 if [ "$backup_inputs" -eq 3 ]; then
+ # The fresh database still has public CREATE. Match the runtime-role baseline
+ # before any backup authority audit; this REVOKE is safe on hardened reruns.
+ sql "$COCKROACH_ROOT_URL" 'REVOKE CREATE ON SCHEMA jandibat.public FROM public;'
  # A partial pre-existing set is never adopted. The post-create catalog checks
  # below also reject incompatible definitions and owners on every rerun.
  state=$(sql_value "$COCKROACH_ROOT_URL" "SELECT (SELECT count(*) FROM information_schema.schemata WHERE catalog_name = 'defaultdb' AND schema_name = 'jandibat_backup_admin')::STRING || ':' || (SELECT count(*) FROM information_schema.tables WHERE table_catalog = 'defaultdb' AND table_schema = 'jandibat_backup_admin' AND table_name = 'connection_policy' AND table_type = 'BASE TABLE')::STRING || ':' || (SELECT count(*) FROM information_schema.views WHERE table_catalog = 'defaultdb' AND table_schema = 'jandibat_backup_admin' AND table_name = 'connection_live_digest')::STRING;")

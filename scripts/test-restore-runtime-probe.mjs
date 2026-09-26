@@ -12,7 +12,7 @@ const script = join(root, 'scripts/probe-restore-runtime-candidate.sh');
 const sourceSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
 const digest = `sha256:${'a'.repeat(64)}`;
 const donorDigest = 'sha256:771325a0586bf61d53322d24f5a6de8962568b0fc181fa45db364278e5961282';
-const bootstrapDigest = 'cd6df5adfa0fcc557b50c85fe51e577631cdcaba1fb2eab2a15ba904399c0d60';
+const bootstrapDigest = '6ef912d18d9f40e46546ffcf5777cecf93405b3f5f4dcde60f2878c10bdc2327';
 
 function evidence() {
   return {
@@ -64,6 +64,14 @@ function validate(value) {
 test('accepts a complete candidate dossier', () => {
   const result = validate(evidence());
   assert.equal(result.status, 0, result.stderr);
+});
+
+test('accepts a candidate inventory bound to the current bootstrap source', () => {
+  const value = evidence();
+  value.applets.bootstrapSourceSha256 = createHash('sha256')
+    .update(readFileSync(join(root, 'scripts/db-bootstrap-roles.sh'))).digest('hex');
+  const result = validate(value);
+  assert.equal(result.status, 0, 'probe rejects the current bootstrap source inventory');
 });
 
 test('accepts a root-level Cockroach third-party notice as donor licensing evidence', () => {

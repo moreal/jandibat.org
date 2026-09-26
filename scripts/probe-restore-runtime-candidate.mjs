@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const runtimeSource = 'registry.access.redhat.com/ubi10/ubi-micro';
 const donorSource = 'cockroachdb/cockroach:v26.2.5@sha256:771325a0586bf61d53322d24f5a6de8962568b0fc181fa45db364278e5961282';
-const bootstrapSourceSha256 = 'cd6df5adfa0fcc557b50c85fe51e577631cdcaba1fb2eab2a15ba904399c0d60';
+const bootstrapSourceSha256 = '6ef912d18d9f40e46546ffcf5777cecf93405b3f5f4dcde60f2878c10bdc2327';
 const applets = ['awk', 'chmod', 'cp', 'mktemp', 'rm', 'sed', 'sha256sum', 'sh', 'tail', 'tr'];
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 const fileSha = path => sha(readFileSync(path));

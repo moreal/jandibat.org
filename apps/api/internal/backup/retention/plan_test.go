@@ -78,6 +78,73 @@ func TestPlanProtectsCutoffCrossingChain(t *testing.T) {
 	}
 }
 
+func TestPlanIncompleteMappingReportsProvableCoverageWithoutTargetsOrGuessedBytes(t *testing.T) {
+	checks := []struct {
+		name   string
+		change func(*Catalog, *VersionInventory)
+	}{
+		{"missing version page", func(_ *Catalog, v *VersionInventory) {
+			v.Pages[0].Complete = false
+			v.Pages[0].NextCursor = "unread-page"
+		}},
+		{"missing physical mapping", func(_ *Catalog, v *VersionInventory) {
+			v.Pages[0].Versions = v.Pages[0].Versions[1:]
+		}},
+		{"missing protected incremental mapping", func(_ *Catalog, v *VersionInventory) {
+			v.Pages[0].Versions = v.Pages[0].Versions[:5]
+		}},
+		{"placeholder version ID", func(_ *Catalog, v *VersionInventory) {
+			v.Pages[0].Versions[0].Key = "backups/old/as_json-placeholder"
+			v.Pages[0].Versions[0].VersionID = ""
+		}},
+		{"shared root metadata not assigned to a chain", func(_ *Catalog, v *VersionInventory) {
+			v.Pages[0].Versions = append(v.Pages[0].Versions, ObjectVersion{ObjectID: "shared-root", Key: "backups/LATEST", VersionID: "root-v1", SizeBytes: 999, Current: true})
+		}},
+	}
+	for _, check := range checks {
+		t.Run(check.name, func(t *testing.T) {
+			catalog, inventory, verified := fixture()
+			check.change(&catalog, &inventory)
+			got, err := Plan(catalog, inventory, verified, days(-35), testNow)
+			var refusal *Refusal
+			if !errors.As(err, &refusal) {
+				t.Fatalf("want typed refusal, got %v", err)
+			}
+			if len(got.Targets) != 0 || got.ApprovalHash != "" {
+				t.Fatalf("refusal exposed actionable plan: %#v", got)
+			}
+			if refusal.Report == nil || !reflect.DeepEqual(refusal.Report.ProtectedChains, []string{"crossing", "new"}) ||
+				refusal.Report.Coverage.From != days(-40) || refusal.Report.Coverage.Through != recoveryWatermark ||
+				refusal.Report.StorageOverhangBytes != nil {
+				t.Fatalf("refusal report = %#v", refusal.Report)
+			}
+		})
+	}
+}
+
+func TestPlanIncompleteChronologyDoesNotClaimCoverage(t *testing.T) {
+	catalog, inventory, verified := fixture()
+	catalog.Pages[0].Complete = false
+	catalog.Pages[0].NextCursor = "unread-page"
+	_, err := Plan(catalog, inventory, verified, days(-35), testNow)
+	var refusal *Refusal
+	if !errors.As(err, &refusal) || refusal.Report != nil {
+		t.Fatalf("incomplete catalog claimed coverage: %v", err)
+	}
+}
+
+func TestPlanCoverageGapDoesNotClaimCoverageDespiteIncompleteMapping(t *testing.T) {
+	catalog, inventory, verified := fixture()
+	catalog.Pages[0].Chains[2].Full.At = days(-19)
+	catalog.Pages[0].Chains[2].Incrementals[0].From = days(-19)
+	inventory.Pages[0].Versions = inventory.Pages[0].Versions[1:]
+	_, err := Plan(catalog, inventory, verified, days(-35), testNow)
+	var refusal *Refusal
+	if !errors.As(err, &refusal) || refusal.Code != RefusalCoverage || refusal.Report != nil {
+		t.Fatalf("gapped chronology claimed coverage: %v", err)
+	}
+}
+
 func TestPlanRefusesUnsafeInput(t *testing.T) {
 	checks := []struct {
 		name   string

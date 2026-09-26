@@ -134,12 +134,32 @@ const (
 type Refusal struct {
 	Code   RefusalCode
 	Detail string
+	// Report is present only when complete catalog chronology proves the
+	// protected recovery range despite an incomplete physical mapping.
+	Report *RefusalReport
+}
+
+// RefusalReport is non-actionable evidence. A nil StorageOverhangBytes means
+// the physical bytes cannot be proved; it must not be interpreted as zero.
+type RefusalReport struct {
+	ProtectedChains      []string
+	Coverage             Range
+	StorageOverhangBytes *int64
 }
 
 func (r *Refusal) Error() string { return fmt.Sprintf("backup retention: %s: %s", r.Code, r.Detail) }
 
 func refuse(code RefusalCode, detail string) (RetentionPlan, error) {
 	return RetentionPlan{}, &Refusal{Code: code, Detail: detail}
+}
+
+func refuseWithReport(err error, report RefusalReport) (RetentionPlan, error) {
+	refusal, ok := err.(*Refusal)
+	if !ok {
+		return RetentionPlan{}, err
+	}
+	refusal.Report = &report
+	return RetentionPlan{}, refusal
 }
 
 type normalizedChain struct {
@@ -167,10 +187,6 @@ func Plan(catalog Catalog, inventory VersionInventory, verified []VerifiedRecove
 	if err != nil {
 		return RetentionPlan{}, err
 	}
-	versions, err := normalizeVersions(inventory, objects, catalog.Namespace)
-	if err != nil {
-		return RetentionPlan{}, err
-	}
 	if len(chains) == 0 {
 		return refuse(RefusalCoverage, "no backup chains")
 	}
@@ -179,33 +195,6 @@ func Plan(catalog Catalog, inventory VersionInventory, verified []VerifiedRecove
 			return refuse(RefusalAmbiguous, "backup chronology extends beyond planning time")
 		}
 	}
-	evidenceByChain := make(map[string]VerifiedRecovery, len(verified))
-	for _, evidence := range verified {
-		if evidence.ChainID == "" || evidence.CheckedAt.IsZero() || evidence.CheckedAt.After(now) {
-			return refuse(RefusalUnverified, "invalid recovery evidence")
-		}
-		if _, exists := evidenceByChain[evidence.ChainID]; exists {
-			return refuse(RefusalAmbiguous, "duplicate recovery evidence")
-		}
-		evidenceByChain[evidence.ChainID] = evidence
-	}
-	knownChains := make(map[string]normalizedChain, len(chains))
-	for _, chain := range chains {
-		knownChains[chain.ID] = chain
-	}
-	checked := make(map[string]bool, len(evidenceByChain))
-	for chainID, evidence := range evidenceByChain {
-		chain, exists := knownChains[chainID]
-		if !exists {
-			return refuse(RefusalAmbiguous, "evidence names unknown chain")
-		}
-		manifest, err := chainManifestDigest(catalog.Namespace, chain, versions)
-		if err != nil {
-			return refuse(RefusalAmbiguous, "chain manifest cannot be encoded")
-		}
-		checked[chainID] = evidence.FileChecked && !evidence.CheckedAt.Before(chain.Through) && evidence.ManifestDigest == manifest
-	}
-
 	plan := RetentionPlan{Namespace: catalog.Namespace, Targets: []TargetVersion{}, RetiredChains: []string{}, ProtectedChains: []string{}}
 	var protected []normalizedChain
 	var retired []normalizedChain
@@ -234,6 +223,36 @@ func Plan(catalog Catalog, inventory VersionInventory, verified []VerifiedRecove
 		return refuse(RefusalCoverage, "protected recovery watermark exceeds one-hour RPO")
 	}
 	plan.Coverage = Range{From: protected[0].Full.At, Through: coveredThrough}
+	versions, err := normalizeVersions(inventory, objects, catalog.Namespace)
+	if err != nil {
+		return refuseWithReport(err, RefusalReport{ProtectedChains: append([]string(nil), plan.ProtectedChains...), Coverage: plan.Coverage})
+	}
+	evidenceByChain := make(map[string]VerifiedRecovery, len(verified))
+	for _, evidence := range verified {
+		if evidence.ChainID == "" || evidence.CheckedAt.IsZero() || evidence.CheckedAt.After(now) {
+			return refuse(RefusalUnverified, "invalid recovery evidence")
+		}
+		if _, exists := evidenceByChain[evidence.ChainID]; exists {
+			return refuse(RefusalAmbiguous, "duplicate recovery evidence")
+		}
+		evidenceByChain[evidence.ChainID] = evidence
+	}
+	knownChains := make(map[string]normalizedChain, len(chains))
+	for _, chain := range chains {
+		knownChains[chain.ID] = chain
+	}
+	checked := make(map[string]bool, len(evidenceByChain))
+	for chainID, evidence := range evidenceByChain {
+		chain, exists := knownChains[chainID]
+		if !exists {
+			return refuse(RefusalAmbiguous, "evidence names unknown chain")
+		}
+		manifest, err := chainManifestDigest(catalog.Namespace, chain, versions)
+		if err != nil {
+			return refuse(RefusalAmbiguous, "chain manifest cannot be encoded")
+		}
+		checked[chainID] = evidence.FileChecked && !evidence.CheckedAt.Before(chain.Through) && evidence.ManifestDigest == manifest
+	}
 
 	// A later, fully checked chain must exist before an older whole chain can
 	// be selected. Evidence for an earlier state of that later chain is stale.

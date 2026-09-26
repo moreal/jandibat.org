@@ -10,10 +10,11 @@ import (
 )
 
 type fakeKubernetesLeaseAPI struct {
-	record            KubernetesLeaseRecord
-	gets, updates     int
-	getErr, updateErr error
-	beforeUpdate      func()
+	record             KubernetesLeaseRecord
+	gets, updates      int
+	getErr, updateErr  error
+	beforeUpdate       func()
+	microTimeRoundTrip bool
 }
 
 func (f *fakeKubernetesLeaseAPI) Get(_ context.Context, namespace, name string) (KubernetesLeaseRecord, error) {
@@ -42,6 +43,9 @@ func (f *fakeKubernetesLeaseAPI) Update(_ context.Context, next KubernetesLeaseR
 		return KubernetesLeaseRecord{}, err
 	}
 	next.ResourceVersion = strconv.Itoa(version + 1)
+	if f.microTimeRoundTrip {
+		next.RenewTime = next.RenewTime.Truncate(time.Microsecond)
+	}
 	f.record = next
 	return next, nil
 }
@@ -215,6 +219,23 @@ func TestKubernetesLeaseRenewCannotResurrectPriorExpiredHolder(t *testing.T) {
 	}
 	if api.record.HolderIdentity != "retention-job" {
 		t.Fatal("uncertain holder was released")
+	}
+}
+
+func TestKubernetesLeaseAcceptsMicroTimeAPIRoundTrip(t *testing.T) {
+	adapter, api, now := newLeaseAdapter(t)
+	api.microTimeRoundTrip = true
+	*now = now.Add(1234 * time.Nanosecond)
+	token, err := adapter.Acquire(context.Background(), "retention-job", 30*time.Second)
+	if err != nil {
+		t.Fatalf("microsecond API acquisition failed: %v", err)
+	}
+	if token != "2" || api.record.RenewTime.Nanosecond()%1000 != 0 {
+		t.Fatalf("acquired noncanonical Lease: token=%s record=%+v", token, api.record)
+	}
+	*now = now.Add(10 * time.Second)
+	if _, err := adapter.Renew(context.Background(), "retention-job", token); err != nil {
+		t.Fatalf("microsecond API renewal failed: %v", err)
 	}
 }
 

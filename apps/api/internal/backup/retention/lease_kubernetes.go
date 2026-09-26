@@ -105,7 +105,7 @@ func (l *KubernetesLease) Acquire(ctx context.Context, holder string, duration t
 	}
 	record.HolderIdentity = holder
 	record.LeaseDurationSeconds = int32(leaseDuration / time.Second)
-	record.RenewTime = now.UTC()
+	record.RenewTime = now.UTC().Truncate(time.Microsecond)
 	return l.update(ctx, record, time.Time{})
 }
 
@@ -133,7 +133,7 @@ func (l *KubernetesLease) Renew(ctx context.Context, holder, resourceVersion str
 		return "", err
 	}
 	previousExpiresAt := record.RenewTime.Add(leaseDuration)
-	record.RenewTime = checkedAt.UTC()
+	record.RenewTime = checkedAt.UTC().Truncate(time.Microsecond)
 	return l.update(ctx, record, previousExpiresAt)
 }
 

@@ -211,7 +211,36 @@ test('malformed registry tool output replaces the artifact without leaking diagn
     });
     assert.notEqual(result.status, 0);
     assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')),
-      { schema: 1, sourceSha, status: 'rejected', phase: 'inspection' });
+      { schema: 1, sourceSha, status: 'rejected', phase: 'inspection', stage: 'runtime-index' });
     assert.doesNotMatch(result.stderr + readFileSync(path, 'utf8'), /SENSITIVE-MARKER|password/i);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('donor index failure reports only its fixed stage and no tool output', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'jandibat-probe-donor-tool-'));
+  try {
+    const bin = join(dir, 'bin');
+    mkdirSync(bin);
+    const platform = join(dir, 'platform.cjs');
+    writeFileSync(platform, "Object.defineProperty(process, 'platform', {value:'linux'}); Object.defineProperty(process, 'arch', {value:'x64'});\n");
+    const skopeo = join(bin, 'skopeo');
+    writeFileSync(skopeo, `#!/bin/sh
+case "$3" in
+  docker://registry.access.redhat.com/ubi10/ubi-micro)
+    printf '%s\\n' '{"manifests":[{"platform":{"os":"linux","architecture":"amd64"},"digest":"${digest}"}]}' ;;
+  *) printf '%s\\n' '{"password":"SENSITIVE-MARKER"' ;;
+esac
+`);
+    chmodSync(skopeo, 0o755);
+    const path = join(dir, 'candidate.json');
+    writeFileSync(path, JSON.stringify(evidence()));
+    const result = spawnSync('sh', [script, path], {
+      cwd: root, encoding: 'utf8',
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, NODE_OPTIONS: `--require=${platform}` },
+    });
+    assert.notEqual(result.status, 0);
+    assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')),
+      { schema: 1, sourceSha, status: 'rejected', phase: 'inspection', stage: 'donor-index' });
+    assert.doesNotMatch(result.stdout + result.stderr + readFileSync(path, 'utf8'), /SENSITIVE-MARKER|password/i);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

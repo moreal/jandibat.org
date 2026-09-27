@@ -11,6 +11,12 @@ const runtimeSource = 'registry.access.redhat.com/ubi10/ubi-micro';
 const donorSource = 'cockroachdb/cockroach:v26.2.5@sha256:771325a0586bf61d53322d24f5a6de8962568b0fc181fa45db364278e5961282';
 const bootstrapSourceSha256 = '6ef912d18d9f40e46546ffcf5777cecf93405b3f5f4dcde60f2878c10bdc2327';
 const applets = ['awk', 'chmod', 'cp', 'mktemp', 'rm', 'sed', 'sha256sum', 'sh', 'tail', 'tr'];
+const probeStages = Object.freeze({
+  bootstrap: 'bootstrap-source', runtimeIndex: 'runtime-index', donorIndex: 'donor-index',
+  runtimeUnpack: 'runtime-unpack', donorUnpack: 'donor-unpack', runtimeSbom: 'runtime-sbom',
+  baseScan: 'base-scan', vendorInspection: 'vendor-inspection', evidence: 'evidence-assembly',
+});
+let inspectionStage;
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 const fileSha = path => sha(readFileSync(path));
 const digest = value => /^sha256:[a-f0-9]{64}$/.test(value ?? '');
@@ -231,18 +237,26 @@ function probe() {
   assert.equal(process.arch, 'x64', 'probe requires amd64');
   const sourceSha = command('git', ['rev-parse', 'HEAD']).stdout.trim();
   assert.match(sourceSha, /^[a-f0-9]{40}$/);
+  inspectionStage = probeStages.bootstrap;
   assert.equal(fileSha(join(root, 'scripts/db-bootstrap-roles.sh')), bootstrapSourceSha256, 'bootstrap source changed; refresh applet inventory');
+  inspectionStage = probeStages.runtimeIndex;
   const runtime = resolveImage(runtimeSource, true);
+  inspectionStage = probeStages.donorIndex;
   const donor = resolveImage(donorSource, false);
   const scratch = mkdtempSync(join(tmpdir(), 'jandibat-runtime-probe-'));
   try {
+    inspectionStage = probeStages.runtimeUnpack;
     const runtimeRoot = unpack(runtimeSource, runtime.amd64Digest, join(scratch, 'runtime'));
+    inspectionStage = probeStages.donorUnpack;
     const donorRoot = unpack(donorSource, donor.amd64Digest, join(scratch, 'donor'));
+    inspectionStage = probeStages.runtimeSbom;
     const baseSyft = join(scratch, 'base.syft.json');
     command('syft', [`dir:${runtimeRoot}`, '-o', `syft-json=${baseSyft}`]);
     const catalog = JSON.parse(readFileSync(baseSyft, 'utf8'));
+    inspectionStage = probeStages.baseScan;
     const scan = command('grype', [`sbom:${baseSyft}`, '--fail-on', 'high', '-o', 'json'], { allowFailure: true });
     const findings = JSON.parse(scan.stdout);
+    inspectionStage = probeStages.vendorInspection;
     const donorElf = elf(donorRoot, '/cockroach/cockroach', true);
     const runtimeFiles = pathsUnder(runtimeRoot);
     const donorFiles = pathsUnder(donorRoot);
@@ -271,6 +285,7 @@ function probe() {
     const databaseBuilt = dbStatus.match(/^Built:\s*(\S+)/m)?.[1] ?? '';
     const toolVersions = Object.fromEntries(['skopeo', 'syft', 'grype', 'umoci', 'readelf', 'rpm']
       .map(name => [name, command(name, ['--version']).stdout.trim().split('\n')[0].slice(0, 159)]));
+    inspectionStage = probeStages.evidence;
     const evidence = {
       schema: 1, sourceSha, status: 'candidate',
       runtime: { source: runtimeSource, ...runtime, os: 'linux', architecture: 'amd64', osRelease: parseOsRelease(runtimeRoot) },
@@ -323,7 +338,8 @@ if (process.argv[2] === '--inspect-donor-licenses') {
     if (process.argv.length === 3) {
       try {
         const sourceSha = command('git', ['rev-parse', 'HEAD']).stdout.trim();
-        atomicEvidence(process.argv[2], { schema: 1, sourceSha, status: 'rejected', phase: 'inspection' });
+        atomicEvidence(process.argv[2], { schema: 1, sourceSha, status: 'rejected', phase: 'inspection',
+          ...(Object.values(probeStages).includes(inspectionStage) ? { stage: inspectionStage } : {}) });
       } catch { /* the output path itself may be unusable */ }
     }
     process.stderr.write('restore runtime probe rejected: inspection failed\n');

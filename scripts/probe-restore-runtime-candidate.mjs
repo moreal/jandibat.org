@@ -7,8 +7,8 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-const runtimeSource = 'cockroachdb/cockroach:v26.2.7@sha256:9464ae30465b887295459b98d129a76d074caeaa4c86836d369c6d2fdddd1685';
-const donorSource = runtimeSource;
+const runtimeSource = 'registry.access.redhat.com/ubi10/ubi-minimal:latest@sha256:e3a5632d7ae8a97e06f634522d06187f12793e90ac0d7b51bc671c83a96d8eda';
+const donorSource = 'cockroachdb/cockroach:v26.2.5@sha256:771325a0586bf61d53322d24f5a6de8962568b0fc181fa45db364278e5961282';
 const bootstrapSourceSha256 = '6ef912d18d9f40e46546ffcf5777cecf93405b3f5f4dcde60f2878c10bdc2327';
 const applets = ['awk', 'chmod', 'cp', 'mktemp', 'rm', 'sed', 'sha256sum', 'sh', 'tail', 'tr'];
 const probeStages = Object.freeze({
@@ -225,7 +225,6 @@ function validate(evidence, sourceSha, setStage = () => {}) {
   setStage(probeStages.dossierIdentity);
   assert.equal(evidence.donor.source, donorSource);
   required(digest(evidence.donor.amd64Digest), 'donor amd64 digest');
-  if (donorSource === runtimeSource) assert.equal(evidence.donor.amd64Digest, evidence.runtime.amd64Digest, 'shared image amd64 child');
   setStage(probeStages.donorNativeLicense);
   required(absolute(evidence.donor.interpreter), 'ELF interpreter');
   required(evidence.donor.needed?.length, 'ELF dependencies');

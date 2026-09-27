@@ -127,7 +127,11 @@ func runMode(ctx context.Context, args []string, getenv func(string) string, che
 		ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second,
 		IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 	serverErrors := make(chan error, 1)
-	go func() { serverErrors <- server.Serve(listener) }()
+	serveDone := make(chan struct{})
+	go func() {
+		defer close(serveDone)
+		serverErrors <- server.Serve(listener)
+	}()
 	checksCtx, stopChecks := context.WithCancel(ctx)
 	var checks sync.WaitGroup
 	checks.Add(2)
@@ -142,6 +146,10 @@ func runMode(ctx context.Context, args []string, getenv func(string) string, che
 	defer func() {
 		stopChecks()
 		checks.Wait()
+	}()
+	defer func() {
+		_ = server.Close()
+		<-serveDone
 	}()
 	select {
 	case err := <-serverErrors:

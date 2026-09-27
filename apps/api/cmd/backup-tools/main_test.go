@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -280,6 +281,95 @@ func TestRunVerifierWaitsForInFlightCheckBeforeReturning(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("verifier did not stop after check completed")
 	}
+}
+
+func TestRunVerifierClosesAcceptedConnectionAfterServeError(t *testing.T) {
+	dir := t.TempDir()
+	tokenFile := filepath.Join(dir, "token")
+	if err := os.WriteFile(tokenFile, []byte(fixtureToken), 0600); err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{
+		"BACKUP_VERIFIED_RECORD_FILE": filepath.Join(dir, "verified.json"),
+		"BACKUP_METRICS_TOKEN_FILE":   tokenFile,
+		"BACKUP_METRICS_LISTEN_ADDR":  "127.0.0.1:0",
+	}
+	base, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener := &readNotifyingListener{Listener: base, reading: make(chan struct{})}
+	defer listener.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- runMode(ctx, []string{"run-verifier"}, func(k string) string { return env[k] },
+			func(context.Context) (backup.CheckResult, error) {
+				return backup.CheckResult{}, errors.New("failed check")
+			},
+			func(context.Context) (backup.ScheduleCheckResult, error) {
+				return backup.ScheduleCheckResult{}, errors.New("failed schedule")
+			}, listener, io.Discard)
+	}()
+	conn, err := net.DialTimeout("tcp", listener.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	select {
+	case <-listener.reading:
+	case <-time.After(3 * time.Second):
+		t.Fatal("server did not accept the connection")
+	}
+	if _, err := io.WriteString(conn, "GET /metrics HTTP/1.1\r\nHost: localhost\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("listener error was ignored")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("verifier did not stop after listener failure")
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	var buf [1]byte
+	if _, err := conn.Read(buf[:]); err == nil {
+		t.Fatal("accepted connection remained open after server failure")
+	} else if timeout, ok := err.(net.Error); ok && timeout.Timeout() {
+		t.Fatal("accepted connection remained open after server failure")
+	}
+}
+
+type readNotifyingListener struct {
+	net.Listener
+	reading chan struct{}
+	once    sync.Once
+}
+
+func (l *readNotifyingListener) Accept() (net.Conn, error) {
+	conn, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	return &readNotifyingConn{Conn: conn, reading: l.reading, once: &l.once}, nil
+}
+
+type readNotifyingConn struct {
+	net.Conn
+	reading chan struct{}
+	once    *sync.Once
+}
+
+func (c *readNotifyingConn) Read(p []byte) (int, error) {
+	c.once.Do(func() { close(c.reading) })
+	return c.Conn.Read(p)
 }
 
 func TestRunVerifierRefusesUnsafeConfiguration(t *testing.T) {

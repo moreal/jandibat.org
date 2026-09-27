@@ -30,6 +30,7 @@ const (
 type CheckResult struct {
 	ChainID           string
 	CollectionID      string
+	BackupPath        string
 	RecoveryTimestamp time.Time
 	CheckedAt         time.Time
 	FileChecked       bool

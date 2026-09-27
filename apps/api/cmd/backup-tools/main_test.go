@@ -19,27 +19,44 @@ import (
 const fixtureToken = "0123456789abcdef0123456789abcdef"
 
 func TestParseChainResultRejectsNonCanonicalEvidence(t *testing.T) {
-	good := `{"schemaVersion":1,"chainId":"chain_1","collectionId":"jandibat_backup_v1","checkedAt":"2026-09-25T11:01:00Z","recoveryTimestamp":"2026-09-25T11:00:00Z","fileChecked":true,"passed":true}`
-	for _, raw := range []string{
-		good + "\n{}", good[:len(good)-1] + `,"objectKey":"private"}`,
-		strings.Replace(good, `"schemaVersion":1,`, "", 1),
-		strings.Replace(good, `"schemaVersion":1,`, `"schemaVersion":2,`, 1),
-		strings.Replace(good, `"chainId":"chain_1",`, `"chainId":"chain_1","chainId":"chain_2",`, 1),
-		strings.Replace(good, `"fileChecked":true`, `"fileChecked":false`, 1),
-		strings.Replace(good[:len(good)-1]+`,"fullScheduleId":"9223372036854775807"}`, `"fileChecked":true`, `"fileChecked":false`, 1),
-		strings.Replace(good, `"passed":true`, `"passed":false`, 1),
-		good[:len(good)-1] + `,"fullScheduleId":"9223372036854775807","incrementalScheduleId":"9223372036854775806"}`,
-		strings.Replace(good, `"checkedAt":"2026-09-25T11:01:00Z",`, "", 1),
-		strings.Replace(good, `"chainId":"chain_1"`, `"chainId":null`, 1),
-		strings.Replace(good, `"chainId":"chain_1"`, `"chainId":"s3://secret@host/key"`, 1),
-		strings.Repeat("x", 4097),
+	good := `{"schemaVersion":2,"chainId":"2026.09.25-110000.00","collectionId":"jandibat_backup_v1","checkedAt":"2026-09-25T11:01:00Z","recoveryTimestamp":"2026-09-25T11:00:00Z","fileChecked":true,"passed":true,"backupPath":"2026/09/25-110000.00"}`
+	future := time.Now().UTC().Add(time.Hour).Format(time.RFC3339Nano)
+	for name, raw := range map[string]string{
+		"v1":                   strings.Replace(good, `"schemaVersion":2,`, `"schemaVersion":1,`, 1),
+		"trailing object":      good + "\n{}",
+		"unknown field":        good[:len(good)-1] + `,"objectKey":"private"}`,
+		"missing version":      strings.Replace(good, `"schemaVersion":2,`, "", 1),
+		"missing backup path":  strings.Replace(good, `,"backupPath":"2026/09/25-110000.00"`, "", 1),
+		"duplicate chain":      strings.Replace(good, `"chainId":"2026.09.25-110000.00",`, `"chainId":"2026.09.25-110000.00","chainId":"2026.09.25-110000.00",`, 1),
+		"duplicate path":       strings.Replace(good, `"backupPath":"2026/09/25-110000.00"`, `"backupPath":"2026/09/25-110000.00","backupPath":"2026/09/25-110000.00"`, 1),
+		"version type":         strings.Replace(good, `"schemaVersion":2`, `"schemaVersion":"2"`, 1),
+		"null chain":           strings.Replace(good, `"chainId":"2026.09.25-110000.00"`, `"chainId":null`, 1),
+		"path type":            strings.Replace(good, `"backupPath":"2026/09/25-110000.00"`, `"backupPath":42`, 1),
+		"null path":            strings.Replace(good, `"backupPath":"2026/09/25-110000.00"`, `"backupPath":null`, 1),
+		"files false":          strings.Replace(good, `"fileChecked":true`, `"fileChecked":false`, 1),
+		"files null":           strings.Replace(good, `"fileChecked":true`, `"fileChecked":null`, 1),
+		"passed false":         strings.Replace(good, `"passed":true`, `"passed":false`, 1),
+		"wrong collection":     strings.Replace(good, `"collectionId":"jandibat_backup_v1"`, `"collectionId":"other_collection"`, 1),
+		"mismatched chain":     strings.Replace(good, `"chainId":"2026.09.25-110000.00"`, `"chainId":"2026.09.25-110001.00"`, 1),
+		"leading slash":        strings.Replace(good, `"backupPath":"2026/09/25-110000.00"`, `"backupPath":"/2026/09/25-110000.00"`, 1),
+		"path traversal":       strings.Replace(good, `"backupPath":"2026/09/25-110000.00"`, `"backupPath":"2026/09/../25-110000.00"`, 1),
+		"path injection":       strings.Replace(good, `"backupPath":"2026/09/25-110000.00"`, `"backupPath":"2026/09/25-110000.00' OR true --"`, 1),
+		"provider path":        strings.Replace(good, `"backupPath":"2026/09/25-110000.00"`, `"backupPath":"s3://secret@host/key"`, 1),
+		"noncanonical path":    strings.Replace(good, `"backupPath":"2026/09/25-110000.00"`, `"backupPath":"2026/9/25-110000.00"`, 1),
+		"invalid date":         strings.Replace(good, `"backupPath":"2026/09/25-110000.00"`, `"backupPath":"2026/02/30-110000.00"`, 1),
+		"invalid check time":   strings.Replace(good, `"checkedAt":"2026-09-25T11:01:00Z"`, `"checkedAt":"2026-09-25T25:01:00Z"`, 1),
+		"non-UTC check time":   strings.Replace(good, `"checkedAt":"2026-09-25T11:01:00Z"`, `"checkedAt":"2026-09-25T11:01:00+00:00"`, 1),
+		"future check time":    strings.Replace(good, `"checkedAt":"2026-09-25T11:01:00Z"`, `"checkedAt":"`+future+`"`, 1),
+		"invalid recovery":     strings.Replace(good, `"recoveryTimestamp":"2026-09-25T11:00:00Z"`, `"recoveryTimestamp":"not-a-date"`, 1),
+		"recovery after check": strings.Replace(good, `"recoveryTimestamp":"2026-09-25T11:00:00Z"`, `"recoveryTimestamp":"2026-09-25T11:02:00Z"`, 1),
+		"oversized":            strings.Repeat("x", 4097),
 	} {
-		if _, err := parseChainResult([]byte(raw)); err == nil {
-			t.Fatalf("unsafe chain result accepted")
+		if _, err := parseChainResult([]byte(raw)); err == nil || strings.Contains(err.Error(), "secret") {
+			t.Fatalf("%s: unsafe chain result accepted or leaked: %v", name, err)
 		}
 	}
 	got, err := parseChainResult([]byte(good))
-	if err != nil || got.ChainID != "chain_1" || !got.FileChecked || !got.Passed ||
+	if err != nil || got.ChainID != "2026.09.25-110000.00" || got.BackupPath != "2026/09/25-110000.00" || !got.FileChecked || !got.Passed ||
 		!got.CheckedAt.Equal(time.Date(2026, 9, 25, 11, 1, 0, 0, time.UTC)) ||
 		!got.RecoveryTimestamp.Equal(time.Date(2026, 9, 25, 11, 0, 0, 0, time.UTC)) {
 		t.Fatalf("canonical chain result rejected: %+v, %v", got, err)
@@ -291,7 +308,7 @@ func TestScriptCheckerUsesRecordDirectoryForPrivateTemporaryFiles(t *testing.T) 
 	body := `set -eu
 scratch=$(mktemp -d "$TMPDIR/jandibat-chain-capture.XXXXXX")
 rmdir "$scratch"
-printf '%s\n' '{"schemaVersion":1,"chainId":"chain_1","collectionId":"jandibat_backup_v1","checkedAt":"2026-09-25T11:01:00Z","recoveryTimestamp":"2026-09-25T11:00:00Z","fileChecked":true,"passed":true}'
+printf '%s\n' '{"schemaVersion":2,"chainId":"2026.09.25-110000.00","collectionId":"jandibat_backup_v1","checkedAt":"2026-09-25T11:01:00Z","recoveryTimestamp":"2026-09-25T11:00:00Z","fileChecked":true,"passed":true,"backupPath":"2026/09/25-110000.00"}'
 `
 	if err := os.WriteFile(script, []byte(body), 0600); err != nil {
 		t.Fatal(err)
@@ -307,7 +324,7 @@ printf '%s\n' '{"schemaVersion":1,"chainId":"chain_1","collectionId":"jandibat_b
 		}
 	}
 	got, err := scriptChecker(script, filepath.Join(recordDir, "verified.json"), getenv)(context.Background())
-	if err != nil || got.ChainID != "chain_1" {
+	if err != nil || got.ChainID != "2026.09.25-110000.00" || got.BackupPath != "2026/09/25-110000.00" {
 		t.Fatalf("private temporary directory not available to checker: %v", err)
 	}
 }

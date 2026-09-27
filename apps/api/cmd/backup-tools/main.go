@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -27,6 +28,8 @@ const (
 	scheduleScriptPath = "/workspace/scripts/db-observe-backup-schedule.sh"
 	maxChainResult     = 4096
 )
+
+var backupPathPattern = regexp.MustCompile(`^[0-9]{4}/[0-9]{2}/[0-9]{2}-[0-9]{6}\.[0-9]{2}$`)
 
 func main() {
 	if run() != nil {
@@ -287,7 +290,7 @@ func parseChainResult(data []byte) (backup.CheckResult, error) {
 			return bad, errors.New("invalid chain check result")
 		}
 		switch key {
-		case "schemaVersion", "chainId", "collectionId", "checkedAt", "recoveryTimestamp", "fileChecked", "passed":
+		case "schemaVersion", "chainId", "collectionId", "checkedAt", "recoveryTimestamp", "fileChecked", "passed", "backupPath":
 		default:
 			return bad, errors.New("invalid chain check result")
 		}
@@ -300,7 +303,7 @@ func parseChainResult(data []byte) (backup.CheckResult, error) {
 		}
 		fields[key] = value
 	}
-	if len(fields) != 7 {
+	if len(fields) != 8 {
 		return bad, errors.New("invalid chain check result")
 	}
 	if tok, err = d.Token(); err != nil || tok != json.Delim('}') {
@@ -310,16 +313,18 @@ func parseChainResult(data []byte) (backup.CheckResult, error) {
 		return bad, errors.New("invalid chain check result")
 	}
 	var version int
-	var chainID, collectionID, timestamp, checkedAt string
+	var chainID, collectionID, backupPath, timestamp, checkedAt string
 	var checked, passed bool
-	if json.Unmarshal(fields["schemaVersion"], &version) != nil || version != 1 ||
+	if json.Unmarshal(fields["schemaVersion"], &version) != nil || version != 2 ||
 		json.Unmarshal(fields["chainId"], &chainID) != nil ||
 		json.Unmarshal(fields["collectionId"], &collectionID) != nil ||
+		json.Unmarshal(fields["backupPath"], &backupPath) != nil ||
 		json.Unmarshal(fields["checkedAt"], &checkedAt) != nil ||
 		json.Unmarshal(fields["recoveryTimestamp"], &timestamp) != nil ||
 		json.Unmarshal(fields["fileChecked"], &checked) != nil ||
 		json.Unmarshal(fields["passed"], &passed) != nil || !checked || !passed ||
-		!safeEvidenceID(chainID) || !safeEvidenceID(collectionID) ||
+		!safeEvidenceID(chainID) || collectionID != "jandibat_backup_v1" ||
+		!validBackupPath(backupPath) || chainID != strings.ReplaceAll(backupPath, "/", ".") ||
 		!strings.HasSuffix(timestamp, "Z") || !strings.HasSuffix(checkedAt, "Z") {
 		return bad, errors.New("invalid chain check result")
 	}
@@ -328,11 +333,19 @@ func parseChainResult(data []byte) (backup.CheckResult, error) {
 		return bad, errors.New("invalid chain check result")
 	}
 	checkTime, err := time.Parse(time.RFC3339Nano, checkedAt)
-	if err != nil || checkTime.IsZero() || recovery.After(checkTime) {
+	if err != nil || checkTime.IsZero() || recovery.After(checkTime) || checkTime.After(time.Now().UTC()) {
 		return bad, errors.New("invalid chain check result")
 	}
 	return backup.CheckResult{ChainID: chainID, CollectionID: collectionID,
-		RecoveryTimestamp: recovery, CheckedAt: checkTime, FileChecked: true, Passed: true}, nil
+		BackupPath: backupPath, RecoveryTimestamp: recovery, CheckedAt: checkTime, FileChecked: true, Passed: true}, nil
+}
+
+func validBackupPath(path string) bool {
+	if !backupPathPattern.MatchString(path) {
+		return false
+	}
+	date, err := time.Parse("2006/01/02-150405.00", path)
+	return err == nil && date.Format("2006/01/02-150405.00") == path
 }
 
 func safeEvidenceID(id string) bool {

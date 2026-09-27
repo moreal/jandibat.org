@@ -28,6 +28,7 @@ func TestVerificationRequiresFileCheckedEvidenceWithoutScheduleProvenance(t *tes
 		t.Fatal(err)
 	}
 	valid := checkedResult("chain_1", "jandibat_backup_v1", now.Add(-time.Minute), now)
+	valid.BackupPath = "2026/09/25-120000.00"
 	for _, mutate := range []func(*CheckResult){
 		func(r *CheckResult) { r.FileChecked = false },
 		func(r *CheckResult) { r.CheckedAt = now.Add(-16 * time.Minute) },
@@ -46,8 +47,8 @@ func TestVerificationRequiresFileCheckedEvidenceWithoutScheduleProvenance(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(data), `"linkedScheduleIds"`) {
-		t.Fatal("schedule status leaked into recovery evidence")
+	if strings.Contains(string(data), `"linkedScheduleIds"`) || strings.Contains(string(data), "backupPath") || strings.Contains(string(data), valid.BackupPath) {
+		t.Fatal("schedule status or backup path leaked into durable recovery evidence")
 	}
 	for _, field := range []string{`"collectionId":"jandibat_backup_v1"`, `"chainId":"chain_1"`, `"checkedAt":"2026-09-25T12:00:00Z"`, `"verifiedRecoveryAt":"2026-09-25T11:59:00Z"`, `"outcome":"pass"`} {
 		if !strings.Contains(string(data), field) {

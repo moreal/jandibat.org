@@ -445,6 +445,8 @@ esac
 
 for (const [missing, stage] of [
   ['complete', null],
+  ['cleanup', 'scratch-cleanup'],
+  ['trust-and-cleanup', 'scratch-cleanup'],
   ['rpmdb', 'rpmdb-inventory'],
   ['trust', 'trust-inventory'],
   ['scan', 'scan-evidence'],
@@ -458,6 +460,7 @@ for (const [missing, stage] of [
 ]) {
   const label = { scan: 'scanner exit without finding', 'db-status': 'Grype database status failure',
     'tool-versions': 'tool version failure', complete: 'synthetic shared-image dossier',
+    cleanup: 'scratch cleanup failure after validation', 'trust-and-cleanup': 'scratch cleanup failure with pending trust rejection',
     identity: 'invalid dossier identity', 'donor-license': 'missing donor license',
     'elf-closure': 'invalid ELF dependency name', ownership: 'unaccounted package owner',
     'empty-version': 'empty collected tool version' }[missing] ?? `missing ${missing} evidence`;
@@ -477,18 +480,30 @@ for (const [missing, stage] of [
       if (missing !== 'donor-license') files.push([join(donor, 'cockroach/licenses/LICENSE'), 'donor license']);
       if (missing === 'elf-closure') files.push([join(runtime, 'usr/lib64/notso'), 'invalid ELF dependency fixture']);
       if (missing !== 'rpmdb') files.push([join(runtime, 'usr/lib/sysimage/rpm/rpmdb.sqlite'), 'rpmdb']);
-      if (missing !== 'trust') files.push([join(runtime, 'etc/ssl/certs/ca-certificates.crt'), 'trust']);
+      if (missing !== 'trust' && missing !== 'trust-and-cleanup') files.push([join(runtime, 'etc/ssl/certs/ca-certificates.crt'), 'trust']);
       for (const [path, bytes] of files) {
         mkdirSync(join(path, '..'), { recursive: true });
         writeFileSync(path, bytes);
       }
       const preload = join(dir, 'preload.cjs');
-      writeFileSync(preload, pinnedLinuxPreload(missing === 'identity' ? `const originalKeys = Object.keys;
+      const cleanupInjected = missing === 'cleanup' || missing === 'trust-and-cleanup';
+      const preloadExtra = missing === 'identity' ? `const originalKeys = Object.keys;
 Object.keys = function (value) {
   const keys = originalKeys(value);
   return value && value.schema === 1 && value.runtime && value.donor && value.packages && value.status === 'candidate'
     ? [...keys, 'unexpected-field'] : keys;
-};` : ''));
+};` : cleanupInjected ? `const fs = require('node:fs');
+const { tmpdir } = require('node:os');
+const originalRm = fs.rmSync;
+fs.rmSync = function (path, options) {
+  if (String(path).startsWith(tmpdir() + '/jandibat-runtime-probe-')) {
+    originalRm.call(this, path, options);
+    fs.writeFileSync(process.env.PROBE_CLEANUP_TRACE, '1');
+    throw new Error('SENSITIVE-MARKER');
+  }
+  return originalRm.call(this, path, options);
+};` : '';
+      writeFileSync(preload, pinnedLinuxPreload(preloadExtra));
       const bin = join(dir, 'bin');
       mkdirSync(bin);
       const fakeTool = `#!/bin/sh
@@ -544,12 +559,13 @@ esac
       }
       const path = join(dir, 'candidate.json');
       const copyTrace = join(dir, 'copies');
+      const cleanupTrace = join(dir, 'cleanup-called');
       writeFileSync(path, JSON.stringify(evidence()));
       const result = spawnSync('sh', [script, path], {
         cwd: root, encoding: 'utf8',
         env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, NODE_OPTIONS: `--require=${preload}`,
           PROBE_FIXTURE_RUNTIME: runtime, PROBE_FIXTURE_DONOR: donor,
-          PROBE_COPY_TRACE: copyTrace,
+          PROBE_COPY_TRACE: copyTrace, PROBE_CLEANUP_TRACE: cleanupTrace,
           PROBE_FAIL_SCAN: missing === 'scan' ? '1' : '0',
           PROBE_FAIL_DB_STATUS: missing === 'db-status' ? '1' : '0',
           PROBE_FAIL_VERSION: missing === 'tool-versions' ? '1' : '0',
@@ -559,6 +575,7 @@ esac
       });
       assert.deepEqual(readFileSync(copyTrace, 'utf8').trim().split('\n'),
         [`docker://cockroachdb/cockroach@${digest}`, `docker://cockroachdb/cockroach@${digest}`]);
+      if (cleanupInjected) assert.equal(readFileSync(cleanupTrace, 'utf8'), '1');
       if (missing === 'complete') {
         assert.equal(result.status, 0, result.stderr);
         const dossier = JSON.parse(readFileSync(path, 'utf8'));

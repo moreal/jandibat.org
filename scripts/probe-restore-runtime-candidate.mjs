@@ -16,7 +16,7 @@ const probeStages = Object.freeze({
   donorRawFetch: 'donor-raw-fetch', donorManifestParse: 'donor-manifest-parse',
   donorPinCheck: 'donor-pin-check', donorChildSelection: 'donor-amd64-child',
   donorFallbackInspect: 'donor-fallback-inspect',
-  scratchAllocation: 'scratch-allocation',
+  scratchAllocation: 'scratch-allocation', scratchCleanup: 'scratch-cleanup',
   runtimeUnpack: 'runtime-unpack', donorUnpack: 'donor-unpack', runtimeSbom: 'runtime-sbom',
   baseScan: 'base-scan', vendorInspection: 'vendor-inspection',
   osRelease: 'os-release', packageCatalog: 'package-catalog', rpmdbInventory: 'rpmdb-inventory',
@@ -370,7 +370,13 @@ function probe() {
     inspectionStage = probeStages.dossierIdentity;
     validate(evidence, sourceSha, stage => { inspectionStage = stage; });
     return evidence;
-  } finally { rmSync(scratch, { recursive: true, force: true }); }
+  } finally {
+    try { rmSync(scratch, { recursive: true, force: true }); }
+    catch {
+      inspectionStage = probeStages.scratchCleanup;
+      throw new Error('scratch cleanup failed');
+    }
+  }
 }
 
 if (process.argv[2] === '--inspect-donor-licenses') {

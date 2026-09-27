@@ -86,6 +86,8 @@ jobs:
         run: nix develop --command make db-runtime-roles-test
       - name: Validate backup fixture isolation and negative-test wiring
         run: nix develop --command node --test scripts/test-db-backup-roles-secure-fixture.test.mjs
+      - name: Verify opaque synthetic S3 TCP observer
+        run: nix develop --command make synthetic-s3-tcp-observer-test
       - name: Reject malformed backup account metadata and input
         run: nix develop --command make db-backup-metadata-test
       - name: Verify backup connection state machine and secret output boundary

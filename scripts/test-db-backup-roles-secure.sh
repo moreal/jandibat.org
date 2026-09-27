@@ -13,7 +13,7 @@ ci_phase=setup
 annotate_failure() {
  [ "${GITHUB_ACTIONS:-}" = true ] || return 0
  case "$ci_phase" in
-  setup|cockroach-image|certificate-generation|host-node-key|ca-certificate-copy|pkcs12-creation|log-config-validation|s3proxy-startup|db-start|role-and-connection-checks|cleanup) ;;
+  setup|cockroach-image|certificate-generation|host-node-key|ca-certificate-copy|pkcs12-creation|log-config-validation|s3proxy-startup|db-start|tcp-observer-startup|role-and-connection-checks|cleanup) ;;
   *) ci_phase=setup ;;
  esac
  printf '::error title=Secure backup fixture failure::phase=%s\n' "$ci_phase" >&2
@@ -31,8 +31,31 @@ fixture_id=$(basename "$fixture_dir")
 db="jandibat-backup-db-$fixture_id"
 db_creation_attempted=false
 s3proxy_pid=
+tcp_observer_pid=
 audit_expected=false
 fail() { echo "RED: $1 (details redacted)" >&2; exit 1; }
+tcp_read_count() {
+ awk 'NR==1 && /^[0-9]+$/ && length($0)<=12 { count=$0; good=1; next }
+      { good=0 }
+      END { if (NR!=1 || !good) exit 1; print count }' "$tcp_counter" 2>/dev/null
+}
+tcp_observer_live() {
+ [ -n "${tcp_observer_pid:-}" ] && kill -0 "$tcp_observer_pid" >/dev/null 2>&1
+}
+tcp_connection_state() {
+ tcp_connection=inspection-unavailable
+ case "$tcp_baseline" in ''|*[!0-9]*) return 0 ;; esac
+ [ "${#tcp_baseline}" -le 12 ] || return 0
+ tcp_observer_live || return 0
+ tcp_after=$(tcp_read_count) || return 0
+ tcp_observer_live || return 0
+ [ "$tcp_after" -ge "$tcp_baseline" ] || return 0
+ if [ "$tcp_after" -gt "$tcp_baseline" ]; then
+  tcp_connection=observed
+ else
+  tcp_connection=not-observed
+ fi
+}
 diagnose_custom_s3_create() {
  capture=$1
  fixture_has_sentinel "$capture" 2>/dev/null && scan_result=0 || scan_result=$?
@@ -62,6 +85,8 @@ diagnose_custom_s3_create() {
  if [ "$root_result" = success ] && [ "$drop_result" != success ]; then
   fail 'custom S3 CREATE root diagnostic DROP incomplete'
  fi
+ # Snapshot before mc HEAD: the latter itself opens a TCP connection.
+ tcp_connection_state
  validation_object_state "$fixture_dir/validation-stat-after" 'custom S3 CREATE diagnostic'
  case "$validation_state" in
   present) validation_write=observed ;;
@@ -106,7 +131,7 @@ diagnose_custom_s3_create() {
  match_category storage 'NoSuchBucket|SignatureDoesNotMatch|InvalidAccessKeyId|AccessDenied|InvalidBucketName|S3 API error'
  match_category transport-client 'dial tcp|connection refused|connection reset|timed out|i/o timeout|network is unreachable|no such host'
  [ "$matched" -le 1 ] || category=unknown
- fail "custom S3 CREATE probe capture=$capture_state root=$root_result validation-write=$validation_write category=$category SQLSTATE=$code"
+ fail "custom S3 CREATE probe capture=$capture_state root=$root_result tcp-connect=$tcp_connection validation-write=$validation_write category=$category SQLSTATE=$code"
 }
 validation_object_state() {
  validation_capture=$1
@@ -168,7 +193,13 @@ cleanup() {
    status=1
   fi
  fi
+ if [ -n "$tcp_observer_pid" ]; then kill "$tcp_observer_pid" >/dev/null 2>&1 || :; wait "$tcp_observer_pid" >/dev/null 2>&1 || :; fi
  if [ -n "$s3proxy_pid" ]; then kill "$s3proxy_pid" >/dev/null 2>&1 || :; wait "$s3proxy_pid" >/dev/null 2>&1 || :; fi
+ if [ -n "$tcp_observer_pid" ] && [ ! -f "$fixture_dir/tcp-observer-output" ]; then
+  echo 'RED: TCP observer output unavailable (details redacted)' >&2
+  status=1
+ fi
+ if [ -f "$fixture_dir/tcp-observer-output" ]; then scan_capture "$fixture_dir/tcp-observer-output" 'TCP observer output'; fi
  if [ -n "$s3proxy_pid" ] && [ ! -f "$fixture_dir/s3proxy-output" ]; then
   echo 'RED: synthetic storage log unavailable (details redacted)' >&2
   status=1
@@ -179,7 +210,7 @@ cleanup() {
    "$fixture_dir"/roles "$fixture_dir"/system-grants "$fixture_dir"/db-grants \
    "$fixture_dir"/bootstrap-output "$fixture_dir"/privilege-probe "$fixture_dir"/root-diagnostic-create \
    "$fixture_dir"/root-diagnostic-drop "$fixture_dir"/validation-stat-before \
-   "$fixture_dir"/validation-stat-after "$fixture_dir"/privilege-check \
+   "$fixture_dir"/validation-stat-after "$fixture_dir"/tcp-counter "$fixture_dir"/privilege-check \
    "$fixture_dir"/privilege-drop "$fixture_dir"/first-run "$fixture_dir"/second-run \
    "$fixture_dir"/check "$fixture_dir"/verify-output "$fixture_dir"/connection-grants \
    "$fixture_dir"/count "$fixture_dir"/identity-* "$fixture_dir"/negative-* \
@@ -281,7 +312,7 @@ fixture_write_env
 
 {
  printf 's3proxy.authorization=aws-v2-or-v4\n'
- printf 's3proxy.secure-endpoint=https://127.0.0.1:9009\n'
+ printf 's3proxy.secure-endpoint=https://127.0.0.1:9010\n'
  printf 's3proxy.identity=%s\ns3proxy.credential=%s\n' "$synthetic_access" "$synthetic_secret"
  printf 's3proxy.keystore-path=%s\ns3proxy.keystore-password=%s\n' "$fixture_dir/s3proxy.p12" "$keystore_password"
  printf 'jclouds.provider=filesystem\njclouds.filesystem.basedir=%s\n' "$fixture_dir/s3-data"
@@ -300,7 +331,21 @@ docker run -d --name "$db" --network host \
  --entrypoint /cockroach/cockroach "$cockroach_image" start-single-node \
  --certs-dir=/certs --log-config-file=/fixture-logging/cockroach-backup-logging.yaml \
  --listen-addr=127.0.0.1:26259 --http-addr=127.0.0.1:8089 >/dev/null 2>&1 || fail 'DB start'
-ci_phase=role-and-connection-checks
+ci_phase='tcp-observer-startup'
+echo 'PHASE: TCP observer startup' >&2
+tcp_counter="$fixture_dir/tcp-counter"
+node scripts/fixtures/synthetic-s3-tcp-observer.mjs "$tcp_counter" 9009 9010 \
+ >"$fixture_dir/tcp-observer-output" 2>&1 &
+tcp_observer_pid=$!
+tcp_ready=false
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+ if [ -f "$fixture_dir/tcp-observer-output" ] &&
+  [ "$(cat "$fixture_dir/tcp-observer-output" 2>/dev/null)" = READY ]; then tcp_ready=true; break; fi
+ kill -0 "$tcp_observer_pid" >/dev/null 2>&1 || break
+ sleep 1
+done
+if [ "$tcp_ready" != true ] || ! tcp_read_count >/dev/null; then fail 'TCP observer startup'; fi
+ci_phase='role-and-connection-checks'
 
 client() { fixture_client "$@"; }
 sql_as() {
@@ -415,6 +460,7 @@ sql_as root "SELECT count(*) FROM [SHOW EXTERNAL CONNECTIONS] WHERE connection_n
 probe_uri="s3://disposable-backup/fixture-only?AWS_ACCESS_KEY_ID=$synthetic_access&AWS_SECRET_ACCESS_KEY=$synthetic_secret&AWS_ENDPOINT=https%3A%2F%2F127.0.0.1%3A9009&AWS_REGION=us-east-1&AWS_USE_PATH_STYLE=true"
 validation_object='fixture/disposable-backup/fixture-only/crdb_external_storage_location'
 assert_validation_object_absent
+tcp_baseline=$(tcp_read_count) || fail 'TCP observer baseline unavailable'
 if ! sql_as bootstrap "CREATE EXTERNAL CONNECTION jandibat_privilege_probe AS '$probe_uri';" \
  >"$fixture_dir/privilege-probe" 2>&1; then
  diagnose_custom_s3_create "$fixture_dir/privilege-probe"

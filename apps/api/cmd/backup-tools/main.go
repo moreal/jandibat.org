@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -127,8 +128,21 @@ func runMode(ctx context.Context, args []string, getenv func(string) string, che
 		IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 	serverErrors := make(chan error, 1)
 	go func() { serverErrors <- server.Serve(listener) }()
-	go state.RunChecks(ctx, checker)
-	go schedule.RunChecks(ctx, scheduleChecker)
+	checksCtx, stopChecks := context.WithCancel(ctx)
+	var checks sync.WaitGroup
+	checks.Add(2)
+	go func() {
+		defer checks.Done()
+		state.RunChecks(checksCtx, checker)
+	}()
+	go func() {
+		defer checks.Done()
+		schedule.RunChecks(checksCtx, scheduleChecker)
+	}()
+	defer func() {
+		stopChecks()
+		checks.Wait()
+	}()
 	select {
 	case err := <-serverErrors:
 		if errors.Is(err, http.ErrServerClosed) {

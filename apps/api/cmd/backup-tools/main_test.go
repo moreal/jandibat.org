@@ -226,6 +226,62 @@ func TestRunVerifierServesMetricsDuringFailedCheck(t *testing.T) {
 	}
 }
 
+func TestRunVerifierWaitsForInFlightCheckBeforeReturning(t *testing.T) {
+	dir := t.TempDir()
+	tokenFile := filepath.Join(dir, "token")
+	if err := os.WriteFile(tokenFile, []byte(fixtureToken), 0600); err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{
+		"BACKUP_VERIFIED_RECORD_FILE": filepath.Join(dir, "verified.json"),
+		"BACKUP_METRICS_TOKEN_FILE":   tokenFile,
+		"BACKUP_METRICS_LISTEN_ADDR":  "127.0.0.1:0",
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- runMode(ctx, []string{"run-verifier"}, func(k string) string { return env[k] },
+			func(context.Context) (backup.CheckResult, error) {
+				close(started)
+				<-release
+				return backup.CheckResult{}, errors.New("failed check")
+			},
+			func(context.Context) (backup.ScheduleCheckResult, error) {
+				return backup.ScheduleCheckResult{}, errors.New("failed schedule")
+			}, listener, io.Discard)
+	}()
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("checker did not start")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		close(release)
+		t.Fatalf("verifier returned while check was still running: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("verifier did not stop after check completed")
+	}
+}
+
 func TestRunVerifierRefusesUnsafeConfiguration(t *testing.T) {
 	for _, addr := range []string{"", ":8080", "0.0.0.0:8080", "example.org:8080"} {
 		env := map[string]string{"BACKUP_METRICS_LISTEN_ADDR": addr, "BACKUP_METRICS_TOKEN_FILE": "/missing"}

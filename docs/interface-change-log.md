@@ -3,6 +3,28 @@
 API 계약 변경 시 이 파일과 GraphQL SDL(도메인) 또는 `openapi/jandibat.yaml`(HTTP edge)을 같은 변경에 포함합니다.
 각 항목에는 날짜, 호환성, 영향받는 operation/schema, 백엔드·프론트엔드 후속 작업을 기록합니다.
 
+## 2026-09-27 — 파일 검사 체인 경로를 내부 checker 결과에 포함
+
+호환성: 내부 백업 checker의 성공 JSON을 `schemaVersion: 2`로 올리고
+`backupPath`를 추가하는 버전 변경입니다. 공개 GraphQL 도메인 API와 OpenAPI HTTP
+edge 계약은 바뀌지 않습니다.
+
+- 성공 결과는 기존 `chainId`, 고정 `collectionId`, `checkedAt`,
+  `recoveryTimestamp`, `fileChecked: true`, `passed: true`와 새 `backupPath`를
+  포함한 정확히 8개 필드의 한 줄 JSON입니다. `backupPath`는 실제
+  `SHOW BACKUP FROM ... WITH check_files`에 사용한 경로에서 맨 앞의 선택적
+  슬래시 하나만 제거한 `YYYY/MM/DD-HHMMSS.xx` 형식입니다. `chainId`도 바로
+  그 경로에서 유도합니다. 성공 시각과 고정 컬렉션 ID의 의미는 그대로입니다.
+- checker는 경로 목록에서 검증한 최신 항목을 그대로 SQL에 전달합니다.
+  RESTORE 시 `LATEST`를 재조회해 다른 체인을 선택하지 않도록 Backend 소비자는
+  v2 결과의 `backupPath`를 저장하고 동일한 검사 결과와 묶어 사용해야 합니다.
+  잘못된 경로·중복 체인·파일 검사 실패에는 성공 JSON이 없으며 원문 SQL 오류,
+  DSN, 저장소 URI는 출력하지 않습니다.
+- Backend 후속 작업: v2 JSON의 정확한 필드와 경로 형식을 검증하고,
+  RESTORE가 승인된 `backupPath`를 사용하도록 연결합니다. Coordination은
+  checker와 fixture를 소유합니다. 이 로컬 계약만으로 실제 secure x86_64/S3
+  복원이나 운영 RPO를 증명하지 않습니다.
+
 ## 2026-09-26 — 파일 검사 기반 복구 시각과 스케줄 신호 분리
 
 호환성: 내부 백업 checker의 성공 JSON을 7개 필드로 축소하는 변경입니다. 공개

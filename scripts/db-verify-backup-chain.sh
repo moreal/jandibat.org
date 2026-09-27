@@ -42,8 +42,11 @@ awk '
  !header {if ($0!="path") bad=1; header=1; next}
  {
   path=$0
-  if (path !~ /^\/?[0-9][0-9][0-9][0-9]\/[0-9][0-9]\/[0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]\.[0-9][0-9]$/ || seen[path]++) bad=1
-  if (path>latest) latest=path
+  if (path !~ /^\/?[0-9][0-9][0-9][0-9]\/[0-9][0-9]\/[0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]\.[0-9][0-9]$/) bad=1
+  canonical=path
+  sub(/^\//,"",canonical)
+  if (seen[canonical]++) bad=1
+  if (canonical>latest_key) {latest_key=canonical; latest=path}
  }
  END {if (bad || !header || latest=="") exit 1; print latest}
 ' "$capture_dir/stdout" >"$capture_dir/path" || invalid
@@ -83,7 +86,8 @@ awk -F '\t' '
  }
 ' "$capture_dir/stdout" >"$capture_dir/recovery" || invalid
 recovery=$(sed -n '1p' "$capture_dir/recovery")
-chain_id=$(printf '%s' "$path" | sed 's@^/@@; s@/@.@g')
+backup_path=${path#/}
+chain_id=$(printf '%s' "$backup_path" | tr / .)
 case "$chain_id" in ''|*[!A-Za-z0-9_.-]*) invalid;; esac
 [ "${#chain_id}" -le 128 ] || invalid
 
@@ -115,4 +119,4 @@ awk -v checked="$checked" -v recovery="$recovery" '
  BEGIN {exit key(checked)<key(recovery)}
 ' || invalid
 
-printf '{"schemaVersion":1,"chainId":"%s","collectionId":"jandibat_backup_v1","checkedAt":"%s","recoveryTimestamp":"%s","fileChecked":true,"passed":true}\n' "$chain_id" "$checked" "$recovery"
+printf '{"schemaVersion":2,"chainId":"%s","collectionId":"jandibat_backup_v1","checkedAt":"%s","recoveryTimestamp":"%s","fileChecked":true,"passed":true,"backupPath":"%s"}\n' "$chain_id" "$checked" "$recovery" "$backup_path"

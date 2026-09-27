@@ -42,6 +42,26 @@ diagnose_custom_s3_create() {
   fail 'custom S3 CREATE diagnostic inspection unavailable'
  fi
  [ -f "$capture" ] || fail 'custom S3 CREATE diagnostic inspection unavailable'
+ root_capture="$fixture_dir/root-diagnostic-create"
+ if sql_as root "CREATE EXTERNAL CONNECTION jandibat_root_diagnostic AS '$probe_uri';" \
+  >"$root_capture" 2>&1; then root_result=success; else root_result=failure; fi
+ fixture_has_sentinel "$root_capture" 2>/dev/null && root_scan=0 || root_scan=$?
+ drop_scan=1
+ if [ "$root_result" = success ]; then
+  root_drop_capture="$fixture_dir/root-diagnostic-drop"
+  if sql_as root 'DROP EXTERNAL CONNECTION jandibat_root_diagnostic;' \
+   >"$root_drop_capture" 2>&1; then drop_result=success; else drop_result=failure; fi
+  fixture_has_sentinel "$root_drop_capture" 2>/dev/null && drop_scan=0 || drop_scan=$?
+ fi
+ if [ "$root_scan" -eq 0 ] || [ "$drop_scan" -eq 0 ]; then
+  fail 'custom S3 CREATE diagnostic exposed synthetic credential'
+ fi
+ if [ "$root_scan" -ne 1 ] || [ "$drop_scan" -ne 1 ]; then
+  fail 'custom S3 CREATE diagnostic inspection unavailable'
+ fi
+ if [ "$root_result" = success ] && [ "$drop_result" != success ]; then
+  fail 'custom S3 CREATE root diagnostic DROP incomplete'
+ fi
  if [ -s "$capture" ]; then capture_state=nonempty; else capture_state=empty; fi
  code=$(awk '
   {
@@ -79,7 +99,7 @@ diagnose_custom_s3_create() {
  match_category storage 'NoSuchBucket|SignatureDoesNotMatch|InvalidAccessKeyId|AccessDenied|InvalidBucketName|S3 API error'
  match_category transport-client 'dial tcp|connection refused|connection reset|timed out|i/o timeout|network is unreachable|no such host'
  [ "$matched" -le 1 ] || category=unknown
- fail "custom S3 CREATE probe capture=$capture_state category=$category SQLSTATE=$code"
+ fail "custom S3 CREATE probe capture=$capture_state root=$root_result category=$category SQLSTATE=$code"
 }
 scan_capture() {
  target=$1
@@ -117,7 +137,8 @@ cleanup() {
  if [ -n "${synthetic_secret:-}" ]; then
   for output in "$fixture_dir"/mc-output "$fixture_dir"/probe "$fixture_dir"/users \
    "$fixture_dir"/roles "$fixture_dir"/system-grants "$fixture_dir"/db-grants \
-   "$fixture_dir"/bootstrap-output "$fixture_dir"/privilege-probe "$fixture_dir"/privilege-check \
+   "$fixture_dir"/bootstrap-output "$fixture_dir"/privilege-probe "$fixture_dir"/root-diagnostic-create \
+   "$fixture_dir"/root-diagnostic-drop "$fixture_dir"/privilege-check \
    "$fixture_dir"/privilege-drop "$fixture_dir"/first-run "$fixture_dir"/second-run \
    "$fixture_dir"/check "$fixture_dir"/verify-output "$fixture_dir"/connection-grants \
    "$fixture_dir"/count "$fixture_dir"/identity-* "$fixture_dir"/negative-* \
@@ -349,7 +370,7 @@ sql_as root "SELECT count(*) FROM [SHOW EXTERNAL CONNECTIONS] WHERE connection_n
 
 # Probe custom-endpoint CREATE under the non-root identity independently of
 # the application wrapper. SQL and errors stay in private fixture files; the
-# Only a validated SQLSTATE and fixed category may leave the private capture.
+# Only a validated SQLSTATE, fixed category and root result may leave private captures.
 probe_uri="s3://disposable-backup/fixture-only?AWS_ACCESS_KEY_ID=$synthetic_access&AWS_SECRET_ACCESS_KEY=$synthetic_secret&AWS_ENDPOINT=https%3A%2F%2F127.0.0.1%3A9009&AWS_REGION=us-east-1&AWS_USE_PATH_STYLE=true"
 if ! sql_as bootstrap "CREATE EXTERNAL CONNECTION jandibat_privilege_probe AS '$probe_uri';" \
  >"$fixture_dir/privilege-probe" 2>&1; then

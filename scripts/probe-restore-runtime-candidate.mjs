@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, constants, existsSync, fchmodSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readlinkSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir, type as osType } from 'node:os';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -19,8 +19,8 @@ const probeStages = Object.freeze({
   scratchAllocation: 'scratch-allocation', scratchCleanup: 'scratch-cleanup',
   runtimeUnpack: 'runtime-unpack', donorUnpack: 'donor-unpack', runtimeSbom: 'runtime-sbom',
   baseScan: 'base-scan', vendorInspection: 'vendor-inspection',
-  osRelease: 'os-release', packageCatalog: 'package-catalog', rpmdbInventory: 'rpmdb-inventory',
-  trustInventory: 'trust-inventory', baseLicenseInventory: 'base-license-inventory',
+  osRelease: 'os-release', packageCatalog: 'package-catalog', apkdbInventory: 'apkdb-inventory',
+  trustInventory: 'trust-inventory',
   appletInventory: 'applet-inventory', scanEvidence: 'scan-evidence', toolVersions: 'tool-versions',
   dossierIdentity: 'dossier-identity', donorNativeLicense: 'donor-native-license',
   elfClosure: 'elf-closure', packageOwnership: 'package-ownership',
@@ -56,18 +56,35 @@ function pathsUnder(directory, prefix = '') {
 }
 
 function containedFile(rootfs, path) {
-  let target = resolve(rootfs, `.${path}`);
-  for (let i = 0; i < 16; i++) {
-    if (!target.startsWith(`${rootfs}/`)) throw new Error('path escaped inspected root');
-    const stat = lstatSync(target);
-    if (!stat.isSymbolicLink()) {
-      if (!stat.isFile()) throw new Error('inspected path is not a file');
-      return target;
+  if (!absolute(path)) throw new Error('invalid inspected path');
+  const base = resolve(rootfs);
+  let pending = path.slice(1).split('/');
+  let parts = [];
+  let links = 0;
+  while (pending.length) {
+    const segment = pending.shift();
+    if (segment === '' || segment === '.') continue;
+    if (segment === '..') {
+      if (!parts.length) throw new Error('path escaped inspected root');
+      parts.pop();
+      continue;
     }
-    const link = readlinkSync(target);
-    target = link.startsWith('/') ? resolve(rootfs, `.${link}`) : resolve(dirname(target), link);
+    const target = join(base, ...parts, segment);
+    const stat = lstatSync(target);
+    if (stat.isSymbolicLink()) {
+      if (++links > 32) throw new Error('symlink depth exceeded');
+      const link = readlinkSync(target);
+      if (link.startsWith('/')) parts = [];
+      pending = [...link.split('/'), ...pending];
+    } else {
+      if (pending.length && !stat.isDirectory()) throw new Error('inspected path parent is not a directory');
+      parts.push(segment);
+      if (!pending.length && !stat.isFile()) throw new Error('inspected path is not a file');
+    }
   }
-  throw new Error('symlink depth exceeded');
+  const target = join(base, ...parts);
+  if (!lstatSync(target).isFile()) throw new Error('inspected path is not a file');
+  return target;
 }
 
 function regular(rootfs, path) {
@@ -91,6 +108,85 @@ function parseOsRelease(rootfs) {
   const lines = readFileSync(path, 'utf8').split('\n');
   const fields = Object.fromEntries(lines.map(line => line.match(/^([A-Z_]+)="?([^"\n]*)"?$/)).filter(Boolean).map(match => [match[1], match[2]]));
   return { ID: fields.ID, VERSION_ID: fields.VERSION_ID };
+}
+
+const apkDbPath = '/usr/lib/apk/db/installed';
+const apkDbMaxBytes = 16 * 1024 * 1024;
+const apkFieldMax = 8192;
+const apkPackageMax = 4096;
+const apkOwnedMax = 200000;
+const apkName = /^[A-Za-z0-9][A-Za-z0-9._+~-]{0,127}$/;
+const apkVersion = /^[A-Za-z0-9][A-Za-z0-9._+~:-]{0,159}$/;
+const apkLicense = /^[A-Za-z0-9][A-Za-z0-9 ._+~:()\/-]{0,511}$/;
+const apkPathPart = /^[A-Za-z0-9._+@=,-]+$/;
+
+function apkOwnedPath(directory, file) {
+  const segments = [...(directory ? directory.split('/') : []), file];
+  required(segments.length && segments.every(part => part !== '.' && part !== '..' && apkPathPart.test(part)), 'APK ownership path');
+  return `/${segments.join('/')}`;
+}
+
+function parseApkInstalled(rootfs) {
+  const dbFile = containedFile(rootfs, apkDbPath);
+  const dbStat = lstatSync(dbFile);
+  required(dbStat.size > 0 && dbStat.size <= apkDbMaxBytes, 'APK database size');
+  const bytes = readFileSync(dbFile);
+  assert.ok(bytes.length > 0 && bytes.length <= apkDbMaxBytes && !bytes.includes(0), 'APK database bytes');
+  const source = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  const packages = [];
+  const ownership = [];
+  const names = new Set();
+  const paths = new Set();
+  let record = [];
+  const finish = () => {
+    if (!record.length) return;
+    const fields = new Map();
+    let directory;
+    let owned = 0;
+    for (const line of record) {
+      const match = line.match(/^([A-Za-z]):(.*)$/);
+      required(match && line.length <= apkFieldMax, 'APK field');
+      const [, key, value] = match;
+      if (['P', 'V', 'L'].includes(key)) {
+        required(!fields.has(key), 'duplicate APK identity field');
+        fields.set(key, value);
+      } else if (key === 'F') {
+        required(value && value.split('/').every(part => part !== '.' && part !== '..' && apkPathPart.test(part)), 'APK directory');
+        directory = value;
+      } else if (key === 'R') {
+        required(fields.has('P') && directory !== undefined && apkPathPart.test(value) && value !== '.' && value !== '..', 'APK filename');
+        const path = apkOwnedPath(directory, value);
+        required(!paths.has(path), 'duplicate APK owned path');
+        containedFile(rootfs, path);
+        paths.add(path);
+        ownership.push({ path, package: fields.get('P') });
+        owned++;
+        required(ownership.length <= apkOwnedMax, 'APK owned-file bound');
+      }
+    }
+    const name = fields.get('P');
+    const version = fields.get('V');
+    const license = fields.get('L');
+    required(apkName.test(name ?? '') && apkVersion.test(version ?? ''), 'APK package identity');
+    required(apkLicense.test(license ?? '') && !/^(?:unknown|noassertion|none|unspecified)$/i.test(license), 'APK license declaration');
+    required(owned > 0 && ownership.slice(-owned).every(item => item.package === name), 'APK file owner');
+    required(!names.has(name), 'duplicate APK package');
+    names.add(name);
+    packages.push({ name, version, license });
+    required(packages.length <= apkPackageMax, 'APK package bound');
+    record = [];
+  };
+  for (const line of source.split('\n')) {
+    if (line === '') finish();
+    else { required(line.length <= apkFieldMax && !line.includes('\r'), 'APK line'); record.push(line); }
+  }
+  finish();
+  required(packages.length, 'APK package inventory');
+  return { packageDb: hashPath(rootfs, apkDbPath), packages, ownership };
+}
+
+function canonicalRootPath(rootfs, path) {
+  return `/${relative(resolve(rootfs), containedFile(rootfs, path)).split(sep).join('/')}`;
 }
 
 function imageRepository(source) {
@@ -186,14 +282,13 @@ function elf(rootfs, path, executable = false) {
   return { interpreter, needed };
 }
 
-function owner(rootfs, path) {
-  const result = command('rpm', ['--root', rootfs, '-qf', '--qf', '%{NAME}', path], { allowFailure: true });
-  return result.status === 0 ? result.stdout.trim() : '';
-}
-
-function inventory(rootfs, directories) {
-  return directories.flatMap(dir => pathsUnder(join(rootfs, dir), `/${dir}`))
-    .filter(path => regular(rootfs, path)).map(path => hashPath(rootfs, path));
+function apkOwner(rootfs, ownership, path) {
+  const target = canonicalRootPath(rootfs, path);
+  const direct = ownership.find(item => item.path === target);
+  required(direct, 'direct APK owner for canonical bytes');
+  const alias = ownership.find(item => item.path === path);
+  required(!alias || alias.package === direct.package, 'matching APK symlink alias owner');
+  return { path, resolvedPath: target, package: direct.package };
 }
 
 function isDonorLicensePath(path) {
@@ -210,8 +305,9 @@ function donorLicenseInventory(rootfs, files) {
 
 function validate(evidence, sourceSha, setStage = () => {}) {
   setStage(probeStages.dossierIdentity);
-  assert.deepEqual(Object.keys(evidence).sort(), ['applets', 'baseLicenses', 'donor', 'ownership', 'packages', 'rpmdb', 'runtime', 'scan', 'schema', 'sourceSha', 'status', 'toolVersions', 'trust']);
-  assert.equal(evidence.schema, 1);
+  assert.deepEqual(Object.keys(evidence).sort(), ['applets', 'baseDependencies', 'donor', 'licenseDeclarations', 'ownership', 'packageDb', 'packageManager', 'packages', 'runtime', 'scan', 'schema', 'sourceSha', 'status', 'toolVersions', 'trust']);
+  assert.equal(evidence.schema, 2);
+  assert.equal(evidence.packageManager, 'apk');
   assert.equal(evidence.sourceSha, sourceSha);
   assert.ok(['candidate', 'rejected'].includes(evidence.status));
   assert.equal(evidence.runtime.source, runtimeSource);
@@ -266,28 +362,64 @@ function validate(evidence, sourceSha, setStage = () => {}) {
     for (const name of entry.needed) required(/^[A-Za-z0-9._+-]+\.so(\.[A-Za-z0-9._+-]+)?$/.test(name), 'ELF dependency name');
   }
   setStage(probeStages.packageCatalog);
-  required(evidence.packages?.length, 'RPM package inventory');
-  const rpmNames = new Set();
+  required(evidence.packages?.length, 'APK package inventory');
+  const packageNames = new Set();
+  const syftIdentities = new Set();
   for (const pkg of evidence.packages) {
-    assert.equal(pkg.type, 'rpm');
-    required(pkg.name && pkg.version, 'RPM package identity');
-    rpmNames.add(pkg.name);
+    assert.deepEqual(Object.keys(pkg).sort(), ['name', 'type', 'version']);
+    assert.equal(pkg.type, 'apk');
+    required(apkName.test(pkg.name ?? '') && apkVersion.test(pkg.version ?? ''), 'Syft APK package identity');
+    required(!packageNames.has(pkg.name), 'duplicate Syft APK package');
+    packageNames.add(pkg.name);
+    syftIdentities.add(`${pkg.name}\u0000${pkg.version}`);
   }
-  for (const key of ['rpmdb', 'trust', 'baseLicenses']) {
-    setStage({ rpmdb: probeStages.rpmdbInventory, trust: probeStages.trustInventory,
-      baseLicenses: probeStages.baseLicenseInventory }[key]);
-    required(evidence[key]?.length, key);
-    for (const item of evidence[key]) required(absolute(item.path) && hex(item.sha256), `${key} path/hash`);
+  setStage(probeStages.apkdbInventory);
+  assert.deepEqual(Object.keys(evidence.packageDb ?? {}).sort(), ['path', 'sha256']);
+  assert.equal(evidence.packageDb.path, apkDbPath);
+  required(hex(evidence.packageDb.sha256), 'APK database hash');
+  required(Array.isArray(evidence.licenseDeclarations) && evidence.licenseDeclarations.length === evidence.packages.length, 'APK license declarations');
+  const declarations = new Set();
+  for (const item of evidence.licenseDeclarations) {
+    assert.deepEqual(Object.keys(item).sort(), ['license', 'name', 'version']);
+    required(apkName.test(item.name ?? '') && apkVersion.test(item.version ?? ''), 'APK database package identity');
+    required(apkLicense.test(item.license ?? '') && !/^(?:unknown|noassertion|none|unspecified)$/i.test(item.license), 'APK license declaration');
+    const identity = `${item.name}\u0000${item.version}`;
+    required(!declarations.has(identity), 'duplicate APK database package');
+    declarations.add(identity);
   }
-  setStage(probeStages.rpmdbInventory);
-  required(evidence.rpmdb.some(item => /\/(rpmdb\.sqlite|Packages)$/.test(item.path)), 'RPM database file');
+  setStage(probeStages.packageCatalog);
+  assert.deepEqual([...syftIdentities].sort(), [...declarations].sort(), 'Syft APK catalog differs from installed database');
+  setStage(probeStages.trustInventory);
+  required(evidence.trust?.length, 'base trust');
+  for (const item of evidence.trust) required(absolute(item.path) && hex(item.sha256), 'trust path/hash');
   setStage(probeStages.packageOwnership);
+  required(Array.isArray(evidence.ownership) && evidence.ownership.length, 'APK owned files');
+  const ownedPaths = new Set();
+  for (const item of evidence.ownership) {
+    assert.deepEqual(Object.keys(item).sort(), ['package', 'path']);
+    required(absolute(item.path) && packageNames.has(item.package), 'APK owned path');
+    required(!ownedPaths.has(item.path), 'duplicate APK owned path');
+    ownedPaths.add(item.path);
+  }
   const baseNeeded = evidence.donor.elfClosure.flatMap(item => item.needed)
     .filter(name => !evidence.donor.nativeFiles.some(item => item.path.endsWith(`/${name}`)));
-  for (const path of [evidence.donor.interpreter, ...baseNeeded.map(name => evidence.ownership.find(item => item.path.endsWith(`/${name}`))?.path)]) {
-    const ownership = evidence.ownership.find(item => item.path === path);
-    required(ownership && rpmNames.has(ownership.package), `package owner for ${path}`);
+  required(Array.isArray(evidence.baseDependencies) && evidence.baseDependencies.length === 1 + new Set(baseNeeded).size, 'base ELF dependencies');
+  const requiredNames = new Set(baseNeeded);
+  const dependencyPaths = new Set();
+  for (const dependency of evidence.baseDependencies) {
+    assert.deepEqual(Object.keys(dependency).sort(), ['package', 'path', 'resolvedPath']);
+    required(absolute(dependency.path) && absolute(dependency.resolvedPath), 'base dependency path');
+    required(!dependencyPaths.has(dependency.path), 'duplicate base dependency');
+    dependencyPaths.add(dependency.path);
+    required(packageNames.has(dependency.package) && evidence.ownership.some(item =>
+      item.path === dependency.resolvedPath && item.package === dependency.package), 'APK-owned base dependency');
+    if (dependency.path !== evidence.donor.interpreter) {
+      const name = dependency.path.split('/').at(-1);
+      required(requiredNames.has(name), 'unexpected base library');
+      requiredNames.delete(name);
+    }
   }
+  required(dependencyPaths.has(evidence.donor.interpreter) && requiredNames.size === 0, 'loader and base libraries');
   setStage(probeStages.appletInventory);
   assert.equal(evidence.applets.bootstrapSourceSha256, bootstrapSourceSha256);
   assert.deepEqual(evidence.applets.names, applets, 'frozen BusyBox applets');
@@ -304,7 +436,7 @@ function validate(evidence, sourceSha, setStage = () => {}) {
     required(typeof match.fixState === 'string', 'fix state');
   }
   setStage(probeStages.toolVersionValidation);
-  assert.deepEqual(Object.keys(evidence.toolVersions ?? {}).sort(), ['grype', 'readelf', 'rpm', 'skopeo', 'syft', 'umoci']);
+  assert.deepEqual(Object.keys(evidence.toolVersions ?? {}).sort(), ['grype', 'readelf', 'skopeo', 'syft', 'umoci']);
   for (const value of Object.values(evidence.toolVersions)) required(typeof value === 'string' && value.length > 0 && value.length < 160, 'tool version');
   setStage(probeStages.dossierStatus);
   if (evidence.scan.matches.some(match => ['High', 'Critical'].includes(match.severity))) assert.equal(evidence.status, 'rejected');
@@ -357,11 +489,17 @@ function probe() {
     const nativePaths = ['/cockroach/cockroach', ...vendorElfPaths.filter(path => path !== '/cockroach/cockroach')];
     const elfClosure = nativePaths.map(path => ({ path, needed: path === '/cockroach/cockroach' ? donorElf.needed : elf(donorRoot, path).needed }));
     const nativeFiles = nativePaths.map(path => hashPath(donorRoot, path));
+    inspectionStage = probeStages.elfClosure;
+    for (const entry of elfClosure) for (const name of entry.needed)
+      required(/^[A-Za-z0-9._+-]+\.so(\.[A-Za-z0-9._+-]+)?$/.test(name), 'ELF dependency name');
     const baseNeeded = [...new Set(elfClosure.flatMap(item => item.needed)
       .filter(name => !nativePaths.some(path => path.endsWith(`/${name}`))))];
     const basePaths = [donorElf.interpreter, ...baseNeeded.map(name => runtimeFiles.find(path => path.endsWith(`/${name}`)))];
     required(basePaths.every(Boolean), 'base native dependency');
-    const ownership = basePaths.map(path => ({ path, package: owner(runtimeRoot, path) }));
+    inspectionStage = probeStages.apkdbInventory;
+    const apk = parseApkInstalled(runtimeRoot);
+    inspectionStage = probeStages.packageOwnership;
+    const baseDependencies = basePaths.map(path => apkOwner(runtimeRoot, apk.ownership, path));
     const donorLicenses = donorLicenseInventory(donorRoot, donorFiles);
     const licensePaths = donorLicenses.map(item => item.path);
     const nativeDecisions = vendorPaths.map(path => ({ ...hashPath(donorRoot, path),
@@ -372,19 +510,15 @@ function probe() {
     const dbStatus = command('grype', ['db', 'status']).stdout;
     const databaseBuilt = dbStatus.match(/^Built:\s*(\S+)/m)?.[1] ?? '';
     inspectionStage = probeStages.toolVersions;
-    const toolVersions = Object.fromEntries(['skopeo', 'syft', 'grype', 'umoci', 'readelf', 'rpm']
+    const toolVersions = Object.fromEntries(['skopeo', 'syft', 'grype', 'umoci', 'readelf']
       .map(name => [name, command(name, ['--version']).stdout.trim().split('\n')[0].slice(0, 159)]));
     inspectionStage = probeStages.osRelease;
     const osRelease = parseOsRelease(runtimeRoot);
     inspectionStage = probeStages.packageCatalog;
-    const packages = catalog.artifacts.filter(pkg => pkg.type === 'rpm').map(pkg => ({ name: pkg.name, version: pkg.version, type: 'rpm' }));
-    inspectionStage = probeStages.rpmdbInventory;
-    const rpmdb = inventory(runtimeRoot, ['usr/lib/sysimage/rpm', 'var/lib/rpm']);
+    const packages = catalog.artifacts.filter(pkg => pkg.type === 'apk').map(pkg => ({ name: pkg.name, version: pkg.version, type: 'apk' }));
     inspectionStage = probeStages.trustInventory;
     const trust = ['/etc/ssl/certs/ca-certificates.crt', '/etc/pki/tls/certs/ca-bundle.crt', '/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem']
       .filter(path => regular(runtimeRoot, path)).map(path => hashPath(runtimeRoot, path));
-    inspectionStage = probeStages.baseLicenseInventory;
-    const baseLicenses = inventory(runtimeRoot, ['usr/share/licenses']);
     inspectionStage = probeStages.appletInventory;
     const appletEvidence = { bootstrapSourceSha256, names: applets };
     inspectionStage = probeStages.scanEvidence;
@@ -394,11 +528,13 @@ function probe() {
       databaseBuilt };
     inspectionStage = probeStages.dossierIdentity;
     const evidence = {
-      schema: 1, sourceSha, status: 'candidate',
+      schema: 2, sourceSha, status: 'candidate', packageManager: 'apk',
       runtime: { source: runtimeSource, ...runtime, os: 'linux', architecture: 'amd64', osRelease },
       donor: { source: donorSource, amd64Digest: donor.amd64Digest, ...donorElf, elfClosure, nativeFiles, nativeDecisions,
         licenses: donorLicenses },
-      packages, rpmdb, ownership, trust, baseLicenses, applets: appletEvidence, scan: scanEvidence, toolVersions,
+      packages, packageDb: apk.packageDb, licenseDeclarations: apk.packages,
+      ownership: apk.ownership, baseDependencies, trust,
+      applets: appletEvidence, scan: scanEvidence, toolVersions,
     };
     inspectionStage = probeStages.scanEvidence;
     const hasBlockingFinding = evidence.scan.matches.some(match => ['High', 'Critical'].includes(match.severity));
@@ -436,6 +572,24 @@ if (process.argv[2] === '--inspect-donor-licenses') {
     process.stderr.write('restore runtime probe rejected: invalid evidence\n');
     process.exitCode = 1;
   }
+} else if (process.argv[2] === '--inspect-apk-db') {
+  try {
+    assert.equal(process.argv.length, 4);
+    process.stdout.write(JSON.stringify(parseApkInstalled(resolve(process.argv[3]))) + '\n');
+  } catch {
+    process.stderr.write('restore runtime probe rejected: invalid APK inventory\n');
+    process.exitCode = 1;
+  }
+} else if (process.argv[2] === '--inspect-apk-owner') {
+  try {
+    assert.equal(process.argv.length, 5);
+    const rootfs = resolve(process.argv[3]);
+    const apk = parseApkInstalled(rootfs);
+    process.stdout.write(JSON.stringify(apkOwner(rootfs, apk.ownership, process.argv[4])) + '\n');
+  } catch {
+    process.stderr.write('restore runtime probe rejected: invalid APK owner\n');
+    process.exitCode = 1;
+  }
 } else {
   try {
     assert.equal(process.argv.length, 3);
@@ -446,7 +600,7 @@ if (process.argv[2] === '--inspect-donor-licenses') {
     if (process.argv.length === 3) {
       try {
         const sourceSha = command('git', ['rev-parse', 'HEAD']).stdout.trim();
-        atomicEvidence(process.argv[2], { schema: 1, sourceSha, status: 'rejected', phase: 'inspection',
+        atomicEvidence(process.argv[2], { schema: 2, sourceSha, status: 'rejected', phase: 'inspection',
           ...(Object.values(probeStages).includes(inspectionStage) ? { stage: inspectionStage } : {}),
           ...(inspectionStage === probeStages.scratchCleanup && cleanupFailure ? { cleanupFailure } : {}),
           ...(resolvedRuntime && resolvedRuntime.source === runtimeSource &&

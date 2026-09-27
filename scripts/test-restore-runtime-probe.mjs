@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -56,7 +56,7 @@ syncBuiltinESMExports();
 
 function evidence() {
   return {
-    schema: 1, sourceSha, status: 'candidate',
+    schema: 2, sourceSha, status: 'candidate', packageManager: 'apk',
     runtime: { source: candidateSource, indexDigest: runtimeIndexDigest,
       amd64Digest: digest, os: 'linux', architecture: 'amd64',
       osRelease: { ID: 'rhel', VERSION_ID: '10.0' } },
@@ -77,16 +77,20 @@ function evidence() {
         { path: '/cockroach/licenses/LICENSE', sha256: 'd'.repeat(64), decision: 'exclude', reason: 'license-copied-separately' },
       ],
       licenses: [{ path: '/cockroach/licenses/LICENSE', sha256: 'd'.repeat(64) }] },
-    packages: [{ name: 'glibc', version: '2.39', type: 'rpm' }],
-    rpmdb: [{ path: '/usr/lib/sysimage/rpm/rpmdb.sqlite', sha256: 'e'.repeat(64) }],
+    packages: [{ name: 'glibc', version: '2.44-r0', type: 'apk' }],
+    packageDb: { path: '/usr/lib/apk/db/installed', sha256: 'e'.repeat(64) },
+    licenseDeclarations: [{ name: 'glibc', version: '2.44-r0', license: 'LGPL-2.1-or-later' }],
     ownership: [{ path: '/lib64/ld-linux-x86-64.so.2', package: 'glibc' },
       { path: '/usr/lib64/libc.so.6', package: 'glibc' }],
+    baseDependencies: [
+      { path: '/lib64/ld-linux-x86-64.so.2', resolvedPath: '/lib64/ld-linux-x86-64.so.2', package: 'glibc' },
+      { path: '/usr/lib64/libc.so.6', resolvedPath: '/usr/lib64/libc.so.6', package: 'glibc' },
+    ],
     trust: [{ path: '/etc/pki/tls/certs/ca-bundle.crt', sha256: 'f'.repeat(64) }],
-    baseLicenses: [{ path: '/usr/share/licenses/glibc/LICENSES', sha256: '1'.repeat(64) }],
     applets: { bootstrapSourceSha256: bootstrapDigest,
       names: ['awk', 'chmod', 'cp', 'mktemp', 'rm', 'sed', 'sha256sum', 'sh', 'tail', 'tr'] },
     scan: { tool: 'grype', failOn: 'high', matches: [], databaseBuilt: '2026-09-26T00:00:00Z' },
-    toolVersions: { skopeo: '1.24', syft: '1.0', grype: '1.0', umoci: '0.4', readelf: '2.42', rpm: '4.19' },
+    toolVersions: { skopeo: '1.24', syft: '1.0', grype: '1.0', umoci: '0.4', readelf: '2.42' },
   };
 }
 
@@ -100,6 +104,97 @@ function validate(value) {
     rmSync(dir, { recursive: true, force: true });
   }
 }
+
+const apkDb = `P:glibc\nV:2.44-r0\nL:LGPL-2.1-or-later\nF:usr/lib\nR:libc.so.6\n\nP:ld-linux\nV:2.44-r0\nL:LGPL-2.1-or-later\nF:usr/lib\nR:ld-linux-x86-64.so.2\n`;
+
+function inspectApk(database = apkDb, options = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'jandibat-apk-test-'));
+  try {
+    const db = join(dir, 'usr/lib/apk/db/installed');
+    mkdirSync(join(db, '..'), { recursive: true });
+    if (database !== null) writeFileSync(db, database);
+    for (const path of ['usr/lib/libc.so.6', 'usr/lib/ld-linux-x86-64.so.2']) {
+      const file = join(dir, path);
+      mkdirSync(join(file, '..'), { recursive: true });
+      writeFileSync(file, path);
+    }
+    if (options.symlink) symlinkSync(options.symlink, join(dir, 'usr/lib/ld-linux-escape.so.2'));
+    const args = options.owner ? ['--inspect-apk-owner', dir, options.owner] : ['--inspect-apk-db', dir];
+    const result = spawnSync('sh', [script, ...args], { cwd: root, encoding: 'utf8' });
+    return { ...result, value: result.status === 0 ? JSON.parse(result.stdout) : null };
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
+test('APK installed DB yields exact hashed packages, licenses and owned paths', () => {
+  const result = inspectApk();
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.value.packageDb.path, '/usr/lib/apk/db/installed');
+  assert.equal(result.value.packageDb.sha256, createHash('sha256').update(apkDb).digest('hex'));
+  assert.deepEqual(result.value.packages, [
+    { name: 'glibc', version: '2.44-r0', license: 'LGPL-2.1-or-later' },
+    { name: 'ld-linux', version: '2.44-r0', license: 'LGPL-2.1-or-later' },
+  ]);
+  assert.deepEqual(result.value.ownership, [
+    { path: '/usr/lib/libc.so.6', package: 'glibc' },
+    { path: '/usr/lib/ld-linux-x86-64.so.2', package: 'ld-linux' },
+  ]);
+});
+
+for (const [label, db] of [
+  ['absent database', null], ['empty database', ''], ['oversized database', 'x'.repeat(16 * 1024 * 1024 + 1)],
+  ['malformed package name', apkDb.replace('P:glibc', 'P:../glibc')],
+  ['malformed version', apkDb.replace('V:2.44-r0', 'V:')],
+  ['missing license', apkDb.replace('L:LGPL-2.1-or-later\n', '')],
+  ['ambiguous license', apkDb.replace('L:LGPL-2.1-or-later', 'L:UNKNOWN')],
+  ['duplicate license', apkDb.replace('L:LGPL-2.1-or-later', 'L:MIT\nL:Apache-2.0')],
+  ['duplicate package identity', `${apkDb}\n${apkDb}`],
+  ['directory traversal', apkDb.replace('F:usr/lib', 'F:../../usr/lib')],
+  ['absolute ownership directory', apkDb.replace('F:usr/lib', 'F:/usr/lib')],
+  ['file traversal', apkDb.replace('R:libc.so.6', 'R:../libc.so.6')],
+  ['duplicate owned file', apkDb.replace('R:libc.so.6', 'R:libc.so.6\nR:libc.so.6')],
+  ['missing owned file', apkDb.replace('R:libc.so.6', 'R:missing.so')],
+]) {
+  test(`rejects APK ${label} without printing DB contents`, () => {
+    const result = inspectApk(db);
+    assert.notEqual(result.status, 0, `accepted ${label}`);
+    assert.doesNotMatch(result.stderr, /LGPL|glibc|password|SENSITIVE-MARKER/i);
+  });
+}
+
+test('rejects APK owned symlink escaping extracted root', () => {
+  const result = inspectApk(apkDb.replace('R:ld-linux-x86-64.so.2', 'R:ld-linux-escape.so.2'),
+    { symlink: '../../../../outside/SENSITIVE-MARKER' });
+  assert.notEqual(result.status, 0);
+  assert.doesNotMatch(result.stderr, /SENSITIVE-MARKER|outside/i);
+});
+
+test('rejects APK owned symlink resolving to a directory', () => {
+  const result = inspectApk(apkDb.replace('R:ld-linux-x86-64.so.2', 'R:ld-linux-escape.so.2'),
+    { symlink: '.' });
+  assert.notEqual(result.status, 0);
+});
+
+test('APK owner lookup accepts a symlink only when its canonical bytes have a direct package owner', () => {
+  const result = inspectApk(apkDb + 'R:ld-linux-escape.so.2\n',
+    { symlink: '/usr/lib/ld-linux-x86-64.so.2', owner: '/usr/lib/ld-linux-escape.so.2' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.value, { path: '/usr/lib/ld-linux-escape.so.2',
+    resolvedPath: '/usr/lib/ld-linux-x86-64.so.2', package: 'ld-linux' });
+});
+
+test('APK owner lookup rejects an owned symlink alias when canonical target bytes are unowned', () => {
+  const result = inspectApk(apkDb.replace('R:ld-linux-x86-64.so.2', 'R:ld-linux-escape.so.2'),
+    { symlink: '/usr/lib/ld-linux-x86-64.so.2', owner: '/usr/lib/ld-linux-escape.so.2' });
+  assert.notEqual(result.status, 0);
+  assert.doesNotMatch(result.stderr, /ld-linux|package|SENSITIVE-MARKER/i);
+});
+
+test('APK owner lookup rejects a symlink alias owned by a different package than target bytes', () => {
+  const database = apkDb.replace('\n\nP:ld-linux', '\nR:ld-linux-escape.so.2\n\nP:ld-linux');
+  const result = inspectApk(database,
+    { symlink: '/usr/lib/ld-linux-x86-64.so.2', owner: '/usr/lib/ld-linux-escape.so.2' });
+  assert.notEqual(result.status, 0);
+});
 
 test('accepts a complete candidate dossier', () => {
   const result = validate(evidence());
@@ -151,13 +246,17 @@ test('donor notice inventory hashes conventional root-level files and skips unre
 for (const [name, mutate] of [
   ['mutable-only runtime reference', e => { delete e.runtime.amd64Digest; }],
   ['non-amd64 runtime', e => { e.runtime.architecture = 'arm64'; }],
-  ['empty RPM catalog', e => { e.packages = []; }],
-  ['hidden RPM type', e => { e.packages[0].type = 'binary'; }],
+  ['empty APK catalog', e => { e.packages = []; }],
+  ['hidden APK type', e => { e.packages[0].type = 'binary'; }],
+  ['APK package name drift', e => { e.packages[0].name = 'other'; }],
+  ['APK package version drift', e => { e.packages[0].version = '2.45-r0'; }],
+  ['missing APK license', e => { e.licenseDeclarations = []; }],
+  ['ambiguous APK license', e => { e.licenseDeclarations[0].license = 'UNKNOWN'; }],
   ['missing loader owner', e => { e.ownership.shift(); }],
-  ['missing rpmdb', e => { e.rpmdb = []; }],
+  ['missing APK database', e => { delete e.packageDb; }],
   ['missing donor native files', e => { e.donor.nativeFiles = []; }],
   ['missing donor license', e => { e.donor.licenses = []; }],
-  ['missing base license', e => { e.baseLicenses = []; }],
+  ['old RPM schema', e => { e.schema = 1; }],
   ['missing trust', e => { e.trust = []; }],
   ['High finding', e => { e.scan.matches = [{ severity: 'High', id: 'CVE-TEST', package: 'glibc', fixState: 'unknown' }]; }],
   ['Critical finding', e => { e.scan.matches = [{ severity: 'Critical', id: 'CVE-TEST', package: 'glibc', fixState: 'unknown' }]; }],
@@ -203,7 +302,7 @@ test('unsupported host writes a sanitized rejected artifact without registry acc
     const result = spawnSync('sh', [script, path], { cwd: root, encoding: 'utf8' });
     assert.notEqual(result.status, 0);
     const rejected = JSON.parse(readFileSync(path, 'utf8'));
-    assert.deepEqual(rejected, { schema: 1, sourceSha, status: 'rejected', phase: 'inspection' });
+    assert.deepEqual(rejected, { schema: 2, sourceSha, status: 'rejected', phase: 'inspection' });
     assert.doesNotMatch(JSON.stringify(rejected) + result.stderr, /password|token|secret/i);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -219,7 +318,7 @@ test('failure replaces a stale candidate atomically', () => {
     const result = spawnSync('sh', [script, path], { cwd: root, encoding: 'utf8' });
     assert.notEqual(result.status, 0);
     assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')),
-      { schema: 1, sourceSha, status: 'rejected', phase: 'inspection' });
+      { schema: 2, sourceSha, status: 'rejected', phase: 'inspection' });
     assert.equal(readdirSync(dir).length, 1, 'temporary evidence file remains');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
@@ -253,7 +352,7 @@ test('early invalid runtime digest omits runtime metadata and raw diagnostics', 
     });
     assert.notEqual(result.status, 0);
     assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')),
-      { schema: 1, sourceSha, status: 'rejected', phase: 'inspection', stage: 'runtime-index' });
+      { schema: 2, sourceSha, status: 'rejected', phase: 'inspection', stage: 'runtime-index' });
     assert.doesNotMatch(result.stderr + readFileSync(path, 'utf8'), /SENSITIVE-MARKER|password/i);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
@@ -277,7 +376,7 @@ test('early malformed runtime JSON atomically replaces stale evidence without le
     assert.notEqual(result.status, 0);
     const rejected = readFileSync(path, 'utf8');
     assert.deepEqual(JSON.parse(rejected),
-      { schema: 1, sourceSha, status: 'rejected', phase: 'inspection', stage: 'runtime-index' });
+      { schema: 2, sourceSha, status: 'rejected', phase: 'inspection', stage: 'runtime-index' });
     assert.deepEqual(readdirSync(dir).sort(), ['bin', 'candidate.json', 'platform.cjs']);
     assert.doesNotMatch(result.stdout + result.stderr + rejected, /SENSITIVE-MARKER|password|SyntaxError/i);
   } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -314,7 +413,7 @@ esac
     assert.notEqual(result.status, 0);
     assert.equal(readFileSync(trace, 'utf8').trim(), donorSkopeoRef);
     assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')),
-      { schema: 1, sourceSha, status: 'rejected', phase: 'inspection', stage: 'donor-manifest-parse', runtime: runtimeMetadata });
+      { schema: 2, sourceSha, status: 'rejected', phase: 'inspection', stage: 'donor-manifest-parse', runtime: runtimeMetadata });
     assert.doesNotMatch(result.stdout + result.stderr + readFileSync(path, 'utf8'), /SENSITIVE-MARKER|password/i);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
@@ -348,7 +447,7 @@ esac
       });
       assert.notEqual(result.status, 0);
       assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')),
-        { schema: 1, sourceSha, status: 'rejected', phase: 'inspection', stage, runtime: runtimeMetadata });
+        { schema: 2, sourceSha, status: 'rejected', phase: 'inspection', stage, runtime: runtimeMetadata });
       assert.doesNotMatch(result.stdout + result.stderr + readFileSync(path, 'utf8'), /SENSITIVE-MARKER/i);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
@@ -396,7 +495,7 @@ esac
       assert.deepEqual(readFileSync(trace, 'utf8').trim().split('\n'),
         Array(requestCount).fill(donorSkopeoRef));
       assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')),
-        { schema: 1, sourceSha, status: 'rejected', phase: 'inspection', stage, runtime: runtimeMetadata });
+        { schema: 2, sourceSha, status: 'rejected', phase: 'inspection', stage, runtime: runtimeMetadata });
       assert.doesNotMatch(result.stdout + result.stderr + readFileSync(path, 'utf8'), /SENSITIVE-MARKER|password/i);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
@@ -437,7 +536,7 @@ esac
     assert.notEqual(result.status, 0);
     assert.equal(readFileSync(scratchReached, 'utf8'), '1', 'probe did not reach scratch allocation');
     assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')),
-      { schema: 1, sourceSha, status: 'rejected', phase: 'inspection', stage: 'scratch-allocation', runtime: runtimeMetadata });
+      { schema: 2, sourceSha, status: 'rejected', phase: 'inspection', stage: 'scratch-allocation', runtime: runtimeMetadata });
     assert.doesNotMatch(result.stdout + result.stderr + readFileSync(path, 'utf8'), /SENSITIVE-MARKER/i);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
@@ -451,7 +550,10 @@ for (const [missing, stage] of [
   ['repair-chmod-fails', 'scratch-cleanup'],
   ['repair-retry-fails', 'scratch-cleanup'],
   ['cleanup-nonpermission', 'scratch-cleanup'],
-  ['rpmdb', 'rpmdb-inventory'],
+  ['apkdb', 'apkdb-inventory'],
+  ['empty-apk-catalog', 'package-catalog'],
+  ['syft-version-drift', 'package-catalog'],
+  ['loader-owner', 'package-ownership'],
   ['trust', 'trust-inventory'],
   ['scan', 'scan-evidence'],
   ['db-status', 'scan-evidence'],
@@ -491,7 +593,7 @@ for (const [missing, stage] of [
       ];
       if (missing !== 'donor-license') files.push([join(donor, 'cockroach/licenses/LICENSE'), 'donor license']);
       if (missing === 'elf-closure') files.push([join(runtime, 'usr/lib64/notso'), 'invalid ELF dependency fixture']);
-      if (missing !== 'rpmdb') files.push([join(runtime, 'usr/lib/sysimage/rpm/rpmdb.sqlite'), 'rpmdb']);
+      if (missing !== 'apkdb') files.push([join(runtime, 'usr/lib/apk/db/installed'), `P:glibc\nV:2.44-r0\nL:LGPL-2.1-or-later\nF:lib64\n${missing === 'loader-owner' ? '' : 'R:ld-linux-x86-64.so.2\n'}F:usr/lib64\n${missing === 'ownership' ? '' : 'R:libc.so.6\n'}`]);
       if (missing !== 'trust' && missing !== 'trust-and-cleanup') files.push([join(runtime, 'etc/ssl/certs/ca-certificates.crt'), 'trust']);
       for (const [path, bytes] of files) {
         mkdirSync(join(path, '..'), { recursive: true });
@@ -502,7 +604,7 @@ for (const [missing, stage] of [
       const preloadExtra = missing === 'identity' ? `const originalKeys = Object.keys;
 Object.keys = function (value) {
   const keys = originalKeys(value);
-  return value && value.schema === 1 && value.runtime && value.donor && value.packages && value.status === 'candidate'
+  return value && value.schema === 2 && value.runtime && value.donor && value.packages && value.status === 'candidate'
     ? [...keys, 'unexpected-field'] : keys;
 };` : missing === 'readonly-cleanup' ? `const fs = require('node:fs');
 const { tmpdir } = require('node:os');
@@ -584,7 +686,13 @@ case "$tool" in
     fi ;;
   syft)
     output=$(printf '%s' "$3" | cut -d= -f2-)
-    printf '%s\\n' '{"artifacts":[{"type":"rpm","name":"glibc","version":"2.39"}]}' > "$output" ;;
+    if [ "$PROBE_EMPTY_APK_CATALOG" = 1 ]; then
+      printf '%s\\n' '{"artifacts":[]}' > "$output"
+    elif [ "$PROBE_SYFT_VERSION_DRIFT" = 1 ]; then
+      printf '%s\\n' '{"artifacts":[{"type":"apk","name":"glibc","version":"2.45-r0"}]}' > "$output"
+    else
+      printf '%s\\n' '{"artifacts":[{"type":"apk","name":"glibc","version":"2.44-r0"}]}' > "$output"
+    fi ;;
   grype)
     if [ "$1" = db ]; then
       if [ "$PROBE_FAIL_DB_STATUS" = 1 ]; then printf '%s\\n' 'SENSITIVE-MARKER' >&2; exit 36; fi
@@ -601,10 +709,9 @@ case "$tool" in
         else printf '%s\\n' '(NEEDED) Shared library: [libc.so.6]'; fi ;;
       esac ;;
     esac ;;
-  rpm) if [ "$PROBE_BAD_OWNER" = 1 ]; then printf '%s' 'missing-package'; else printf '%s' 'glibc'; fi ;;
 esac
 `;
-      for (const name of ['skopeo', 'umoci', 'syft', 'grype', 'readelf', 'rpm']) {
+      for (const name of ['skopeo', 'umoci', 'syft', 'grype', 'readelf']) {
         const path = join(bin, name);
         writeFileSync(path, fakeTool);
         chmodSync(path, 0o755);
@@ -628,10 +735,11 @@ esac
             : missing === 'repair-retry-fails' ? 'retry' : 'nonpermission',
           PROBE_CLEANUP_CODE: missing === 'cleanup-unknown' ? 'SENSITIVE-MARKER' : 'EACCES',
           PROBE_FAIL_SCAN: missing === 'scan' ? '1' : '0',
+          PROBE_EMPTY_APK_CATALOG: missing === 'empty-apk-catalog' ? '1' : '0',
+          PROBE_SYFT_VERSION_DRIFT: missing === 'syft-version-drift' ? '1' : '0',
           PROBE_FAIL_DB_STATUS: missing === 'db-status' ? '1' : '0',
           PROBE_FAIL_VERSION: missing === 'tool-versions' ? '1' : '0',
           PROBE_EMPTY_VERSION: missing === 'empty-version' ? '1' : '0',
-          PROBE_BAD_OWNER: missing === 'ownership' ? '1' : '0',
           PROBE_BAD_ELF: missing === 'elf-closure' ? '1' : '0' },
       });
       assert.deepEqual(readFileSync(copyTrace, 'utf8').trim().split('\n'),
@@ -650,12 +758,14 @@ esac
         assert.equal(dossier.runtime.amd64Digest, digest);
         assert.equal(dossier.donor.amd64Digest, donorChildDigest);
         assert.notEqual(dossier.runtime.amd64Digest, dossier.donor.amd64Digest);
-        assert.ok(dossier.rpmdb.length && dossier.trust.length && dossier.donor.nativeFiles.length);
+        assert.equal(dossier.packageManager, 'apk');
+        assert.equal(dossier.packageDb.path, '/usr/lib/apk/db/installed');
+        assert.ok(dossier.licenseDeclarations.length && dossier.trust.length && dossier.donor.nativeFiles.length);
         if (missing === 'readonly-cleanup') assert.equal(readFileSync(outsideSentinel, 'utf8'), 'outside untouched\n');
       } else {
         assert.notEqual(result.status, 0);
         assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')),
-          { schema: 1, sourceSha, status: 'rejected', phase: 'inspection', stage, runtime: runtimeMetadata,
+          { schema: 2, sourceSha, status: 'rejected', phase: 'inspection', stage, runtime: runtimeMetadata,
             ...(cleanupInjected || repairInjected ? { cleanupFailure: missing === 'cleanup-unknown' || missing === 'repair-chmod-fails' || missing === 'cleanup-nonpermission'
               ? 'unknown' : missing === 'repair-retry-fails' ? 'busy' : 'permission-denied' } : {}) });
       }

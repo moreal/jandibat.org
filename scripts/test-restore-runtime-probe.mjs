@@ -219,6 +219,31 @@ test('early invalid runtime digest omits runtime metadata and raw diagnostics', 
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('early malformed runtime JSON atomically replaces stale evidence without leaking diagnostics', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'jandibat-probe-malformed-runtime-'));
+  try {
+    const bin = join(dir, 'bin');
+    mkdirSync(bin);
+    const platform = join(dir, 'platform.cjs');
+    writeFileSync(platform, "Object.defineProperty(process, 'platform', {value:'linux'}); Object.defineProperty(process, 'arch', {value:'x64'});\n");
+    const skopeo = join(bin, 'skopeo');
+    writeFileSync(skopeo, '#!/bin/sh\nprintf \'{"password":"SENSITIVE-MARKER"\'\n');
+    chmodSync(skopeo, 0o755);
+    const path = join(dir, 'candidate.json');
+    writeFileSync(path, JSON.stringify(evidence()));
+    const result = spawnSync('sh', [script, path], {
+      cwd: root, encoding: 'utf8',
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, NODE_OPTIONS: `--require=${platform}` },
+    });
+    assert.notEqual(result.status, 0);
+    const rejected = readFileSync(path, 'utf8');
+    assert.deepEqual(JSON.parse(rejected),
+      { schema: 1, sourceSha, status: 'rejected', phase: 'inspection', stage: 'runtime-index' });
+    assert.deepEqual(readdirSync(dir).sort(), ['bin', 'candidate.json', 'platform.cjs']);
+    assert.doesNotMatch(result.stdout + result.stderr + rejected, /SENSITIVE-MARKER|password|SyntaxError/i);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('donor raw inspection uses a digest-only reference before parsing tool output', () => {
   const dir = mkdtempSync(join(tmpdir(), 'jandibat-probe-donor-tool-'));
   try {

@@ -13,6 +13,7 @@ const bootstrapSourceSha256 = '6ef912d18d9f40e46546ffcf5777cecf93405b3f5f4dcde60
 const applets = ['awk', 'chmod', 'cp', 'mktemp', 'rm', 'sed', 'sha256sum', 'sh', 'tail', 'tr'];
 const probeStages = Object.freeze({
   bootstrap: 'bootstrap-source', runtimeIndex: 'runtime-index', donorIndex: 'donor-index',
+  scratchAllocation: 'scratch-allocation',
   runtimeUnpack: 'runtime-unpack', donorUnpack: 'donor-unpack', runtimeSbom: 'runtime-sbom',
   baseScan: 'base-scan', vendorInspection: 'vendor-inspection', evidence: 'evidence-assembly',
 });
@@ -243,6 +244,7 @@ function probe() {
   const runtime = resolveImage(runtimeSource, true);
   inspectionStage = probeStages.donorIndex;
   const donor = resolveImage(donorSource, false);
+  inspectionStage = probeStages.scratchAllocation;
   const scratch = mkdtempSync(join(tmpdir(), 'jandibat-runtime-probe-'));
   try {
     inspectionStage = probeStages.runtimeUnpack;

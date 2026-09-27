@@ -244,3 +244,64 @@ esac
     assert.doesNotMatch(result.stdout + result.stderr + readFileSync(path, 'utf8'), /SENSITIVE-MARKER|password/i);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('scratch allocation failure reports its own stage without leaking the exception', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'jandibat-probe-scratch-'));
+  try {
+    const bin = join(dir, 'bin');
+    mkdirSync(bin);
+    const preload = join(dir, 'preload.cjs');
+    writeFileSync(preload, `const fs = require('node:fs');
+const crypto = require('node:crypto');
+const { syncBuiltinESMExports } = require('node:module');
+Object.defineProperty(process, 'platform', { value: 'linux' });
+Object.defineProperty(process, 'arch', { value: 'x64' });
+const originalHash = crypto.createHash;
+crypto.createHash = function (...args) {
+  const hash = originalHash(...args);
+  const originalUpdate = hash.update;
+  const originalDigest = hash.digest;
+  let donorIndex = false;
+  hash.update = function (data, ...rest) {
+    donorIndex = String(data).includes('donor-test-index');
+    return originalUpdate.call(this, data, ...rest);
+  };
+  hash.digest = function (encoding) {
+    return donorIndex && encoding === 'hex' ? '${donorDigest.slice(7)}' : originalDigest.call(this, encoding);
+  };
+  return hash;
+};
+const originalMkdtemp = fs.mkdtempSync;
+fs.mkdtempSync = function (prefix, ...rest) {
+  if (prefix.includes('jandibat-runtime-probe-')) {
+    fs.writeFileSync(process.env.SCRATCH_REACHED_FILE, '1');
+    throw new Error('SENSITIVE-MARKER');
+  }
+  return originalMkdtemp.call(this, prefix, ...rest);
+};
+syncBuiltinESMExports();
+`);
+    const skopeo = join(bin, 'skopeo');
+    writeFileSync(skopeo, `#!/bin/sh
+case "$3" in
+  docker://registry.access.redhat.com/ubi10/ubi-micro)
+    printf '%s\\n' '{"manifests":[{"platform":{"os":"linux","architecture":"amd64"},"digest":"${digest}"}]}' ;;
+  *) printf '%s\\n' '{"donor-test-index":true,"manifests":[{"platform":{"os":"linux","architecture":"amd64"},"digest":"${digest}"}]}' ;;
+esac
+`);
+    chmodSync(skopeo, 0o755);
+    const path = join(dir, 'candidate.json');
+    const scratchReached = join(dir, 'scratch-reached');
+    writeFileSync(path, JSON.stringify(evidence()));
+    const result = spawnSync('sh', [script, path], {
+      cwd: root, encoding: 'utf8',
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, NODE_OPTIONS: `--require=${preload}`,
+        SCRATCH_REACHED_FILE: scratchReached },
+    });
+    assert.notEqual(result.status, 0);
+    assert.equal(readFileSync(scratchReached, 'utf8'), '1', 'probe did not reach scratch allocation');
+    assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')),
+      { schema: 1, sourceSha, status: 'rejected', phase: 'inspection', stage: 'scratch-allocation' });
+    assert.doesNotMatch(result.stdout + result.stderr + readFileSync(path, 'utf8'), /SENSITIVE-MARKER/i);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

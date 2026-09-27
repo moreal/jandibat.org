@@ -41,6 +41,8 @@ diagnose_custom_s3_create() {
  elif [ "$scan_result" -ne 1 ]; then
   fail 'custom S3 CREATE diagnostic inspection unavailable'
  fi
+ [ -f "$capture" ] || fail 'custom S3 CREATE diagnostic inspection unavailable'
+ if [ -s "$capture" ]; then capture_state=nonempty; else capture_state=empty; fi
  code=$(awk '
   {
    remaining = $0
@@ -52,20 +54,32 @@ diagnose_custom_s3_create() {
    }
   }
  ' "$capture" 2>/dev/null) || fail 'custom S3 CREATE diagnostic inspection unavailable'
+ matched=0
+ category=unknown
  if [ -n "$code" ]; then
+  matched=1
   category=sql
  else
   code=unavailable
-  grep -Eiq 'dial tcp|connection refused|connection reset|timed out|i/o timeout|tls handshake|x509:|certificate verify|network is unreachable' "$capture" 2>/dev/null && match_result=0 || match_result=$?
+ fi
+ match_category() {
+  label=$1
+  pattern=$2
+  grep -Eiq "$pattern" "$capture" 2>/dev/null && match_result=0 || match_result=$?
   if [ "$match_result" -eq 0 ]; then
-   category=transport-client
-  elif [ "$match_result" -eq 1 ]; then
-   category=unknown
-  else
+   matched=$((matched + 1))
+   category=$label
+  elif [ "$match_result" -ne 1 ]; then
    fail 'custom S3 CREATE diagnostic inspection unavailable'
   fi
- fi
- fail "custom S3 CREATE probe category=$category SQLSTATE=$code"
+ }
+ match_category client-launch 'docker: Error response from daemon|Cannot connect to the Docker daemon|OCI runtime create failed|executable file not found'
+ match_category uri 'invalid URL escape|invalid (URI|URL)|malformed (URI|URL)|unsupported (scheme|protocol)|unknown (query )?parameter'
+ match_category tls 'x509:|tls:|TLS handshake|certificate (signed by unknown authority|verification failed|verify failed|has expired|is not valid)'
+ match_category storage 'NoSuchBucket|SignatureDoesNotMatch|InvalidAccessKeyId|AccessDenied|InvalidBucketName|S3 API error'
+ match_category transport-client 'dial tcp|connection refused|connection reset|timed out|i/o timeout|network is unreachable|no such host'
+ [ "$matched" -le 1 ] || category=unknown
+ fail "custom S3 CREATE probe capture=$capture_state category=$category SQLSTATE=$code"
 }
 scan_capture() {
  target=$1

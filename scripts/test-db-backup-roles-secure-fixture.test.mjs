@@ -401,11 +401,19 @@ test('custom S3 CREATE failure reports only validated SQLSTATE and fixed categor
       });
     };
     for (const [output, expected] of [
-      ['ERROR: operation failed\nSQLSTATE: 57014\nprivate path /tmp/hidden\n', 'RED: custom S3 CREATE probe category=sql SQLSTATE=57014 (details redacted)\n'],
-      ['dial tcp: connection refused at private-host\n', 'RED: custom S3 CREATE probe category=transport-client SQLSTATE=unavailable (details redacted)\n'],
-      ['opaque client failure at private-host\n', 'RED: custom S3 CREATE probe category=unknown SQLSTATE=unavailable (details redacted)\n'],
-      ['SQLSTATE: 57014X private-host\n', 'RED: custom S3 CREATE probe category=unknown SQLSTATE=unavailable (details redacted)\n'],
-      ['SQLSTATE: 57014x private-host\n', 'RED: custom S3 CREATE probe category=unknown SQLSTATE=unavailable (details redacted)\n'],
+      ['', 'RED: custom S3 CREATE probe capture=empty category=unknown SQLSTATE=unavailable (details redacted)\n'],
+      ['ERROR: operation failed\nSQLSTATE: 57014\nprivate path /tmp/hidden\n', 'RED: custom S3 CREATE probe capture=nonempty category=sql SQLSTATE=57014 (details redacted)\n'],
+      ['docker: Error response from daemon: private path /tmp/hidden\n', 'RED: custom S3 CREATE probe capture=nonempty category=client-launch SQLSTATE=unavailable (details redacted)\n'],
+      ['invalid URL escape in s3://private-host/hidden\n', 'RED: custom S3 CREATE probe capture=nonempty category=uri SQLSTATE=unavailable (details redacted)\n'],
+      ['x509: certificate signed by unknown authority at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty category=tls SQLSTATE=unavailable (details redacted)\n'],
+      ['S3 API error: NoSuchBucket at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty category=storage SQLSTATE=unavailable (details redacted)\n'],
+      ['S3 API error: AccessDenied at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty category=storage SQLSTATE=unavailable (details redacted)\n'],
+      ['dial tcp: connection refused at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty category=transport-client SQLSTATE=unavailable (details redacted)\n'],
+      ['opaque client failure at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty category=unknown SQLSTATE=unavailable (details redacted)\n'],
+      ['x509: certificate error and NoSuchBucket at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty category=unknown SQLSTATE=unavailable (details redacted)\n'],
+      ['SQLSTATE: 57014 and x509: certificate error at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty category=unknown SQLSTATE=57014 (details redacted)\n'],
+      ['SQLSTATE: 57014X private-host\n', 'RED: custom S3 CREATE probe capture=nonempty category=unknown SQLSTATE=unavailable (details redacted)\n'],
+      ['SQLSTATE: 57014x private-host\n', 'RED: custom S3 CREATE probe capture=nonempty category=unknown SQLSTATE=unavailable (details redacted)\n'],
     ]) {
       const result = run(output);
       assert.equal(result.status, 1);
@@ -424,6 +432,13 @@ test('custom S3 CREATE failure reports only validated SQLSTATE and fixed categor
     assert.equal(inspectionFailure.status, 1);
     assert.equal(inspectionFailure.stderr, 'RED: custom S3 CREATE diagnostic inspection unavailable (details redacted)\n');
     assert.equal(inspectionFailure.stdout, '');
+    rmSync(join(dir, 'awk'));
+    writeFileSync(join(dir, 'grep'), '#!/bin/sh\ncase "$1" in -Eiq) echo "private diagnostic failure" >&2; exit 2;; esac\nexec /usr/bin/grep "$@"\n');
+    chmodSync(join(dir, 'grep'), 0o700);
+    const matcherFailure = run('opaque client failure\n', { PATH: `${dir}:${process.env.PATH}` });
+    assert.equal(matcherFailure.status, 1);
+    assert.equal(matcherFailure.stderr, 'RED: custom S3 CREATE diagnostic inspection unavailable (details redacted)\n');
+    assert.equal(matcherFailure.stdout, '');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

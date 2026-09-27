@@ -62,6 +62,13 @@ diagnose_custom_s3_create() {
  if [ "$root_result" = success ] && [ "$drop_result" != success ]; then
   fail 'custom S3 CREATE root diagnostic DROP incomplete'
  fi
+ validation_object_state "$fixture_dir/validation-stat-after" 'custom S3 CREATE diagnostic'
+ case "$validation_state" in
+  present) validation_write=observed ;;
+  absent) validation_write=not-observed ;;
+  unavailable) validation_write=inspection-unavailable ;;
+  *) fail 'custom S3 CREATE diagnostic inspection unavailable' ;;
+ esac
  if [ -s "$capture" ]; then capture_state=nonempty; else capture_state=empty; fi
  code=$(awk '
   {
@@ -99,7 +106,40 @@ diagnose_custom_s3_create() {
  match_category storage 'NoSuchBucket|SignatureDoesNotMatch|InvalidAccessKeyId|AccessDenied|InvalidBucketName|S3 API error'
  match_category transport-client 'dial tcp|connection refused|connection reset|timed out|i/o timeout|network is unreachable|no such host'
  [ "$matched" -le 1 ] || category=unknown
- fail "custom S3 CREATE probe capture=$capture_state root=$root_result category=$category SQLSTATE=$code"
+ fail "custom S3 CREATE probe capture=$capture_state root=$root_result validation-write=$validation_write category=$category SQLSTATE=$code"
+}
+validation_object_state() {
+ validation_capture=$1
+ validation_label=$2
+ validation_state=unavailable
+ # --no-list keeps this exact-key observation to HEAD rather than LIST-prefix
+ # fallback. Every byte returned by mc stays in the private fixture capture.
+ if mc stat --no-list "$validation_object" >"$validation_capture" 2>&1; then stat_status=0; else stat_status=$?; fi
+ fixture_has_sentinel "$validation_capture" 2>/dev/null && scan_result=0 || scan_result=$?
+ if [ "$scan_result" -eq 0 ]; then
+  fail "$validation_label exposed synthetic credential"
+ elif [ "$scan_result" -ne 1 ]; then
+  fail "$validation_label inspection unavailable"
+ fi
+ if [ "$stat_status" -eq 0 ]; then validation_state=present; return 0; fi
+ # A failed HEAD alone is not absence: authentication, TLS and transport can
+ # fail with the same exit status. Accept only mc's exact, single-line
+ # not-found response for this specific synthetic key.
+ if [ "$stat_status" -eq 1 ] && awk -v target="$validation_object" '
+  NR == 1 && ($0 == "mc: <ERROR> Unable to stat `" target "`. Object does not exist." ||
+              $0 == "mc: Unable to stat `" target "`. Object does not exist.") { absent=1 }
+  END { exit !(NR == 1 && absent) }
+ ' "$validation_capture" 2>/dev/null; then
+  validation_state=absent
+ fi
+}
+assert_validation_object_absent() {
+ validation_object_state "$fixture_dir/validation-stat-before" 'custom S3 validation object'
+ case "$validation_state" in
+  absent) ;;
+  present) fail 'custom S3 validation object preexisting' ;;
+  *) fail 'custom S3 validation object inspection unavailable' ;;
+ esac
 }
 scan_capture() {
  target=$1
@@ -138,7 +178,8 @@ cleanup() {
   for output in "$fixture_dir"/mc-output "$fixture_dir"/probe "$fixture_dir"/users \
    "$fixture_dir"/roles "$fixture_dir"/system-grants "$fixture_dir"/db-grants \
    "$fixture_dir"/bootstrap-output "$fixture_dir"/privilege-probe "$fixture_dir"/root-diagnostic-create \
-   "$fixture_dir"/root-diagnostic-drop "$fixture_dir"/privilege-check \
+   "$fixture_dir"/root-diagnostic-drop "$fixture_dir"/validation-stat-before \
+   "$fixture_dir"/validation-stat-after "$fixture_dir"/privilege-check \
    "$fixture_dir"/privilege-drop "$fixture_dir"/first-run "$fixture_dir"/second-run \
    "$fixture_dir"/check "$fixture_dir"/verify-output "$fixture_dir"/connection-grants \
    "$fixture_dir"/count "$fixture_dir"/identity-* "$fixture_dir"/negative-* \
@@ -372,6 +413,8 @@ sql_as root "SELECT count(*) FROM [SHOW EXTERNAL CONNECTIONS] WHERE connection_n
 # the application wrapper. SQL and errors stay in private fixture files; the
 # Only a validated SQLSTATE, fixed category and root result may leave private captures.
 probe_uri="s3://disposable-backup/fixture-only?AWS_ACCESS_KEY_ID=$synthetic_access&AWS_SECRET_ACCESS_KEY=$synthetic_secret&AWS_ENDPOINT=https%3A%2F%2F127.0.0.1%3A9009&AWS_REGION=us-east-1&AWS_USE_PATH_STYLE=true"
+validation_object='fixture/disposable-backup/fixture-only/crdb_external_storage_location'
+assert_validation_object_absent
 if ! sql_as bootstrap "CREATE EXTERNAL CONNECTION jandibat_privilege_probe AS '$probe_uri';" \
  >"$fixture_dir/privilege-probe" 2>&1; then
  diagnose_custom_s3_create "$fixture_dir/privilege-probe"

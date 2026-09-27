@@ -17,6 +17,7 @@ const fakeEffectiveLogConfig = `sinks:
 capture-stray-errors:
   enable: true
 `;
+const validationNotFound = 'mc: <ERROR> Unable to stat `fixture/disposable-backup/fixture-only/crdb_external_storage_location`. Object does not exist.';
 
 test('fixture keeps the reviewed effective log routes and every audit channel', () => {
   assert.ok(existsSync('scripts/fixtures/cockroach-backup-logging.yaml'), 'reviewed logging policy missing');
@@ -402,6 +403,14 @@ test('custom S3 CREATE failure reports only validated SQLSTATE and fixed categor
 fail() { echo "RED: $1 (details redacted)" >&2; exit 1; }
 fixture_dir=$TEST_FIXTURE_DIR
 probe_uri=$TEST_PROBE_URI
+validation_object=fixture/disposable-backup/fixture-only/crdb_external_storage_location
+mc() {
+ [ "$1" = stat ] && [ "$2" = --no-list ] && [ "$3" = "$validation_object" ] || return 2
+ printf 'stat-after\n' >>"$TEST_CALLS"
+ [ "$TEST_STAT_OUTPUT" = empty ] || printf '%s\n' "$TEST_STAT_OUTPUT" >&2
+ [ "$TEST_STAT_EXIT" = empty ] || return "$TEST_STAT_EXIT"
+ [ "$TEST_VALIDATION_AFTER" = present ]
+}
 sql_as() {
  [ "$1" = root ] || return 2
  case "$2" in
@@ -421,30 +430,32 @@ diagnose_custom_s3_create "$CAPTURE"`], {
         encoding: 'utf8', env: { ...process.env, CAPTURE: capture, TEST_FIXTURE_DIR: dir, TEST_CALLS: calls,
           TEST_PROBE_URI: 's3://disposable-backup/fixture-only?AWS_SECRET_ACCESS_KEY=private%2Bcredential',
           synthetic_secret: secret, TEST_ROOT_CREATE: 'failure', TEST_ROOT_DROP: 'success',
-          TEST_ROOT_OUTPUT: 'private root detail', TEST_DROP_OUTPUT: 'empty', ...extraEnv },
+          TEST_ROOT_OUTPUT: 'private root detail', TEST_DROP_OUTPUT: 'empty',
+          TEST_VALIDATION_AFTER: 'absent', TEST_STAT_OUTPUT: validationNotFound,
+          TEST_STAT_EXIT: 'empty', ...extraEnv },
       });
       return { ...result, calls: readFileSync(calls, 'utf8') };
     };
     for (const [output, expected] of [
-      ['', 'RED: custom S3 CREATE probe capture=empty root=failure category=unknown SQLSTATE=unavailable (details redacted)\n'],
-      ['ERROR: operation failed\nSQLSTATE: 57014\nprivate path /tmp/hidden\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure category=sql SQLSTATE=57014 (details redacted)\n'],
-      ['docker: Error response from daemon: private path /tmp/hidden\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure category=client-launch SQLSTATE=unavailable (details redacted)\n'],
-      ['invalid URL escape in s3://private-host/hidden\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure category=uri SQLSTATE=unavailable (details redacted)\n'],
-      ['x509: certificate signed by unknown authority at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure category=tls SQLSTATE=unavailable (details redacted)\n'],
-      ['S3 API error: NoSuchBucket at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure category=storage SQLSTATE=unavailable (details redacted)\n'],
-      ['S3 API error: AccessDenied at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure category=storage SQLSTATE=unavailable (details redacted)\n'],
-      ['dial tcp: connection refused at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure category=transport-client SQLSTATE=unavailable (details redacted)\n'],
-      ['opaque client failure at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure category=unknown SQLSTATE=unavailable (details redacted)\n'],
-      ['x509: certificate error and NoSuchBucket at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure category=unknown SQLSTATE=unavailable (details redacted)\n'],
-      ['SQLSTATE: 57014 and x509: certificate error at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure category=unknown SQLSTATE=57014 (details redacted)\n'],
-      ['SQLSTATE: 57014X private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure category=unknown SQLSTATE=unavailable (details redacted)\n'],
-      ['SQLSTATE: 57014x private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure category=unknown SQLSTATE=unavailable (details redacted)\n'],
+      ['', 'RED: custom S3 CREATE probe capture=empty root=failure validation-write=not-observed category=unknown SQLSTATE=unavailable (details redacted)\n'],
+      ['ERROR: operation failed\nSQLSTATE: 57014\nprivate path /tmp/hidden\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure validation-write=not-observed category=sql SQLSTATE=57014 (details redacted)\n'],
+      ['docker: Error response from daemon: private path /tmp/hidden\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure validation-write=not-observed category=client-launch SQLSTATE=unavailable (details redacted)\n'],
+      ['invalid URL escape in s3://private-host/hidden\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure validation-write=not-observed category=uri SQLSTATE=unavailable (details redacted)\n'],
+      ['x509: certificate signed by unknown authority at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure validation-write=not-observed category=tls SQLSTATE=unavailable (details redacted)\n'],
+      ['S3 API error: NoSuchBucket at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure validation-write=not-observed category=storage SQLSTATE=unavailable (details redacted)\n'],
+      ['S3 API error: AccessDenied at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure validation-write=not-observed category=storage SQLSTATE=unavailable (details redacted)\n'],
+      ['dial tcp: connection refused at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure validation-write=not-observed category=transport-client SQLSTATE=unavailable (details redacted)\n'],
+      ['opaque client failure at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure validation-write=not-observed category=unknown SQLSTATE=unavailable (details redacted)\n'],
+      ['x509: certificate error and NoSuchBucket at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure validation-write=not-observed category=unknown SQLSTATE=unavailable (details redacted)\n'],
+      ['SQLSTATE: 57014 and x509: certificate error at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure validation-write=not-observed category=unknown SQLSTATE=57014 (details redacted)\n'],
+      ['SQLSTATE: 57014X private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure validation-write=not-observed category=unknown SQLSTATE=unavailable (details redacted)\n'],
+      ['SQLSTATE: 57014x private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure validation-write=not-observed category=unknown SQLSTATE=unavailable (details redacted)\n'],
     ]) {
       const result = run(output);
       assert.equal(result.status, 1);
       assert.equal(result.stderr, expected);
       assert.equal(result.stdout, '');
-      assert.equal(result.calls, 'root-create\n');
+      assert.equal(result.calls, 'root-create\nstat-after\n');
     }
     for (const form of [secret, 'private%2Bcredential']) {
       const result = run(`SQLSTATE: 57014\n${form}\n`);
@@ -455,9 +466,9 @@ diagnose_custom_s3_create "$CAPTURE"`], {
     }
     const rootSuccess = run('opaque client failure\n', { TEST_ROOT_CREATE: 'success', TEST_ROOT_OUTPUT: 'empty' });
     assert.equal(rootSuccess.status, 1);
-    assert.equal(rootSuccess.stderr, 'RED: custom S3 CREATE probe capture=nonempty root=success category=unknown SQLSTATE=unavailable (details redacted)\n');
+    assert.equal(rootSuccess.stderr, 'RED: custom S3 CREATE probe capture=nonempty root=success validation-write=not-observed category=unknown SQLSTATE=unavailable (details redacted)\n');
     assert.equal(rootSuccess.stdout, '');
-    assert.equal(rootSuccess.calls, 'root-create\nroot-drop\n');
+    assert.equal(rootSuccess.calls, 'root-create\nroot-drop\nstat-after\n');
     const rootOutputSentinel = run('opaque client failure\n', { TEST_ROOT_CREATE: 'success', TEST_ROOT_OUTPUT: secret });
     assert.equal(rootOutputSentinel.status, 1);
     assert.equal(rootOutputSentinel.stderr, 'RED: custom S3 CREATE diagnostic exposed synthetic credential (details redacted)\n');
@@ -474,6 +485,22 @@ diagnose_custom_s3_create "$CAPTURE"`], {
     assert.equal(dropOutputSentinel.status, 1);
     assert.equal(dropOutputSentinel.stderr, 'RED: custom S3 CREATE diagnostic exposed synthetic credential (details redacted)\n');
     assert.equal(dropOutputSentinel.calls, 'root-create\nroot-drop\n');
+    const observed = run('opaque client failure\n', { TEST_VALIDATION_AFTER: 'present', TEST_STAT_OUTPUT: 'empty' });
+    assert.equal(observed.stderr, 'RED: custom S3 CREATE probe capture=nonempty root=failure validation-write=observed category=unknown SQLSTATE=unavailable (details redacted)\n');
+    assert.equal(observed.calls, 'root-create\nstat-after\n');
+    const unknown = run('opaque client failure\n', { TEST_STAT_OUTPUT: 'private network failure' });
+    assert.equal(unknown.stderr, 'RED: custom S3 CREATE probe capture=nonempty root=failure validation-write=inspection-unavailable category=unknown SQLSTATE=unavailable (details redacted)\n');
+    assert.equal(unknown.calls, 'root-create\nstat-after\n');
+    const unknownStatus = run('opaque client failure\n', { TEST_STAT_EXIT: '2' });
+    assert.equal(unknownStatus.stderr, 'RED: custom S3 CREATE probe capture=nonempty root=failure validation-write=inspection-unavailable category=unknown SQLSTATE=unavailable (details redacted)\n');
+    assert.equal(unknownStatus.calls, 'root-create\nstat-after\n');
+    const mixedOutput = run('opaque client failure\n', { TEST_STAT_OUTPUT: `${validationNotFound}\nprivate network failure` });
+    assert.equal(mixedOutput.stderr, 'RED: custom S3 CREATE probe capture=nonempty root=failure validation-write=inspection-unavailable category=unknown SQLSTATE=unavailable (details redacted)\n');
+    const ambiguous = run('opaque client failure\n', { TEST_STAT_OUTPUT: `AccessDenied; ${validationNotFound}` });
+    assert.equal(ambiguous.stderr, 'RED: custom S3 CREATE probe capture=nonempty root=failure validation-write=inspection-unavailable category=unknown SQLSTATE=unavailable (details redacted)\n');
+    const statSentinel = run('opaque client failure\n', { TEST_STAT_OUTPUT: secret });
+    assert.equal(statSentinel.stderr, 'RED: custom S3 CREATE diagnostic exposed synthetic credential (details redacted)\n');
+    assert.equal(statSentinel.calls, 'root-create\nstat-after\n');
     writeFileSync(join(dir, 'awk'), '#!/bin/sh\necho "private diagnostic failure" >&2\nexit 2\n');
     chmodSync(join(dir, 'awk'), 0o700);
     const inspectionFailure = run('opaque client failure\n', { PATH: `${dir}:${process.env.PATH}` });
@@ -487,6 +514,67 @@ diagnose_custom_s3_create "$CAPTURE"`], {
     assert.equal(matcherFailure.status, 1);
     assert.equal(matcherFailure.stderr, 'RED: custom S3 CREATE diagnostic inspection unavailable (details redacted)\n');
     assert.equal(matcherFailure.stdout, '');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('custom S3 validation object must be absent before the first CREATE', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'backup-fixture-validation-before-'));
+  try {
+    const fixture = readFileSync('scripts/test-db-backup-roles-secure.sh', 'utf8');
+    const start = fixture.indexOf('\ndiagnose_custom_s3_create() {');
+    const end = fixture.indexOf('\ncleanup() {', start);
+    const validation = fixture.slice(start, end);
+    const calls = join(dir, 'calls');
+    const run = (state, output, status = 'empty') => {
+      writeFileSync(calls, '');
+      const result = spawnSync('sh', ['-c', `. scripts/backup-fixture-client.sh
+fail() { echo "RED: $1 (details redacted)" >&2; exit 1; }
+fixture_dir=$TEST_FIXTURE_DIR
+validation_object=fixture/disposable-backup/fixture-only/crdb_external_storage_location
+mc() {
+ [ "$1" = stat ] && [ "$2" = --no-list ] && [ "$3" = "$validation_object" ] || return 2
+ printf 'stat-before\\n' >>"$TEST_CALLS"
+ [ "$TEST_STAT_OUTPUT" = empty ] || printf '%s\\n' "$TEST_STAT_OUTPUT" >&2
+ [ "$TEST_STAT_EXIT" = empty ] || return "$TEST_STAT_EXIT"
+ [ "$TEST_VALIDATION_BEFORE" = present ]
+}
+sql_as() { printf 'create\\n' >>"$TEST_CALLS"; }
+${validation}
+assert_validation_object_absent
+sql_as bootstrap CREATE`], {
+        encoding: 'utf8', env: { ...process.env, TEST_FIXTURE_DIR: dir, TEST_CALLS: calls,
+          TEST_VALIDATION_BEFORE: state, TEST_STAT_OUTPUT: output,
+          TEST_STAT_EXIT: status, synthetic_secret: 'private+credential' },
+      });
+      return { ...result, calls: readFileSync(calls, 'utf8') };
+    };
+    const absent = run('absent', validationNotFound);
+    assert.equal(absent.status, 0);
+    assert.equal(absent.calls, 'stat-before\ncreate\n');
+    assert.equal(absent.stderr, '');
+    for (const [state, output, expected] of [
+      ['present', 'empty', 'RED: custom S3 validation object preexisting (details redacted)\n'],
+      ['unknown', 'private network failure', 'RED: custom S3 validation object inspection unavailable (details redacted)\n'],
+      ['absent', `private+credential ${validationNotFound}`, 'RED: custom S3 validation object exposed synthetic credential (details redacted)\n'],
+    ]) {
+      const result = run(state, output);
+      assert.equal(result.status, 1);
+      assert.equal(result.stderr, expected);
+      assert.equal(result.calls, 'stat-before\n');
+      assert.equal(result.stdout, '');
+    }
+    const unexpectedStatus = run('absent', validationNotFound, '2');
+    assert.equal(unexpectedStatus.status, 1);
+    assert.equal(unexpectedStatus.stderr, 'RED: custom S3 validation object inspection unavailable (details redacted)\n');
+    assert.equal(unexpectedStatus.calls, 'stat-before\n');
+    const misleading = run('absent', `AccessDenied; ${validationNotFound}`);
+    assert.equal(misleading.status, 1);
+    assert.equal(misleading.stderr, 'RED: custom S3 validation object inspection unavailable (details redacted)\n');
+    assert.equal(misleading.calls, 'stat-before\n');
+    const preflight = fixture.indexOf('assert_validation_object_absent\nif ! sql_as bootstrap "CREATE EXTERNAL CONNECTION jandibat_privilege_probe');
+    assert.ok(preflight >= 0, 'exact-key preflight must precede the first custom S3 CREATE');
+    assert.match(fixture, /validation_object='fixture\/disposable-backup\/fixture-only\/crdb_external_storage_location'/);
+    assert.match(fixture, /"\$fixture_dir"\/validation-stat-before[\s\S]*"\$fixture_dir"\/validation-stat-after/, 'private stat captures must be sentinel-scanned during cleanup');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

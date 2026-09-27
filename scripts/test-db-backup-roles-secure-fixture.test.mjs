@@ -622,8 +622,8 @@ test('metadata schema grant check accepts only three non-grantable USAGE roles',
       'jandibat_backup_runner\tUSAGE\tfalse',
       'jandibat_backup_verifier\tUSAGE\tfalse',
     ];
-    const run = (grantRows) => {
-      writeFileSync(path, header + grantRows.join('\n') + '\n');
+    const run = (grantRows, grantHeader = header) => {
+      writeFileSync(path, grantHeader + grantRows.join('\n') + '\n');
       return spawnSync('sh', ['-c', '. scripts/backup-fixture-client.sh; fixture_check_metadata_grants schema "$GRANT_FILE"'], {
         encoding: 'utf8', env: { ...process.env, GRANT_FILE: path },
       });
@@ -637,5 +637,8 @@ test('metadata schema grant check accepts only three non-grantable USAGE roles',
     }
     assert.equal(run([...rows, 'jandibat_backup_runner\tSELECT\tfalse']).status, 1, 'extra privilege accepted');
     assert.equal(run([...rows, 'public\tUSAGE\tfalse']).status, 1, 'extra grantee accepted');
+    assert.equal(run(rows, 'grantee\tprivilege_type\tis_grantable\textra\n').status, 1, 'four-field header accepted');
+    assert.equal(run(rows.map((row) => row.startsWith('jandibat_backup_runner\t') ? `${row}\textra` : row)).status, 1, 'four-field data row accepted');
+    assert.equal(run([...rows, rows[1]]).status, 1, 'duplicate runner grant accepted');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

@@ -12,7 +12,10 @@ const donorSource = 'cockroachdb/cockroach:v26.2.5@sha256:771325a0586bf61d53322d
 const bootstrapSourceSha256 = '6ef912d18d9f40e46546ffcf5777cecf93405b3f5f4dcde60f2878c10bdc2327';
 const applets = ['awk', 'chmod', 'cp', 'mktemp', 'rm', 'sed', 'sha256sum', 'sh', 'tail', 'tr'];
 const probeStages = Object.freeze({
-  bootstrap: 'bootstrap-source', runtimeIndex: 'runtime-index', donorIndex: 'donor-index',
+  bootstrap: 'bootstrap-source', runtimeIndex: 'runtime-index',
+  donorRawFetch: 'donor-raw-fetch', donorManifestParse: 'donor-manifest-parse',
+  donorPinCheck: 'donor-pin-check', donorChildSelection: 'donor-amd64-child',
+  donorFallbackInspect: 'donor-fallback-inspect',
   scratchAllocation: 'scratch-allocation',
   runtimeUnpack: 'runtime-unpack', donorUnpack: 'donor-unpack', runtimeSbom: 'runtime-sbom',
   baseScan: 'base-scan', vendorInspection: 'vendor-inspection', evidence: 'evidence-assembly',
@@ -78,18 +81,23 @@ function parseOsRelease(rootfs) {
   return { ID: fields.ID, VERSION_ID: fields.VERSION_ID };
 }
 
-function resolveImage(source, requireIndex) {
+function resolveImage(source, requireIndex, stages = {}) {
+  if (stages.fetch) inspectionStage = stages.fetch;
   const raw = command('skopeo', ['inspect', '--raw', `docker://${source}`]).stdout;
+  if (stages.parse) inspectionStage = stages.parse;
   const manifest = JSON.parse(raw);
+  if (stages.pin) inspectionStage = stages.pin;
   const indexDigest = `sha256:${sha(raw)}`;
   const pinned = source.match(/@(?<digest>sha256:[a-f0-9]{64})$/)?.groups?.digest;
   if (pinned) assert.equal(indexDigest, pinned, 'donor digest mismatch');
   if (Array.isArray(manifest.manifests)) {
+    if (stages.child) inspectionStage = stages.child;
     const child = manifest.manifests.find(item => item.platform?.os === 'linux' && item.platform?.architecture === 'amd64');
     required(child && digest(child.digest), 'linux/amd64 child digest');
     return { indexDigest, amd64Digest: child.digest };
   }
   if (requireIndex) throw new Error('missing linux/amd64 child digest');
+  if (stages.fallback) inspectionStage = stages.fallback;
   required(pinned && pinned === indexDigest, 'pinned donor manifest');
   const inspected = JSON.parse(command('skopeo', ['inspect', `docker://${source}`]).stdout);
   assert.equal(inspected.Os, 'linux');
@@ -242,8 +250,11 @@ function probe() {
   assert.equal(fileSha(join(root, 'scripts/db-bootstrap-roles.sh')), bootstrapSourceSha256, 'bootstrap source changed; refresh applet inventory');
   inspectionStage = probeStages.runtimeIndex;
   const runtime = resolveImage(runtimeSource, true);
-  inspectionStage = probeStages.donorIndex;
-  const donor = resolveImage(donorSource, false);
+  const donor = resolveImage(donorSource, false, {
+    fetch: probeStages.donorRawFetch, parse: probeStages.donorManifestParse,
+    pin: probeStages.donorPinCheck, child: probeStages.donorChildSelection,
+    fallback: probeStages.donorFallbackInspect,
+  });
   inspectionStage = probeStages.scratchAllocation;
   const scratch = mkdtempSync(join(tmpdir(), 'jandibat-runtime-probe-'));
   try {

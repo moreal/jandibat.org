@@ -384,6 +384,48 @@ test('fixture sentinel scanner detects 48 repeated reserved bytes after percent 
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('custom S3 CREATE failure reports only validated SQLSTATE and fixed category after sentinel scan', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'backup-fixture-diagnostic-'));
+  try {
+    const fixture = readFileSync('scripts/test-db-backup-roles-secure.sh', 'utf8');
+    const start = fixture.indexOf('\ndiagnose_custom_s3_create() {');
+    const end = fixture.indexOf('\ncleanup() {', start);
+    assert.ok(start >= 0 && end > start, 'custom S3 CREATE diagnostic missing');
+    const diagnostic = fixture.slice(start, end);
+    const capture = join(dir, 'capture');
+    const secret = 'private+credential';
+    const run = (output, extraEnv = {}) => {
+      writeFileSync(capture, output);
+      return spawnSync('sh', ['-c', `. scripts/backup-fixture-client.sh\nfail() { echo "RED: $1 (details redacted)" >&2; exit 1; }\n${diagnostic}\ndiagnose_custom_s3_create "$CAPTURE"`], {
+        encoding: 'utf8', env: { ...process.env, CAPTURE: capture, synthetic_secret: secret, ...extraEnv },
+      });
+    };
+    for (const [output, expected] of [
+      ['ERROR: operation failed\nSQLSTATE: 57014\nprivate path /tmp/hidden\n', 'RED: custom S3 CREATE privilege category=sql SQLSTATE=57014 (details redacted)\n'],
+      ['dial tcp: connection refused at private-host\n', 'RED: custom S3 CREATE privilege category=transport-client SQLSTATE=unavailable (details redacted)\n'],
+      ['opaque client failure at private-host\n', 'RED: custom S3 CREATE privilege category=unknown SQLSTATE=unavailable (details redacted)\n'],
+      ['SQLSTATE: 57014X private-host\n', 'RED: custom S3 CREATE privilege category=unknown SQLSTATE=unavailable (details redacted)\n'],
+    ]) {
+      const result = run(output);
+      assert.equal(result.status, 1);
+      assert.equal(result.stderr, expected);
+      assert.equal(result.stdout, '');
+    }
+    for (const form of [secret, 'private%2Bcredential']) {
+      const result = run(`SQLSTATE: 57014\n${form}\n`);
+      assert.equal(result.status, 1);
+      assert.equal(result.stderr, 'RED: custom S3 CREATE diagnostic exposed synthetic credential (details redacted)\n');
+      assert.equal(result.stdout, '');
+    }
+    writeFileSync(join(dir, 'awk'), '#!/bin/sh\necho "private diagnostic failure" >&2\nexit 2\n');
+    chmodSync(join(dir, 'awk'), 0o700);
+    const inspectionFailure = run('opaque client failure\n', { PATH: `${dir}:${process.env.PATH}` });
+    assert.equal(inspectionFailure.status, 1);
+    assert.equal(inspectionFailure.stderr, 'RED: custom S3 CREATE diagnostic inspection unavailable (details redacted)\n');
+    assert.equal(inspectionFailure.stdout, '');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('effective log policy requires every configured file sink and stray capture', () => {
   const dir = mkdtempSync(join(tmpdir(), 'backup-fixture-sinks-'));
   try {

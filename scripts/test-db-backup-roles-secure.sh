@@ -33,6 +33,40 @@ db_creation_attempted=false
 s3proxy_pid=
 audit_expected=false
 fail() { echo "RED: $1 (details redacted)" >&2; exit 1; }
+diagnose_custom_s3_create() {
+ capture=$1
+ fixture_has_sentinel "$capture" 2>/dev/null && scan_result=0 || scan_result=$?
+ if [ "$scan_result" -eq 0 ]; then
+  fail 'custom S3 CREATE diagnostic exposed synthetic credential'
+ elif [ "$scan_result" -ne 1 ]; then
+  fail 'custom S3 CREATE diagnostic inspection unavailable'
+ fi
+ code=$(awk '
+  {
+   remaining = $0
+   while (match(remaining, /SQLSTATE: [0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z]/)) {
+    candidate = substr(remaining, RSTART + 10, 5)
+    following = substr(remaining, RSTART + 15, 1)
+    if (following !~ /[0-9A-Z]/) { print candidate; exit }
+    remaining = substr(remaining, RSTART + RLENGTH)
+   }
+  }
+ ' "$capture" 2>/dev/null) || fail 'custom S3 CREATE diagnostic inspection unavailable'
+ if [ -n "$code" ]; then
+  category=sql
+ else
+  code=unavailable
+  grep -Eiq 'dial tcp|connection refused|connection reset|timed out|i/o timeout|tls handshake|x509:|certificate verify|network is unreachable' "$capture" 2>/dev/null && match_result=0 || match_result=$?
+  if [ "$match_result" -eq 0 ]; then
+   category=transport-client
+  elif [ "$match_result" -eq 1 ]; then
+   category=unknown
+  else
+   fail 'custom S3 CREATE diagnostic inspection unavailable'
+  fi
+ fi
+ fail "custom S3 CREATE privilege category=$category SQLSTATE=$code"
+}
 scan_capture() {
  target=$1
  label=$2
@@ -301,12 +335,11 @@ sql_as root "SELECT count(*) FROM [SHOW EXTERNAL CONNECTIONS] WHERE connection_n
 
 # Probe custom-endpoint CREATE under the non-root identity independently of
 # the application wrapper. SQL and errors stay in private fixture files; the
-# only diagnostic emitted to CI is a five-character SQLSTATE.
+# Only a validated SQLSTATE and fixed category may leave the private capture.
 probe_uri="s3://disposable-backup/fixture-only?AWS_ACCESS_KEY_ID=$synthetic_access&AWS_SECRET_ACCESS_KEY=$synthetic_secret&AWS_ENDPOINT=https%3A%2F%2F127.0.0.1%3A9009&AWS_REGION=us-east-1&AWS_USE_PATH_STYLE=true"
 if ! sql_as bootstrap "CREATE EXTERNAL CONNECTION jandibat_privilege_probe AS '$probe_uri';" \
  >"$fixture_dir/privilege-probe" 2>&1; then
- code=$(sed -n 's/.*SQLSTATE: \([0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z]\).*/\1/p' "$fixture_dir/privilege-probe" | head -n 1)
- fail "custom S3 CREATE privilege SQLSTATE ${code:-unavailable}"
+ diagnose_custom_s3_create "$fixture_dir/privilege-probe"
 fi
 sql_as bootstrap "CHECK EXTERNAL CONNECTION 'external://jandibat_privilege_probe' WITH transfer = '1MiB';" \
  >"$fixture_dir/privilege-check" 2>&1 || fail 'custom S3 CHECK privilege'

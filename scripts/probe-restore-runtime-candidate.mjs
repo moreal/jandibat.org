@@ -7,8 +7,8 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-const runtimeSource = 'registry.access.redhat.com/ubi10/ubi-micro';
-const donorSource = 'cockroachdb/cockroach:v26.2.5@sha256:771325a0586bf61d53322d24f5a6de8962568b0fc181fa45db364278e5961282';
+const runtimeSource = 'cockroachdb/cockroach:v26.2.7@sha256:9464ae30465b887295459b98d129a76d074caeaa4c86836d369c6d2fdddd1685';
+const donorSource = runtimeSource;
 const bootstrapSourceSha256 = '6ef912d18d9f40e46546ffcf5777cecf93405b3f5f4dcde60f2878c10bdc2327';
 const applets = ['awk', 'chmod', 'cp', 'mktemp', 'rm', 'sed', 'sha256sum', 'sh', 'tail', 'tr'];
 const probeStages = Object.freeze({
@@ -176,6 +176,7 @@ function validate(evidence, sourceSha, setStage = () => {}) {
   assert.ok(['candidate', 'rejected'].includes(evidence.status));
   assert.equal(evidence.runtime.source, runtimeSource);
   required(digest(evidence.runtime.indexDigest), 'runtime index digest');
+  assert.equal(evidence.runtime.indexDigest, runtimeSource.match(/@(sha256:[a-f0-9]{64})$/)?.[1], 'runtime pinned index digest');
   required(digest(evidence.runtime.amd64Digest), 'runtime amd64 child digest');
   assert.equal(evidence.runtime.os, 'linux');
   assert.equal(evidence.runtime.architecture, 'amd64');
@@ -184,6 +185,7 @@ function validate(evidence, sourceSha, setStage = () => {}) {
   setStage(probeStages.dossierValidation);
   assert.equal(evidence.donor.source, donorSource);
   required(digest(evidence.donor.amd64Digest), 'donor amd64 digest');
+  if (donorSource === runtimeSource) assert.equal(evidence.donor.amd64Digest, evidence.runtime.amd64Digest, 'shared image amd64 child');
   required(absolute(evidence.donor.interpreter), 'ELF interpreter');
   required(evidence.donor.needed?.length, 'ELF dependencies');
   for (const key of ['nativeFiles', 'licenses']) {

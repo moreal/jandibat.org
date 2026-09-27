@@ -10,21 +10,46 @@ import test from 'node:test';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const script = join(root, 'scripts/probe-restore-runtime-candidate.sh');
 const sourceSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
-const digest = `sha256:${'a'.repeat(64)}`;
-const donorDigest = 'sha256:771325a0586bf61d53322d24f5a6de8962568b0fc181fa45db364278e5961282';
+const digest = 'sha256:a0a144676e1648929f2838c3574d2ac02f1d29186f66207fc0149c7f3f9bcb6d';
+const donorDigest = 'sha256:9464ae30465b887295459b98d129a76d074caeaa4c86836d369c6d2fdddd1685';
+const candidateSource = `cockroachdb/cockroach:v26.2.7@${donorDigest}`;
 const bootstrapDigest = '6ef912d18d9f40e46546ffcf5777cecf93405b3f5f4dcde60f2878c10bdc2327';
-const runtimeManifestRaw = `{"manifests":[{"platform":{"os":"linux","architecture":"amd64"},"digest":"${digest}"}]}\n`;
-const runtimeMetadata = { source: 'registry.access.redhat.com/ubi10/ubi-micro',
-  indexDigest: `sha256:${createHash('sha256').update(runtimeManifestRaw).digest('hex')}`, amd64Digest: digest };
+const runtimeManifestRaw = `{"runtime-test-index":true,"manifests":[{"platform":{"os":"linux","architecture":"amd64"},"digest":"${digest}"}]}\n`;
+const runtimeMetadata = { source: candidateSource, indexDigest: donorDigest, amd64Digest: digest };
+
+function pinnedLinuxPreload(extra = '') {
+  return `const crypto = require('node:crypto');
+const { syncBuiltinESMExports } = require('node:module');
+Object.defineProperty(process, 'platform', { value: 'linux' });
+Object.defineProperty(process, 'arch', { value: 'x64' });
+const originalHash = crypto.createHash;
+crypto.createHash = function (...args) {
+  const hash = originalHash(...args);
+  const update = hash.update;
+  const finish = hash.digest;
+  let testIndex = false;
+  hash.update = function (data, ...rest) {
+    testIndex = String(data).includes('test-index');
+    return update.call(this, data, ...rest);
+  };
+  hash.digest = function (encoding) {
+    return testIndex && encoding === 'hex' ? '${donorDigest.slice(7)}' : finish.call(this, encoding);
+  };
+  return hash;
+};
+${extra}
+syncBuiltinESMExports();
+`;
+}
 
 function evidence() {
   return {
     schema: 1, sourceSha, status: 'candidate',
-    runtime: { source: 'registry.access.redhat.com/ubi10/ubi-micro', indexDigest: digest,
+    runtime: { source: candidateSource, indexDigest: donorDigest,
       amd64Digest: digest, os: 'linux', architecture: 'amd64',
       osRelease: { ID: 'rhel', VERSION_ID: '10.0' } },
-    donor: { source: `cockroachdb/cockroach:v26.2.5@${donorDigest}`,
-      amd64Digest: donorDigest, interpreter: '/lib64/ld-linux-x86-64.so.2',
+    donor: { source: candidateSource,
+      amd64Digest: digest, interpreter: '/lib64/ld-linux-x86-64.so.2',
       needed: ['libvendor.so'],
       elfClosure: [
         { path: '/cockroach/cockroach', needed: ['libvendor.so'] },
@@ -125,6 +150,8 @@ for (const [name, mutate] of [
   ['High finding', e => { e.scan.matches = [{ severity: 'High', id: 'CVE-TEST', package: 'glibc', fixState: 'unknown' }]; }],
   ['Critical finding', e => { e.scan.matches = [{ severity: 'Critical', id: 'CVE-TEST', package: 'glibc', fixState: 'unknown' }]; }],
   ['wrong bootstrap source digest', e => { e.applets.bootstrapSourceSha256 = '0'.repeat(64); }],
+  ['runtime index differs from pinned source', e => { e.runtime.indexDigest = `sha256:${'a'.repeat(64)}`; }],
+  ['donor child differs from identical runtime', e => { e.donor.amd64Digest = `sha256:${'b'.repeat(64)}`; }],
   ['wrong source SHA', e => { e.sourceSha = '0'.repeat(40); }],
   ['secret-bearing evidence', e => { e.password = 'do-not-upload'; }],
   ['missing tool versions', e => { delete e.toolVersions; }],
@@ -250,15 +277,18 @@ test('donor raw inspection uses a digest-only reference before parsing tool outp
     const bin = join(dir, 'bin');
     mkdirSync(bin);
     const platform = join(dir, 'platform.cjs');
-    writeFileSync(platform, "Object.defineProperty(process, 'platform', {value:'linux'}); Object.defineProperty(process, 'arch', {value:'x64'});\n");
+    writeFileSync(platform, pinnedLinuxPreload());
     const skopeo = join(bin, 'skopeo');
     writeFileSync(skopeo, `#!/bin/sh
 case "$3" in
-  docker://registry.access.redhat.com/ubi10/ubi-micro)
-    printf '%s\\n' '{"manifests":[{"platform":{"os":"linux","architecture":"amd64"},"digest":"${digest}"}]}' ;;
   docker://cockroachdb/cockroach@${donorDigest})
-    printf '%s\\n' "$3" > "$PROBE_REF_TRACE"
-    printf '%s\\n' '{"password":"SENSITIVE-MARKER"' ;;
+    if [ ! -e "$PROBE_FIRST_RAW" ]; then
+      : > "$PROBE_FIRST_RAW"
+      printf '%s\\n' '${runtimeManifestRaw.trimEnd()}'
+    else
+      printf '%s\\n' "$3" > "$PROBE_REF_TRACE"
+      printf '%s\\n' '{"password":"SENSITIVE-MARKER"'
+    fi ;;
   *) printf '%s\\n' "$3" > "$PROBE_REF_TRACE"
      printf '%s\\n' 'SENSITIVE-MARKER' >&2
      exit 31 ;;
@@ -267,11 +297,12 @@ esac
     chmodSync(skopeo, 0o755);
     const path = join(dir, 'candidate.json');
     const trace = join(dir, 'donor-reference');
+    const firstRaw = join(dir, 'first-raw');
     writeFileSync(path, JSON.stringify(evidence()));
     const result = spawnSync('sh', [script, path], {
       cwd: root, encoding: 'utf8',
       env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, NODE_OPTIONS: `--require=${platform}`,
-        PROBE_REF_TRACE: trace },
+        PROBE_REF_TRACE: trace, PROBE_FIRST_RAW: firstRaw },
     });
     assert.notEqual(result.status, 0);
     assert.equal(readFileSync(trace, 'utf8').trim(), `docker://cockroachdb/cockroach@${donorDigest}`);
@@ -291,21 +322,26 @@ for (const [name, donorCommand, stage] of [
       const bin = join(dir, 'bin');
       mkdirSync(bin);
       const platform = join(dir, 'platform.cjs');
-      writeFileSync(platform, "Object.defineProperty(process, 'platform', {value:'linux'}); Object.defineProperty(process, 'arch', {value:'x64'});\n");
+      writeFileSync(platform, pinnedLinuxPreload());
       const skopeo = join(bin, 'skopeo');
       writeFileSync(skopeo, `#!/bin/sh
 case "$3" in
-  docker://registry.access.redhat.com/ubi10/ubi-micro)
-    printf '%s\\n' '{"manifests":[{"platform":{"os":"linux","architecture":"amd64"},"digest":"${digest}"}]}' ;;
-  *) ${donorCommand} ;;
+  docker://cockroachdb/cockroach@${donorDigest})
+    if [ ! -e "$PROBE_FIRST_RAW" ]; then
+      : > "$PROBE_FIRST_RAW"
+      printf '%s\\n' '${runtimeManifestRaw.trimEnd()}'
+    else ${donorCommand}; fi ;;
+  *) printf '%s\\n' 'SENSITIVE-MARKER' >&2; exit 32 ;;
 esac
 `);
       chmodSync(skopeo, 0o755);
       const path = join(dir, 'candidate.json');
+      const firstRaw = join(dir, 'first-raw');
       writeFileSync(path, JSON.stringify(evidence()));
       const result = spawnSync('sh', [script, path], {
         cwd: root, encoding: 'utf8',
-        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, NODE_OPTIONS: `--require=${platform}` },
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, NODE_OPTIONS: `--require=${platform}`,
+          PROBE_FIRST_RAW: firstRaw },
       });
       assert.notEqual(result.status, 0);
       assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')),
@@ -325,40 +361,23 @@ for (const [name, donorManifest, stage, requestCount] of [
       const bin = join(dir, 'bin');
       mkdirSync(bin);
       const preload = join(dir, 'preload.cjs');
-      writeFileSync(preload, `const crypto = require('node:crypto');
-const { syncBuiltinESMExports } = require('node:module');
-Object.defineProperty(process, 'platform', { value: 'linux' });
-Object.defineProperty(process, 'arch', { value: 'x64' });
-const originalHash = crypto.createHash;
-crypto.createHash = function (...args) {
-  const hash = originalHash(...args);
-  const originalUpdate = hash.update;
-  const originalDigest = hash.digest;
-  let donorIndex = false;
-  hash.update = function (data, ...rest) {
-    donorIndex = String(data).includes('donor-test-index');
-    return originalUpdate.call(this, data, ...rest);
-  };
-  hash.digest = function (encoding) {
-    return donorIndex && encoding === 'hex' ? '${donorDigest.slice(7)}' : originalDigest.call(this, encoding);
-  };
-  return hash;
-};
-syncBuiltinESMExports();
-`);
+      writeFileSync(preload, pinnedLinuxPreload());
       const skopeo = join(bin, 'skopeo');
       writeFileSync(skopeo, `#!/bin/sh
 ref=$3
 if [ "$2" != --raw ]; then ref=$2; fi
 case "$ref" in
-  docker://registry.access.redhat.com/ubi10/ubi-micro)
-    printf '%s\\n' '{"manifests":[{"platform":{"os":"linux","architecture":"amd64"},"digest":"${digest}"}]}' ;;
   docker://cockroachdb/cockroach@${donorDigest})
-    printf '%s\\n' "$ref" >> "$PROBE_REF_TRACE"
-    if [ "$2" = --raw ]; then
-      printf '%s\\n' '${donorManifest}'
+    if [ "$2" = --raw ] && [ ! -e "$PROBE_FIRST_RAW" ]; then
+      : > "$PROBE_FIRST_RAW"
+      printf '%s\\n' '${runtimeManifestRaw.trimEnd()}'
     else
-      printf '%s\\n' '{"password":"SENSITIVE-MARKER"'
+      printf '%s\\n' "$ref" >> "$PROBE_REF_TRACE"
+      if [ "$2" = --raw ]; then
+        printf '%s\\n' '${donorManifest}'
+      else
+        printf '%s\\n' '{"password":"SENSITIVE-MARKER"'
+      fi
     fi ;;
   *) printf '%s\\n' "$ref" >> "$PROBE_REF_TRACE"
      printf '%s\\n' 'SENSITIVE-MARKER' >&2
@@ -368,11 +387,12 @@ esac
       chmodSync(skopeo, 0o755);
       const path = join(dir, 'candidate.json');
       const trace = join(dir, 'donor-references');
+      const firstRaw = join(dir, 'first-raw');
       writeFileSync(path, JSON.stringify(evidence()));
       const result = spawnSync('sh', [script, path], {
         cwd: root, encoding: 'utf8',
         env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, NODE_OPTIONS: `--require=${preload}`,
-          PROBE_REF_TRACE: trace },
+          PROBE_REF_TRACE: trace, PROBE_FIRST_RAW: firstRaw },
       });
       assert.notEqual(result.status, 0);
       assert.deepEqual(readFileSync(trace, 'utf8').trim().split('\n'),
@@ -390,26 +410,7 @@ test('scratch allocation failure reports its own stage without leaking the excep
     const bin = join(dir, 'bin');
     mkdirSync(bin);
     const preload = join(dir, 'preload.cjs');
-    writeFileSync(preload, `const fs = require('node:fs');
-const crypto = require('node:crypto');
-const { syncBuiltinESMExports } = require('node:module');
-Object.defineProperty(process, 'platform', { value: 'linux' });
-Object.defineProperty(process, 'arch', { value: 'x64' });
-const originalHash = crypto.createHash;
-crypto.createHash = function (...args) {
-  const hash = originalHash(...args);
-  const originalUpdate = hash.update;
-  const originalDigest = hash.digest;
-  let donorIndex = false;
-  hash.update = function (data, ...rest) {
-    donorIndex = String(data).includes('donor-test-index');
-    return originalUpdate.call(this, data, ...rest);
-  };
-  hash.digest = function (encoding) {
-    return donorIndex && encoding === 'hex' ? '${donorDigest.slice(7)}' : originalDigest.call(this, encoding);
-  };
-  return hash;
-};
+    writeFileSync(preload, pinnedLinuxPreload(`const fs = require('node:fs');
 const originalMkdtemp = fs.mkdtempSync;
 fs.mkdtempSync = function (prefix, ...rest) {
   if (prefix.includes('jandibat-runtime-probe-')) {
@@ -417,15 +418,12 @@ fs.mkdtempSync = function (prefix, ...rest) {
     throw new Error('SENSITIVE-MARKER');
   }
   return originalMkdtemp.call(this, prefix, ...rest);
-};
-syncBuiltinESMExports();
-`);
+};`));
     const skopeo = join(bin, 'skopeo');
     writeFileSync(skopeo, `#!/bin/sh
 case "$3" in
-  docker://registry.access.redhat.com/ubi10/ubi-micro)
-    printf '%s\\n' '{"manifests":[{"platform":{"os":"linux","architecture":"amd64"},"digest":"${digest}"}]}' ;;
-  *) printf '%s\\n' '{"donor-test-index":true,"manifests":[{"platform":{"os":"linux","architecture":"amd64"},"digest":"${digest}"}]}' ;;
+  docker://cockroachdb/cockroach@${donorDigest}) printf '%s\\n' '${runtimeManifestRaw.trimEnd()}' ;;
+  *) printf '%s\\n' 'SENSITIVE-MARKER' >&2; exit 31 ;;
 esac
 `);
     chmodSync(skopeo, 0o755);
@@ -446,6 +444,7 @@ esac
 });
 
 for (const [missing, stage] of [
+  ['complete', null],
   ['rpmdb', 'rpmdb-inventory'],
   ['trust', 'trust-inventory'],
   ['scan', 'scan-evidence'],
@@ -453,12 +452,12 @@ for (const [missing, stage] of [
   ['tool-versions', 'tool-versions'],
 ]) {
   const label = { scan: 'scanner exit without finding', 'db-status': 'Grype database status failure',
-    'tool-versions': 'tool version failure' }[missing] ?? `missing ${missing} evidence`;
-  test(`${label} reports only its fixed stage`, () => {
+    'tool-versions': 'tool version failure', complete: 'synthetic shared-image dossier' }[missing] ?? `missing ${missing} evidence`;
+  test(missing === 'complete' ? 'synthetic shared image yields a coherent candidate dossier' : `${label} reports only its fixed stage`, () => {
     const dir = mkdtempSync(join(tmpdir(), 'jandibat-probe-evidence-'));
     try {
-      const runtime = join(dir, 'runtime');
-      const donor = join(dir, 'donor');
+      const runtime = join(dir, 'full-image');
+      const donor = runtime;
       const files = [
         [join(runtime, 'etc/os-release'), 'ID="rhel"\nVERSION_ID="10.0"\n'],
         [join(runtime, 'lib64/ld-linux-x86-64.so.2'), 'loader'],
@@ -475,27 +474,7 @@ for (const [missing, stage] of [
         writeFileSync(path, bytes);
       }
       const preload = join(dir, 'preload.cjs');
-      writeFileSync(preload, `const crypto = require('node:crypto');
-const { syncBuiltinESMExports } = require('node:module');
-Object.defineProperty(process, 'platform', { value: 'linux' });
-Object.defineProperty(process, 'arch', { value: 'x64' });
-const originalHash = crypto.createHash;
-crypto.createHash = function (...args) {
-  const hash = originalHash(...args);
-  const update = hash.update;
-  const finish = hash.digest;
-  let donorIndex = false;
-  hash.update = function (data, ...rest) {
-    donorIndex = String(data).includes('donor-test-index');
-    return update.call(this, data, ...rest);
-  };
-  hash.digest = function (encoding) {
-    return donorIndex && encoding === 'hex' ? '${donorDigest.slice(7)}' : finish.call(this, encoding);
-  };
-  return hash;
-};
-syncBuiltinESMExports();
-`);
+      writeFileSync(preload, pinnedLinuxPreload());
       const bin = join(dir, 'bin');
       mkdirSync(bin);
       const fakeTool = `#!/bin/sh
@@ -508,12 +487,10 @@ if [ "$1" = --version ]; then
 fi
 case "$tool" in
   skopeo)
-    if [ "$1" = copy ]; then exit 0; fi
+    if [ "$1" = copy ]; then printf '%s\\n' "$2" >> "$PROBE_COPY_TRACE"; exit 0; fi
     case "$3" in
-      docker://registry.access.redhat.com/ubi10/ubi-micro)
-        printf '%s\\n' '{"manifests":[{"platform":{"os":"linux","architecture":"amd64"},"digest":"${digest}"}]}' ;;
       docker://cockroachdb/cockroach@${donorDigest})
-        printf '%s\\n' '{"donor-test-index":true,"manifests":[{"platform":{"os":"linux","architecture":"amd64"},"digest":"${digest}"}]}' ;;
+        printf '%s\\n' '${runtimeManifestRaw.trimEnd()}' ;;
       *) printf '%s\\n' 'SENSITIVE-MARKER' >&2; exit 31 ;;
     esac ;;
   umoci)
@@ -548,18 +525,32 @@ esac
         chmodSync(path, 0o755);
       }
       const path = join(dir, 'candidate.json');
+      const copyTrace = join(dir, 'copies');
       writeFileSync(path, JSON.stringify(evidence()));
       const result = spawnSync('sh', [script, path], {
         cwd: root, encoding: 'utf8',
         env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, NODE_OPTIONS: `--require=${preload}`,
           PROBE_FIXTURE_RUNTIME: runtime, PROBE_FIXTURE_DONOR: donor,
+          PROBE_COPY_TRACE: copyTrace,
           PROBE_FAIL_SCAN: missing === 'scan' ? '1' : '0',
           PROBE_FAIL_DB_STATUS: missing === 'db-status' ? '1' : '0',
           PROBE_FAIL_VERSION: missing === 'tool-versions' ? '1' : '0' },
       });
-      assert.notEqual(result.status, 0);
-      assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')),
-        { schema: 1, sourceSha, status: 'rejected', phase: 'inspection', stage, runtime: runtimeMetadata });
+      assert.deepEqual(readFileSync(copyTrace, 'utf8').trim().split('\n'),
+        [`docker://cockroachdb/cockroach@${digest}`, `docker://cockroachdb/cockroach@${digest}`]);
+      if (missing === 'complete') {
+        assert.equal(result.status, 0, result.stderr);
+        const dossier = JSON.parse(readFileSync(path, 'utf8'));
+        assert.equal(dossier.status, 'candidate');
+        assert.equal(dossier.runtime.source, candidateSource);
+        assert.equal(dossier.donor.source, candidateSource);
+        assert.equal(dossier.runtime.amd64Digest, dossier.donor.amd64Digest);
+        assert.ok(dossier.rpmdb.length && dossier.trust.length && dossier.donor.nativeFiles.length);
+      } else {
+        assert.notEqual(result.status, 0);
+        assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')),
+          { schema: 1, sourceSha, status: 'rejected', phase: 'inspection', stage, runtime: runtimeMetadata });
+      }
       assert.doesNotMatch(result.stdout + result.stderr + readFileSync(path, 'utf8'), /SENSITIVE-MARKER/i);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });

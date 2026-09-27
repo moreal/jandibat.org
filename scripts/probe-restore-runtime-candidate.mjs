@@ -21,7 +21,8 @@ const probeStages = Object.freeze({
   baseScan: 'base-scan', vendorInspection: 'vendor-inspection',
   osRelease: 'os-release', packageCatalog: 'package-catalog', rpmdbInventory: 'rpmdb-inventory',
   trustInventory: 'trust-inventory', baseLicenseInventory: 'base-license-inventory',
-  appletInventory: 'applet-inventory', scanEvidence: 'scan-evidence', dossierValidation: 'dossier-validation',
+  appletInventory: 'applet-inventory', scanEvidence: 'scan-evidence', toolVersions: 'tool-versions',
+  dossierValidation: 'dossier-validation',
 });
 let inspectionStage;
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -319,8 +320,10 @@ function probe() {
       decision: nativePaths.includes(path) ? 'include' : 'exclude',
       reason: path === '/cockroach/cockroach' ? 'main-executable' : nativePaths.includes(path) ? 'vendor-elf-library'
         : licensePaths.includes(path) ? 'license-copied-separately' : 'non-ELF' }));
+    inspectionStage = probeStages.scanEvidence;
     const dbStatus = command('grype', ['db', 'status']).stdout;
     const databaseBuilt = dbStatus.match(/^Built:\s*(\S+)/m)?.[1] ?? '';
+    inspectionStage = probeStages.toolVersions;
     const toolVersions = Object.fromEntries(['skopeo', 'syft', 'grype', 'umoci', 'readelf', 'rpm']
       .map(name => [name, command(name, ['--version']).stdout.trim().split('\n')[0].slice(0, 159)]));
     inspectionStage = probeStages.osRelease;

@@ -421,8 +421,12 @@ for (const [missing, stage] of [
   ['rpmdb', 'rpmdb-inventory'],
   ['trust', 'trust-inventory'],
   ['scan', 'scan-evidence'],
+  ['db-status', 'scan-evidence'],
+  ['tool-versions', 'tool-versions'],
 ]) {
-  test(`${missing === 'scan' ? 'scanner exit without finding' : `missing ${missing} evidence`} reports only its fixed stage`, () => {
+  const label = { scan: 'scanner exit without finding', 'db-status': 'Grype database status failure',
+    'tool-versions': 'tool version failure' }[missing] ?? `missing ${missing} evidence`;
+  test(`${label} reports only its fixed stage`, () => {
     const dir = mkdtempSync(join(tmpdir(), 'jandibat-probe-evidence-'));
     try {
       const runtime = join(dir, 'runtime');
@@ -468,7 +472,12 @@ syncBuiltinESMExports();
       mkdirSync(bin);
       const fakeTool = `#!/bin/sh
 tool=$(basename "$0")
-if [ "$1" = --version ]; then printf '%s\\n' 'fixture version'; exit 0; fi
+if [ "$1" = --version ]; then
+  if [ "$tool" = syft ] && [ "$PROBE_FAIL_VERSION" = 1 ]; then
+    printf '%s\\n' 'SENSITIVE-MARKER' >&2; exit 35
+  fi
+  printf '%s\\n' 'fixture version'; exit 0
+fi
 case "$tool" in
   skopeo)
     if [ "$1" = copy ]; then exit 0; fi
@@ -490,7 +499,9 @@ case "$tool" in
     output=$(printf '%s' "$3" | cut -d= -f2-)
     printf '%s\\n' '{"artifacts":[{"type":"rpm","name":"glibc","version":"2.39"}]}' > "$output" ;;
   grype)
-    if [ "$1" = db ]; then printf '%s\\n' 'Built: 2026-09-27T00:00:00Z';
+    if [ "$1" = db ]; then
+      if [ "$PROBE_FAIL_DB_STATUS" = 1 ]; then printf '%s\\n' 'SENSITIVE-MARKER' >&2; exit 36; fi
+      printf '%s\\n' 'Built: 2026-09-27T00:00:00Z';
     else printf '%s\\n' '{"matches":[]}'
       if [ "$PROBE_FAIL_SCAN" = 1 ]; then exit 34; fi
     fi ;;
@@ -514,7 +525,9 @@ esac
         cwd: root, encoding: 'utf8',
         env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, NODE_OPTIONS: `--require=${preload}`,
           PROBE_FIXTURE_RUNTIME: runtime, PROBE_FIXTURE_DONOR: donor,
-          PROBE_FAIL_SCAN: missing === 'scan' ? '1' : '0' },
+          PROBE_FAIL_SCAN: missing === 'scan' ? '1' : '0',
+          PROBE_FAIL_DB_STATUS: missing === 'db-status' ? '1' : '0',
+          PROBE_FAIL_VERSION: missing === 'tool-versions' ? '1' : '0' },
       });
       assert.notEqual(result.status, 0);
       assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')),

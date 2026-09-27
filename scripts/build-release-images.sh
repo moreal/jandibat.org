@@ -36,7 +36,7 @@ if make images-smoke >"$evidence/.image-smoke.log" 2>&1; then :; else
 	smoke_status=$?
 	exit "$smoke_status"
 fi
-stage=packaging
+stage=application-import
 for name in api worker maintenance web; do
 	archive=$(nix build --no-link --print-out-paths ".#${name}-image")
 	node scripts/image-release.mjs import "$name" "$archive" "$evidence"
@@ -44,6 +44,7 @@ done
 
 # Packaging only: extract static executables from exact imported Nix image IDs.
 # The pinned Cockroach tool image must not inherit either Nix store closure.
+stage=restore-context
 api_image_id=$(node -e 'process.stdout.write(require(process.argv[1]).imageId)' "$evidence/api.json")
 maintenance_image_id=$(node -e 'process.stdout.write(require(process.argv[1]).imageId)' "$evidence/maintenance.json")
 restore_context=$(mktemp -d)
@@ -128,11 +129,14 @@ for file in db-migrate-url.sh db-configure-runtime-roles.sh db-verify-runtime-ro
 	chmod 555 "$restore_context/scripts/$file"
 done
 chmod 555 "$restore_context/db/migrations" "$restore_context/scripts" "$restore_context/bin"
+stage=restore-build
 docker buildx build --file deploy/restore-tools.Dockerfile --platform linux/amd64 \
 	--builder "$restore_builder" \
 	--build-arg SOURCE_DATE_EPOCH=1 --provenance=false \
 	--output "type=docker,dest=$restore_context/restore-tools.tar,rewrite-timestamp=true" \
 	"$restore_context"
+stage=restore-import
 node scripts/image-release.mjs import restore-tools "$restore_context/restore-tools.tar" "$evidence"
 image_id=$(node -e 'process.stdout.write(require(process.argv[1]).imageId)' "$evidence/restore-tools.json")
+stage=restore-payload
 sh scripts/test-restore-tools-payload.sh "$image_id"

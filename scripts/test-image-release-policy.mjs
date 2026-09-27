@@ -813,11 +813,11 @@ else process.exit(2);
   assert.ok(f.trace().some(a => a[0] === 'grype' && a[1] === `docker:${imageId}`));
 });
 
-for (const failure of ['none', 'build', 'create', 'collision', 'wrong-driver']) {
+for (const failure of ['none', 'app-import', 'extract', 'create', 'collision', 'wrong-driver', 'build', 'restore-import', 'payload']) {
 const uncertainOwnership = ['create', 'collision'].includes(failure);
 test(`release packaging ${uncertainOwnership ? 'preserves uncertain builder after' : 'cleans owned builder after'} ${failure === 'none' ? 'success' : failure + ' failure'}`, t => {
   const dir = fixture(t);
-  const env = { PATH: `${join(dir, 'bin')}:${process.env.PATH}`, TRACE: join(dir, 'trace'), BUILDER_STATE: join(dir,'builder'), FIXTURE_ARCHIVE: join(dir,'archive.tar'), FAILURE: failure };
+  const env = { PATH: `${join(dir, 'bin')}:${process.env.PATH}`, TRACE: join(dir, 'trace'), BUILDER_STATE: join(dir,'builder'), FIXTURE_ARCHIVE: join(dir,'archive.tar'), FAILURE: failure, SENTINEL: 'SENTINEL-secret-path-::error::injected' };
   if (failure === 'build') {
     env.IMAGE_VALIDATION_STAGE_FILE = join(dir, 'unwritable-stage');
     mkdirSync(env.IMAGE_VALIDATION_STAGE_FILE);
@@ -831,17 +831,26 @@ test(`release packaging ${uncertainOwnership ? 'preserves uncertain builder afte
   writeFileSync(join(backupToolsPayload, 'bin/backup-tools'), 'static fixture executable', { mode: 0o555 });
   env.BACKUP_TOOLS_PAYLOAD = backupToolsPayload;
   executable(dir, 'nix', `
+const {spawnSync} = require('node:child_process');
 const a = process.argv.slice(2);
+if (a[0] === 'develop') { const command = a.indexOf('--command'); const result = spawnSync(a[command+1], a.slice(command+2), {stdio:'inherit'}); process.exit(result.status ?? 99); }
 console.log(a[0] === 'eval' ? 'x86_64-linux' : a.includes('.#restore-tools-busybox') ? process.env.STATIC_BUSYBOX : a.includes('.#backup-tools-payload') ? process.env.BACKUP_TOOLS_PAYLOAD : process.env.FIXTURE_ARCHIVE);
 `);
   executable(dir, 'make', '');
   // Image import/scan has its own real-program fixture; this shell fixture
   // isolates builder lifecycle from Nix build, image import and payload checks.
-  executable(dir, 'node', `if (process.argv[2] === '-e') process.stdout.write('sha256:' + 'a'.repeat(64));`);
+  executable(dir, 'node', `
+const a = process.argv.slice(2);
+if (a[0] === '-e') process.stdout.write('sha256:' + 'a'.repeat(64));
+else if (a[0] === 'scripts/image-release.mjs' && a[1] === 'import') {
+ if (process.env.FAILURE === 'app-import' && a[2] === 'api') { console.error(process.env.SENTINEL); process.exit(51); }
+ if (process.env.FAILURE === 'restore-import' && a[2] === 'restore-tools') { console.error(process.env.SENTINEL); process.exit(52); }
+}
+`);
   executable(dir, 'sh', `
 const {spawnSync} = require('node:child_process');
 const args = process.argv.slice(2);
-if (args[0] === 'scripts/test-restore-tools-payload.sh') process.exit(0);
+if (args[0] === 'scripts/test-restore-tools-payload.sh') { if (process.env.FAILURE === 'payload') { console.error(process.env.SENTINEL); process.exit(53); } process.exit(0); }
 const result = spawnSync('/bin/sh', args, {stdio:'inherit', env:process.env});
 process.exit(result.status ?? 1);
 `);
@@ -851,6 +860,7 @@ const fs = require('node:fs'); const a = process.argv.slice(2);
 fs.appendFileSync(process.env.TRACE, JSON.stringify(a)+'\\n');
 if (a[0] === 'create') { console.log('extract-' + (fs.existsSync(process.env.TRACE + '.extract') ? 'maintenance' : 'api')); fs.writeFileSync(process.env.TRACE + '.extract', 'created'); process.exit(0); }
 if (a[0] === 'cp') {
+ if (process.env.FAILURE === 'extract') { console.error(process.env.SENTINEL); process.exit(54); }
  if (a[1] !== '-L' || !/^extract-(api|maintenance):\\/bin\\/(server|maintenance)$/.test(a[2])) process.exit(17);
  fs.writeFileSync(a.at(-1), 'static fixture executable'); fs.chmodSync(a.at(-1), 0o555); process.exit(0);
 }
@@ -887,26 +897,42 @@ if (a[1] === 'build') {
  }
  if (fs.readFileSync(context + '/busybox', 'utf8') !== 'static fixture executable') process.exit(18);
  if (fs.existsSync(context + '/nix/store')) process.exit(16);
- if (process.env.FAILURE === 'build') process.exit(9);
+ if (process.env.FAILURE === 'build') { console.error(process.env.SENTINEL); process.exit(9); }
  process.exit(0);
 }
 if (a[1] === 'rm') { if (a.at(-1) !== fs.readFileSync(process.env.BUILDER_STATE,'utf8')) process.exit(6); fs.unlinkSync(process.env.BUILDER_STATE); process.exit(0); }
 process.exit(7);
 `);
-  const result = invoke('build-release-images.sh', env, [join(dir, 'evidence')]);
-  assert.equal(result.status, uncertainOwnership ? 8 : failure === 'build' ? 9 : failure === 'wrong-driver' ? 1 : 0, result.stderr);
+  const evidence = join(dir, 'evidence');
+  const result = invoke('run-image-validation-ci.sh', env, [evidence]);
+  const expectedStatus = { none: 0, 'app-import': 51, extract: 54, create: 8, collision: 8, 'wrong-driver': 1, build: 9, 'restore-import': 52, payload: 53 };
+  const expectedStage = { 'app-import': 'application archive import', extract: 'restore builder/context', create: 'restore builder/context', collision: 'restore builder/context', 'wrong-driver': 'restore builder/context', build: 'restore build', 'restore-import': 'restore image import and scan', payload: 'restore payload contract' };
+  assert.equal(result.status, expectedStatus[failure], result.stderr);
+  assert.equal(result.stdout, '');
+  assert.equal(result.stderr, failure === 'none' ? '' : `::error::Image validation failed during ${expectedStage[failure]}.\n`);
+  assert.doesNotMatch(result.stdout + result.stderr, /SENTINEL|injected|sha256:|jandibat-restore-/);
+  if (failure === 'app-import') {
+    assert.equal(existsSync(env.TRACE), false);
+    assert.equal(existsSync(env.BUILDER_STATE), false);
+    return;
+  }
   const calls = readFileSync(env.TRACE,'utf8').trim().split('\n').map(JSON.parse);
   const creation = calls.find(a => a[1] === 'create');
   assert.match(creation[creation.indexOf('--driver-opt')+1], /^image=moby\/buildkit:v[0-9.]+@sha256:[0-9a-f]{64}$/);
   const builder = creation[creation.indexOf('--name')+1];
-  if (!uncertainOwnership) {
+  if (!uncertainOwnership && failure !== 'extract') {
     assert.equal(readFileSync(join(dir, 'evidence/buildx-driver.txt'), 'utf8').trim(), failure === 'wrong-driver' ? 'docker' : 'docker-container');
   }
   if (failure === 'wrong-driver') assert.equal(calls.filter(a => a[1] === 'build').length, 0);
-  assert.equal(calls.filter(a => a[1] === 'rm').length, uncertainOwnership ? 0 : 1);
+  assert.equal(calls.filter(a => a[1] === 'rm' && a.length === 3).length, uncertainOwnership ? 0 : 1);
   if (uncertainOwnership) assert.equal(readFileSync(env.BUILDER_STATE, 'utf8'), builder);
   else assert.equal(calls.at(-1).at(-1), builder);
   assert.equal(existsSync(env.BUILDER_STATE), uncertainOwnership);
+  if (failure === 'build') {
+    const direct = invoke('build-release-images.sh', env, [join(dir, 'unwritable-marker-evidence')]);
+    assert.equal(direct.status, 9, direct.stderr);
+    assert.equal(existsSync(env.BUILDER_STATE), false);
+  }
 });
 }
 

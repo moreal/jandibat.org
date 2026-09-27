@@ -31,7 +31,11 @@ case "$(cat "$marker" 2>/dev/null)" in
 	payload-rebuild) printf '%s\n' '::error::Image validation failed during payload rebuild.' >&2 ;;
 	payload-compare) printf '%s\n' '::error::Image validation failed during payload comparison.' >&2 ;;
 	image-smoke) printf '%s\n' '::error::Image validation failed during image smoke.' >&2 ;;
-	packaging) printf '%s\n' '::error::Image validation failed during packaging.' >&2 ;;
+	application-import) printf '%s\n' '::error::Image validation failed during application archive import.' >&2 ;;
+	restore-context) printf '%s\n' '::error::Image validation failed during restore builder/context.' >&2 ;;
+	restore-build) printf '%s\n' '::error::Image validation failed during restore build.' >&2 ;;
+	restore-import) printf '%s\n' '::error::Image validation failed during restore image import and scan.' >&2 ;;
+	restore-payload) printf '%s\n' '::error::Image validation failed during restore payload contract.' >&2 ;;
 	*) printf '%s\n' '::error::Image validation failed during setup.' >&2 ;;
 esac
 exit "$status"

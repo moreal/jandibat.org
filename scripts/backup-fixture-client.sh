@@ -222,10 +222,7 @@ fixture_check_metadata_grants() {
  file=$2
  awk -F '\t' -v kind="$kind" '
   NR==1 { if ($1!="grantee" || $2!="privilege_type" || $3!="is_grantable") bad=1; next }
-  $1=="jandibat_backup_bootstrap" && ($3=="false" || $3=="f") && (
-   (kind=="schema" && $2=="USAGE") ||
-   (kind=="table" && ($2=="SELECT" || $2=="INSERT")) ||
-   (kind=="view" && $2=="SELECT")) { seen[$2]++; next }
+  $1=="jandibat_backup_bootstrap" && ($3=="false" || $3=="f") && ((kind=="schema" && $2=="USAGE") || (kind=="table" && ($2=="SELECT" || $2=="INSERT")) || (kind=="view" && $2=="SELECT")) { seen[$2]++; next }
   { bad=1 }
   END {
    if (kind=="table") exit bad || seen["SELECT"]!=1 || seen["INSERT"]!=1

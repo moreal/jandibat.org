@@ -569,6 +569,21 @@ test('grant policy rejects extra authority and grant option', () => {
         mutations: ['jandibat_backup_runner\tBACKUP\ttrue', 'jandibat_backup_runner\tCREATE\tfalse'],
       },
       {
+        name: 'metadata-schema', fn: 'fixture_check_metadata_grants schema',
+        valid: 'grantee\tprivilege_type\tis_grantable\njandibat_backup_bootstrap\tUSAGE\tfalse\n',
+        mutations: ['jandibat_backup_bootstrap\tUSAGE\ttrue', 'jandibat_backup_runner\tUSAGE\tfalse'],
+      },
+      {
+        name: 'metadata-table', fn: 'fixture_check_metadata_grants table',
+        valid: 'grantee\tprivilege_type\tis_grantable\njandibat_backup_bootstrap\tSELECT\tfalse\njandibat_backup_bootstrap\tINSERT\tfalse\n',
+        mutations: ['jandibat_backup_bootstrap\tINSERT\ttrue', 'jandibat_backup_runner\tSELECT\tfalse'],
+      },
+      {
+        name: 'metadata-view', fn: 'fixture_check_metadata_grants view',
+        valid: 'grantee\tprivilege_type\tis_grantable\njandibat_backup_bootstrap\tSELECT\tfalse\n',
+        mutations: ['jandibat_backup_bootstrap\tSELECT\ttrue', 'jandibat_backup_runner\tSELECT\tfalse'],
+      },
+      {
         name: 'connection', fn: 'fixture_check_connection_grants',
         // v26.2 SHOW GRANTS includes root ALL even for a non-root creator.
         valid: 'grantee\tprivilege_type\tis_grantable\njandibat_backup_bootstrap\tDROP\ttrue\njandibat_backup_bootstrap\tUSAGE\ttrue\njandibat_backup_runner\tUSAGE\tfalse\njandibat_backup_verifier\tUSAGE\tfalse\nroot\tALL\tf\n',
@@ -584,7 +599,11 @@ test('grant policy rejects extra authority and grant option', () => {
       assert.equal(run().status, 0, `${name} valid grant set rejected`);
       for (const mutation of mutations) {
         const sourceLine = name === 'system' ? 'jandibat_backup_bootstrap\tEXTERNALCONNECTION\tfalse'
-          : name === 'database' ? 'jandibat_backup_runner\tBACKUP\tfalse' : 'jandibat_backup_runner\tUSAGE\tfalse';
+          : name === 'database' ? 'jandibat_backup_runner\tBACKUP\tfalse'
+            : name === 'metadata-schema' ? 'jandibat_backup_bootstrap\tUSAGE\tfalse'
+              : name === 'metadata-table' ? 'jandibat_backup_bootstrap\tINSERT\tfalse'
+                : name === 'metadata-view' ? 'jandibat_backup_bootstrap\tSELECT\tfalse'
+                  : 'jandibat_backup_runner\tUSAGE\tfalse';
         writeFileSync(path, mutation.includes(sourceLine.split('\t').slice(0, 2).join('\t'))
           ? valid.replace(sourceLine, mutation) : valid + mutation + '\n');
         assert.equal(run().status, 1, `${name} accepted ${mutation}`);

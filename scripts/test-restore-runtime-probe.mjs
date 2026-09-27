@@ -445,7 +445,8 @@ esac
 
 for (const [missing, stage] of [
   ['complete', null],
-  ['cleanup', 'scratch-cleanup'],
+  ['cleanup-eacces', 'scratch-cleanup'],
+  ['cleanup-unknown', 'scratch-cleanup'],
   ['trust-and-cleanup', 'scratch-cleanup'],
   ['rpmdb', 'rpmdb-inventory'],
   ['trust', 'trust-inventory'],
@@ -460,7 +461,9 @@ for (const [missing, stage] of [
 ]) {
   const label = { scan: 'scanner exit without finding', 'db-status': 'Grype database status failure',
     'tool-versions': 'tool version failure', complete: 'synthetic shared-image dossier',
-    cleanup: 'scratch cleanup failure after validation', 'trust-and-cleanup': 'scratch cleanup failure with pending trust rejection',
+    'cleanup-eacces': 'EACCES scratch cleanup failure after validation',
+    'cleanup-unknown': 'unknown scratch cleanup failure after validation',
+    'trust-and-cleanup': 'scratch cleanup failure with pending trust rejection',
     identity: 'invalid dossier identity', 'donor-license': 'missing donor license',
     'elf-closure': 'invalid ELF dependency name', ownership: 'unaccounted package owner',
     'empty-version': 'empty collected tool version' }[missing] ?? `missing ${missing} evidence`;
@@ -486,7 +489,7 @@ for (const [missing, stage] of [
         writeFileSync(path, bytes);
       }
       const preload = join(dir, 'preload.cjs');
-      const cleanupInjected = missing === 'cleanup' || missing === 'trust-and-cleanup';
+      const cleanupInjected = missing === 'cleanup-eacces' || missing === 'cleanup-unknown' || missing === 'trust-and-cleanup';
       const preloadExtra = missing === 'identity' ? `const originalKeys = Object.keys;
 Object.keys = function (value) {
   const keys = originalKeys(value);
@@ -499,7 +502,7 @@ fs.rmSync = function (path, options) {
   if (String(path).startsWith(tmpdir() + '/jandibat-runtime-probe-')) {
     originalRm.call(this, path, options);
     fs.writeFileSync(process.env.PROBE_CLEANUP_TRACE, '1');
-    throw new Error('SENSITIVE-MARKER');
+    throw Object.assign(new Error('SENSITIVE-MARKER'), { code: process.env.PROBE_CLEANUP_CODE });
   }
   return originalRm.call(this, path, options);
 };` : '';
@@ -566,6 +569,7 @@ esac
         env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, NODE_OPTIONS: `--require=${preload}`,
           PROBE_FIXTURE_RUNTIME: runtime, PROBE_FIXTURE_DONOR: donor,
           PROBE_COPY_TRACE: copyTrace, PROBE_CLEANUP_TRACE: cleanupTrace,
+          PROBE_CLEANUP_CODE: missing === 'cleanup-unknown' ? 'SENSITIVE-MARKER' : 'EACCES',
           PROBE_FAIL_SCAN: missing === 'scan' ? '1' : '0',
           PROBE_FAIL_DB_STATUS: missing === 'db-status' ? '1' : '0',
           PROBE_FAIL_VERSION: missing === 'tool-versions' ? '1' : '0',
@@ -587,7 +591,8 @@ esac
       } else {
         assert.notEqual(result.status, 0);
         assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')),
-          { schema: 1, sourceSha, status: 'rejected', phase: 'inspection', stage, runtime: runtimeMetadata });
+          { schema: 1, sourceSha, status: 'rejected', phase: 'inspection', stage, runtime: runtimeMetadata,
+            ...(cleanupInjected ? { cleanupFailure: missing === 'cleanup-unknown' ? 'unknown' : 'permission-denied' } : {}) });
       }
       assert.doesNotMatch(result.stdout + result.stderr + readFileSync(path, 'utf8'), /SENSITIVE-MARKER/i);
     } finally { rmSync(dir, { recursive: true, force: true }); }

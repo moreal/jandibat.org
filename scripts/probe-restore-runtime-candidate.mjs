@@ -26,8 +26,13 @@ const probeStages = Object.freeze({
   elfClosure: 'elf-closure', packageOwnership: 'package-ownership',
   toolVersionValidation: 'tool-version-validation', dossierStatus: 'dossier-status',
 });
+const cleanupFailureCategories = Object.freeze({
+  EACCES: 'permission-denied', EPERM: 'permission-denied', EBUSY: 'busy',
+  ENOTEMPTY: 'not-empty', EROFS: 'read-only-filesystem',
+});
 let inspectionStage;
 let resolvedRuntime;
+let cleanupFailure;
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 const fileSha = path => sha(readFileSync(path));
 const digest = value => /^sha256:[a-f0-9]{64}$/.test(value ?? '');
@@ -372,8 +377,10 @@ function probe() {
     return evidence;
   } finally {
     try { rmSync(scratch, { recursive: true, force: true }); }
-    catch {
+    catch (error) {
       inspectionStage = probeStages.scratchCleanup;
+      cleanupFailure = Object.hasOwn(cleanupFailureCategories, error?.code)
+        ? cleanupFailureCategories[error.code] : 'unknown';
       throw new Error('scratch cleanup failed');
     }
   }
@@ -409,6 +416,7 @@ if (process.argv[2] === '--inspect-donor-licenses') {
         const sourceSha = command('git', ['rev-parse', 'HEAD']).stdout.trim();
         atomicEvidence(process.argv[2], { schema: 1, sourceSha, status: 'rejected', phase: 'inspection',
           ...(Object.values(probeStages).includes(inspectionStage) ? { stage: inspectionStage } : {}),
+          ...(inspectionStage === probeStages.scratchCleanup && cleanupFailure ? { cleanupFailure } : {}),
           ...(resolvedRuntime && resolvedRuntime.source === runtimeSource &&
             digest(resolvedRuntime.indexDigest) && digest(resolvedRuntime.amd64Digest) ? { runtime: resolvedRuntime } : {}) });
       } catch { /* the output path itself may be unusable */ }

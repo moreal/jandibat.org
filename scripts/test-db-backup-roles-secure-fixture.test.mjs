@@ -401,10 +401,11 @@ test('custom S3 CREATE failure reports only validated SQLSTATE and fixed categor
       });
     };
     for (const [output, expected] of [
-      ['ERROR: operation failed\nSQLSTATE: 57014\nprivate path /tmp/hidden\n', 'RED: custom S3 CREATE privilege category=sql SQLSTATE=57014 (details redacted)\n'],
-      ['dial tcp: connection refused at private-host\n', 'RED: custom S3 CREATE privilege category=transport-client SQLSTATE=unavailable (details redacted)\n'],
-      ['opaque client failure at private-host\n', 'RED: custom S3 CREATE privilege category=unknown SQLSTATE=unavailable (details redacted)\n'],
-      ['SQLSTATE: 57014X private-host\n', 'RED: custom S3 CREATE privilege category=unknown SQLSTATE=unavailable (details redacted)\n'],
+      ['ERROR: operation failed\nSQLSTATE: 57014\nprivate path /tmp/hidden\n', 'RED: custom S3 CREATE probe category=sql SQLSTATE=57014 (details redacted)\n'],
+      ['dial tcp: connection refused at private-host\n', 'RED: custom S3 CREATE probe category=transport-client SQLSTATE=unavailable (details redacted)\n'],
+      ['opaque client failure at private-host\n', 'RED: custom S3 CREATE probe category=unknown SQLSTATE=unavailable (details redacted)\n'],
+      ['SQLSTATE: 57014X private-host\n', 'RED: custom S3 CREATE probe category=unknown SQLSTATE=unavailable (details redacted)\n'],
+      ['SQLSTATE: 57014x private-host\n', 'RED: custom S3 CREATE probe category=unknown SQLSTATE=unavailable (details redacted)\n'],
     ]) {
       const result = run(output);
       assert.equal(result.status, 1);

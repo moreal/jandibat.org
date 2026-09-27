@@ -47,7 +47,7 @@ diagnose_custom_s3_create() {
    while (match(remaining, /SQLSTATE: [0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z]/)) {
     candidate = substr(remaining, RSTART + 10, 5)
     following = substr(remaining, RSTART + 15, 1)
-    if (following !~ /[0-9A-Z]/) { print candidate; exit }
+    if (following !~ /[0-9A-Za-z]/) { print candidate; exit }
     remaining = substr(remaining, RSTART + RLENGTH)
    }
   }
@@ -65,7 +65,7 @@ diagnose_custom_s3_create() {
    fail 'custom S3 CREATE diagnostic inspection unavailable'
   fi
  fi
- fail "custom S3 CREATE privilege category=$category SQLSTATE=$code"
+ fail "custom S3 CREATE probe category=$category SQLSTATE=$code"
 }
 scan_capture() {
  target=$1

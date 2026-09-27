@@ -445,9 +445,13 @@ esac
 
 for (const [missing, stage] of [
   ['complete', null],
+  ['readonly-cleanup', null],
   ['cleanup-eacces', 'scratch-cleanup'],
   ['cleanup-unknown', 'scratch-cleanup'],
   ['trust-and-cleanup', 'scratch-cleanup'],
+  ['repair-chmod-fails', 'scratch-cleanup'],
+  ['repair-retry-fails', 'scratch-cleanup'],
+  ['cleanup-nonpermission', 'scratch-cleanup'],
   ['rpmdb', 'rpmdb-inventory'],
   ['trust', 'trust-inventory'],
   ['scan', 'scan-evidence'],
@@ -461,14 +465,20 @@ for (const [missing, stage] of [
 ]) {
   const label = { scan: 'scanner exit without finding', 'db-status': 'Grype database status failure',
     'tool-versions': 'tool version failure', complete: 'synthetic shared-image dossier',
+    'readonly-cleanup': 'read-only unpack cleanup preserving outside symlink target',
     'cleanup-eacces': 'EACCES scratch cleanup failure after validation',
     'cleanup-unknown': 'unknown scratch cleanup failure after validation',
     'trust-and-cleanup': 'scratch cleanup failure with pending trust rejection',
+    'repair-chmod-fails': 'repair chmod failure',
+    'repair-retry-fails': 'repair retry failure',
+    'cleanup-nonpermission': 'non-permission cleanup failure without repair',
     identity: 'invalid dossier identity', 'donor-license': 'missing donor license',
     'elf-closure': 'invalid ELF dependency name', ownership: 'unaccounted package owner',
     'empty-version': 'empty collected tool version' }[missing] ?? `missing ${missing} evidence`;
-  test(missing === 'complete' ? 'synthetic shared image yields a coherent candidate dossier' : `${label} reports only its fixed stage`, () => {
+  test(['complete', 'readonly-cleanup'].includes(missing)
+    ? `${label} yields a coherent candidate dossier` : `${label} reports only its fixed stage`, () => {
     const dir = mkdtempSync(join(tmpdir(), 'jandibat-probe-evidence-'));
+    const repairInjected = ['repair-chmod-fails', 'repair-retry-fails', 'cleanup-nonpermission'].includes(missing);
     try {
       const runtime = join(dir, 'full-image');
       const donor = runtime;
@@ -495,13 +505,45 @@ Object.keys = function (value) {
   const keys = originalKeys(value);
   return value && value.schema === 1 && value.runtime && value.donor && value.packages && value.status === 'candidate'
     ? [...keys, 'unexpected-field'] : keys;
+};` : missing === 'readonly-cleanup' ? `const fs = require('node:fs');
+const { tmpdir } = require('node:os');
+const originalRm = fs.rmSync;
+let firstScratchRemoval = true;
+fs.rmSync = function (path, options) {
+  if (firstScratchRemoval && String(path).startsWith(tmpdir() + '/jandibat-runtime-probe-')) {
+    firstScratchRemoval = false;
+    throw Object.assign(new Error('SENSITIVE-MARKER'), { code: 'EACCES' });
+  }
+  return originalRm.call(this, path, options);
+};` : repairInjected ? `const fs = require('node:fs');
+const { tmpdir } = require('node:os');
+const originalRm = fs.rmSync;
+const originalFchmod = fs.fchmodSync;
+let scratchAttempts = 0;
+fs.rmSync = function (path, options) {
+  if (String(path).startsWith(tmpdir() + '/jandibat-runtime-probe-')) {
+    scratchAttempts++;
+    fs.writeFileSync(process.env.PROBE_CLEANUP_TRACE, String(path));
+    if (scratchAttempts === 1) throw Object.assign(new Error('SENSITIVE-MARKER'), {
+      code: process.env.PROBE_REPAIR_KIND === 'nonpermission' ? 'EIO' : 'EACCES' });
+    if (process.env.PROBE_REPAIR_KIND === 'retry') throw Object.assign(new Error('SENSITIVE-MARKER'), { code: 'EBUSY' });
+  }
+  return originalRm.call(this, path, options);
+};
+fs.fchmodSync = function (fd, mode) {
+  fs.writeFileSync(process.env.PROBE_REPAIR_MARKER, 'repair attempted');
+  if (process.env.PROBE_REPAIR_KIND === 'chmod') throw Object.assign(new Error('SENSITIVE-MARKER'), { code: 'EIO' });
+  return originalFchmod.call(this, fd, mode);
 };` : cleanupInjected ? `const fs = require('node:fs');
 const { tmpdir } = require('node:os');
 const originalRm = fs.rmSync;
 fs.rmSync = function (path, options) {
   if (String(path).startsWith(tmpdir() + '/jandibat-runtime-probe-')) {
-    originalRm.call(this, path, options);
-    fs.writeFileSync(process.env.PROBE_CLEANUP_TRACE, '1');
+    if (process.env.PROBE_CLEANUP_CODE === 'EACCES') fs.writeFileSync(process.env.PROBE_CLEANUP_TRACE, String(path));
+    else {
+      originalRm.call(this, path, options);
+      fs.writeFileSync(process.env.PROBE_CLEANUP_TRACE, '1');
+    }
     throw Object.assign(new Error('SENSITIVE-MARKER'), { code: process.env.PROBE_CLEANUP_CODE });
   }
   return originalRm.call(this, path, options);
@@ -532,7 +574,15 @@ case "$tool" in
       */runtime/bundle) cp -R "$PROBE_FIXTURE_RUNTIME/." "$5/rootfs/" ;;
       */donor/bundle) cp -R "$PROBE_FIXTURE_DONOR/." "$5/rootfs/" ;;
       *) exit 32 ;;
-    esac ;;
+    esac
+    if [ "$PROBE_READONLY_UNPACK" = 1 ]; then
+      mkdir -p "$5/rootfs/cockroach/readonly/nested"
+      printf '%s\\n' 'fixture' > "$5/rootfs/cockroach/readonly/nested/file"
+      ln -s "$PROBE_OUTSIDE_SENTINEL" "$5/rootfs/cockroach/outside-link"
+      chmod 0500 "$5/rootfs/cockroach/readonly/nested"
+      chmod 0500 "$5/rootfs/cockroach/readonly"
+      chmod 0500 "$5/rootfs/cockroach"
+    fi ;;
   syft)
     output=$(printf '%s' "$3" | cut -d= -f2-)
     printf '%s\\n' '{"artifacts":[{"type":"rpm","name":"glibc","version":"2.39"}]}' > "$output" ;;
@@ -563,12 +613,20 @@ esac
       const path = join(dir, 'candidate.json');
       const copyTrace = join(dir, 'copies');
       const cleanupTrace = join(dir, 'cleanup-called');
+      const repairMarker = join(dir, 'repair-attempted');
+      const outsideSentinel = join(dir, 'outside-sentinel');
+      writeFileSync(outsideSentinel, 'outside untouched\n');
       writeFileSync(path, JSON.stringify(evidence()));
       const result = spawnSync('sh', [script, path], {
         cwd: root, encoding: 'utf8',
         env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, NODE_OPTIONS: `--require=${preload}`,
           PROBE_FIXTURE_RUNTIME: runtime, PROBE_FIXTURE_DONOR: donor,
+          PROBE_READONLY_UNPACK: missing === 'readonly-cleanup' ? '1' : '0',
+          PROBE_OUTSIDE_SENTINEL: outsideSentinel,
           PROBE_COPY_TRACE: copyTrace, PROBE_CLEANUP_TRACE: cleanupTrace,
+          PROBE_REPAIR_MARKER: repairMarker,
+          PROBE_REPAIR_KIND: missing === 'repair-chmod-fails' ? 'chmod'
+            : missing === 'repair-retry-fails' ? 'retry' : 'nonpermission',
           PROBE_CLEANUP_CODE: missing === 'cleanup-unknown' ? 'SENSITIVE-MARKER' : 'EACCES',
           PROBE_FAIL_SCAN: missing === 'scan' ? '1' : '0',
           PROBE_FAIL_DB_STATUS: missing === 'db-status' ? '1' : '0',
@@ -579,22 +637,35 @@ esac
       });
       assert.deepEqual(readFileSync(copyTrace, 'utf8').trim().split('\n'),
         [`docker://cockroachdb/cockroach@${digest}`, `docker://cockroachdb/cockroach@${digest}`]);
-      if (cleanupInjected) assert.equal(readFileSync(cleanupTrace, 'utf8'), '1');
-      if (missing === 'complete') {
-        assert.equal(result.status, 0, result.stderr);
+      if (missing === 'cleanup-unknown') assert.equal(readFileSync(cleanupTrace, 'utf8'), '1');
+      if (missing === 'cleanup-eacces' || missing === 'trust-and-cleanup')
+        assert.ok(readFileSync(cleanupTrace, 'utf8').startsWith(join(tmpdir(), 'jandibat-runtime-probe-')));
+      if (missing === 'cleanup-nonpermission') assert.equal(readdirSync(dir).includes('repair-attempted'), false);
+      if (missing === 'complete' || missing === 'readonly-cleanup') {
+        assert.equal(result.status, 0, `${result.stderr} ${readFileSync(path, 'utf8')}`);
         const dossier = JSON.parse(readFileSync(path, 'utf8'));
         assert.equal(dossier.status, 'candidate');
         assert.equal(dossier.runtime.source, candidateSource);
         assert.equal(dossier.donor.source, candidateSource);
         assert.equal(dossier.runtime.amd64Digest, dossier.donor.amd64Digest);
         assert.ok(dossier.rpmdb.length && dossier.trust.length && dossier.donor.nativeFiles.length);
+        if (missing === 'readonly-cleanup') assert.equal(readFileSync(outsideSentinel, 'utf8'), 'outside untouched\n');
       } else {
         assert.notEqual(result.status, 0);
         assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')),
           { schema: 1, sourceSha, status: 'rejected', phase: 'inspection', stage, runtime: runtimeMetadata,
-            ...(cleanupInjected ? { cleanupFailure: missing === 'cleanup-unknown' ? 'unknown' : 'permission-denied' } : {}) });
+            ...(cleanupInjected || repairInjected ? { cleanupFailure: missing === 'cleanup-unknown' || missing === 'repair-chmod-fails' || missing === 'cleanup-nonpermission'
+              ? 'unknown' : missing === 'repair-retry-fails' ? 'busy' : 'permission-denied' } : {}) });
       }
       assert.doesNotMatch(result.stdout + result.stderr + readFileSync(path, 'utf8'), /SENSITIVE-MARKER/i);
-    } finally { rmSync(dir, { recursive: true, force: true }); }
+    } finally {
+      const trace = join(dir, 'cleanup-called');
+      if (readdirSync(dir).includes('cleanup-called') &&
+          (repairInjected || missing === 'cleanup-eacces' || missing === 'trust-and-cleanup')) {
+        const scratch = readFileSync(trace, 'utf8');
+        if (scratch.startsWith(join(tmpdir(), 'jandibat-runtime-probe-'))) rmSync(scratch, { recursive: true, force: true });
+      }
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 }

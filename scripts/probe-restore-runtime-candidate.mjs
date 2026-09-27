@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { closeSync, constants, existsSync, fchmodSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readlinkSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir, type as osType } from 'node:os';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -136,6 +136,39 @@ function unpack(source, childDigest, directory) {
   command('skopeo', ['copy', `docker://${image}`, `oci:${layout}:candidate`]);
   command('umoci', ['unpack', '--rootless', '--image', `${layout}:candidate`, bundle]);
   return join(bundle, 'rootfs');
+}
+
+function repairScratchDirectories(scratch) {
+  const rootStat = lstatSync(scratch);
+  if (!rootStat.isDirectory() || rootStat.uid !== process.getuid()) throw new Error('unsafe scratch root');
+  const visit = (directory, anchoredPath, isRoot = false) => {
+    const suffix = relative(scratch, directory);
+    if (isAbsolute(suffix) || suffix === '..' || suffix.startsWith(`..${sep}`)) throw new Error('scratch path escaped');
+    const fd = openSync(anchoredPath, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+    try {
+      const stat = fstatSync(fd);
+      if (!stat.isDirectory() || stat.uid !== rootStat.uid || stat.dev !== rootStat.dev ||
+          (isRoot && stat.ino !== rootStat.ino)) throw new Error('unsafe scratch directory');
+      fchmodSync(fd, (stat.mode & 0o7777) | 0o700);
+      // The production Linux probe traverses the already-open directory, not a re-resolved path.
+      // Darwin is used only by the synthetic test harness, which emulates process.platform.
+      if (osType() === 'Linux' && !existsSync('/proc/self/fd')) throw new Error('descriptor traversal unavailable');
+      const anchor = osType() === 'Linux' ? `/proc/self/fd/${fd}` : directory;
+      for (const entry of readdirSync(anchor, { withFileTypes: true })) {
+        if (entry.isDirectory()) visit(join(directory, entry.name), join(anchor, entry.name));
+      }
+    } finally { closeSync(fd); }
+  };
+  visit(scratch, scratch, true);
+}
+
+function removeScratch(scratch) {
+  try { rmSync(scratch, { recursive: true, force: true }); }
+  catch (error) {
+    if (error?.code !== 'EACCES' && error?.code !== 'EPERM') throw error;
+    repairScratchDirectories(scratch);
+    rmSync(scratch, { recursive: true, force: true });
+  }
 }
 
 function elf(rootfs, path, executable = false) {
@@ -376,7 +409,7 @@ function probe() {
     validate(evidence, sourceSha, stage => { inspectionStage = stage; });
     return evidence;
   } finally {
-    try { rmSync(scratch, { recursive: true, force: true }); }
+    try { removeScratch(scratch); }
     catch (error) {
       inspectionStage = probeStages.scratchCleanup;
       cleanupFailure = Object.hasOwn(cleanupFailureCategories, error?.code)

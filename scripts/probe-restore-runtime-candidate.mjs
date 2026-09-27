@@ -25,6 +25,7 @@ const probeStages = Object.freeze({
   dossierValidation: 'dossier-validation',
 });
 let inspectionStage;
+let resolvedRuntime;
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 const fileSha = path => sha(readFileSync(path));
 const digest = value => /^sha256:[a-f0-9]{64}$/.test(value ?? '');
@@ -276,6 +277,9 @@ function probe() {
   assert.equal(fileSha(join(root, 'scripts/db-bootstrap-roles.sh')), bootstrapSourceSha256, 'bootstrap source changed; refresh applet inventory');
   inspectionStage = probeStages.runtimeIndex;
   const runtime = resolveImage(runtimeSource, true);
+  required(typeof runtime.indexDigest === 'string' && digest(runtime.indexDigest) &&
+    typeof runtime.amd64Digest === 'string' && digest(runtime.amd64Digest), 'resolved runtime digests');
+  resolvedRuntime = { source: runtimeSource, indexDigest: runtime.indexDigest, amd64Digest: runtime.amd64Digest };
   const donor = resolveImage(donorSource, false, {
     fetch: probeStages.donorRawFetch, parse: probeStages.donorManifestParse,
     pin: probeStages.donorPinCheck, child: probeStages.donorChildSelection,
@@ -391,7 +395,9 @@ if (process.argv[2] === '--inspect-donor-licenses') {
       try {
         const sourceSha = command('git', ['rev-parse', 'HEAD']).stdout.trim();
         atomicEvidence(process.argv[2], { schema: 1, sourceSha, status: 'rejected', phase: 'inspection',
-          ...(Object.values(probeStages).includes(inspectionStage) ? { stage: inspectionStage } : {}) });
+          ...(Object.values(probeStages).includes(inspectionStage) ? { stage: inspectionStage } : {}),
+          ...(resolvedRuntime && resolvedRuntime.source === runtimeSource &&
+            digest(resolvedRuntime.indexDigest) && digest(resolvedRuntime.amd64Digest) ? { runtime: resolvedRuntime } : {}) });
       } catch { /* the output path itself may be unusable */ }
     }
     process.stderr.write('restore runtime probe rejected: inspection failed\n');

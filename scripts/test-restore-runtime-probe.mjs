@@ -13,6 +13,9 @@ const sourceSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encodi
 const digest = `sha256:${'a'.repeat(64)}`;
 const donorDigest = 'sha256:771325a0586bf61d53322d24f5a6de8962568b0fc181fa45db364278e5961282';
 const bootstrapDigest = '6ef912d18d9f40e46546ffcf5777cecf93405b3f5f4dcde60f2878c10bdc2327';
+const runtimeManifestRaw = `{"manifests":[{"platform":{"os":"linux","architecture":"amd64"},"digest":"${digest}"}]}\n`;
+const runtimeMetadata = { source: 'registry.access.redhat.com/ubi10/ubi-micro',
+  indexDigest: `sha256:${createHash('sha256').update(runtimeManifestRaw).digest('hex')}`, amd64Digest: digest };
 
 function evidence() {
   return {
@@ -193,7 +196,7 @@ test('malformed scanner-shaped JSON cannot appear in stderr', () => {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('malformed registry tool output replaces the artifact without leaking diagnostics', () => {
+test('early invalid runtime digest omits runtime metadata and raw diagnostics', () => {
   const dir = mkdtempSync(join(tmpdir(), 'jandibat-probe-tool-'));
   try {
     const bin = join(dir, 'bin');
@@ -201,7 +204,7 @@ test('malformed registry tool output replaces the artifact without leaking diagn
     const platform = join(dir, 'platform.cjs');
     writeFileSync(platform, "Object.defineProperty(process, 'platform', {value:'linux'}); Object.defineProperty(process, 'arch', {value:'x64'});\n");
     const skopeo = join(bin, 'skopeo');
-    writeFileSync(skopeo, '#!/bin/sh\nprintf \'{"password":"SENSITIVE-MARKER"\'\n');
+    writeFileSync(skopeo, '#!/bin/sh\nprintf \'%s\\n\' \'{"password":"SENSITIVE-MARKER","manifests":[{"platform":{"os":"linux","architecture":"amd64"},"digest":"sha256:invalid"}]}\'\n');
     chmodSync(skopeo, 0o755);
     const path = join(dir, 'candidate.json');
     writeFileSync(path, JSON.stringify(evidence()));
@@ -248,7 +251,7 @@ esac
     assert.notEqual(result.status, 0);
     assert.equal(readFileSync(trace, 'utf8').trim(), `docker://cockroachdb/cockroach@${donorDigest}`);
     assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')),
-      { schema: 1, sourceSha, status: 'rejected', phase: 'inspection', stage: 'donor-manifest-parse' });
+      { schema: 1, sourceSha, status: 'rejected', phase: 'inspection', stage: 'donor-manifest-parse', runtime: runtimeMetadata });
     assert.doesNotMatch(result.stdout + result.stderr + readFileSync(path, 'utf8'), /SENSITIVE-MARKER|password/i);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
@@ -281,7 +284,7 @@ esac
       });
       assert.notEqual(result.status, 0);
       assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')),
-        { schema: 1, sourceSha, status: 'rejected', phase: 'inspection', stage });
+        { schema: 1, sourceSha, status: 'rejected', phase: 'inspection', stage, runtime: runtimeMetadata });
       assert.doesNotMatch(result.stdout + result.stderr + readFileSync(path, 'utf8'), /SENSITIVE-MARKER/i);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
@@ -350,7 +353,7 @@ esac
       assert.deepEqual(readFileSync(trace, 'utf8').trim().split('\n'),
         Array(requestCount).fill(`docker://cockroachdb/cockroach@${donorDigest}`));
       assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')),
-        { schema: 1, sourceSha, status: 'rejected', phase: 'inspection', stage });
+        { schema: 1, sourceSha, status: 'rejected', phase: 'inspection', stage, runtime: runtimeMetadata });
       assert.doesNotMatch(result.stdout + result.stderr + readFileSync(path, 'utf8'), /SENSITIVE-MARKER|password/i);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
@@ -412,7 +415,7 @@ esac
     assert.notEqual(result.status, 0);
     assert.equal(readFileSync(scratchReached, 'utf8'), '1', 'probe did not reach scratch allocation');
     assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')),
-      { schema: 1, sourceSha, status: 'rejected', phase: 'inspection', stage: 'scratch-allocation' });
+      { schema: 1, sourceSha, status: 'rejected', phase: 'inspection', stage: 'scratch-allocation', runtime: runtimeMetadata });
     assert.doesNotMatch(result.stdout + result.stderr + readFileSync(path, 'utf8'), /SENSITIVE-MARKER/i);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
@@ -531,7 +534,7 @@ esac
       });
       assert.notEqual(result.status, 0);
       assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')),
-        { schema: 1, sourceSha, status: 'rejected', phase: 'inspection', stage });
+        { schema: 1, sourceSha, status: 'rejected', phase: 'inspection', stage, runtime: runtimeMetadata });
       assert.doesNotMatch(result.stdout + result.stderr + readFileSync(path, 'utf8'), /SENSITIVE-MARKER/i);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });

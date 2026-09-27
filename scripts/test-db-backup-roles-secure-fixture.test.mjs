@@ -570,8 +570,8 @@ test('grant policy rejects extra authority and grant option', () => {
       },
       {
         name: 'metadata-schema', fn: 'fixture_check_metadata_grants schema',
-        valid: 'grantee\tprivilege_type\tis_grantable\njandibat_backup_bootstrap\tUSAGE\tfalse\n',
-        mutations: ['jandibat_backup_bootstrap\tUSAGE\ttrue', 'jandibat_backup_runner\tUSAGE\tfalse'],
+        valid: 'grantee\tprivilege_type\tis_grantable\njandibat_backup_bootstrap\tUSAGE\tfalse\njandibat_backup_runner\tUSAGE\tfalse\njandibat_backup_verifier\tUSAGE\tfalse\n',
+        mutations: ['jandibat_backup_bootstrap\tUSAGE\ttrue', 'jandibat_backup_runner\tUSAGE\ttrue'],
       },
       {
         name: 'metadata-table', fn: 'fixture_check_metadata_grants table',
@@ -609,5 +609,33 @@ test('grant policy rejects extra authority and grant option', () => {
         assert.equal(run().status, 1, `${name} accepted ${mutation}`);
       }
     }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('metadata schema grant check accepts only three non-grantable USAGE roles', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'backup-fixture-schema-grants-'));
+  try {
+    const path = join(dir, 'schema.tsv');
+    const header = 'grantee\tprivilege_type\tis_grantable\n';
+    const rows = [
+      'jandibat_backup_bootstrap\tUSAGE\tfalse',
+      'jandibat_backup_runner\tUSAGE\tfalse',
+      'jandibat_backup_verifier\tUSAGE\tfalse',
+    ];
+    const run = (grantRows) => {
+      writeFileSync(path, header + grantRows.join('\n') + '\n');
+      return spawnSync('sh', ['-c', '. scripts/backup-fixture-client.sh; fixture_check_metadata_grants schema "$GRANT_FILE"'], {
+        encoding: 'utf8', env: { ...process.env, GRANT_FILE: path },
+      });
+    };
+
+    assert.equal(run(rows).status, 0, 'exact schema grant set rejected');
+    for (const role of ['bootstrap', 'runner', 'verifier']) {
+      const grantee = `jandibat_backup_${role}`;
+      assert.equal(run(rows.filter((row) => !row.startsWith(`${grantee}\t`))).status, 1, `missing ${role} accepted`);
+      assert.equal(run(rows.map((row) => row.startsWith(`${grantee}\t`) ? `${grantee}\tUSAGE\ttrue` : row)).status, 1, `grantable ${role} accepted`);
+    }
+    assert.equal(run([...rows, 'jandibat_backup_runner\tSELECT\tfalse']).status, 1, 'extra privilege accepted');
+    assert.equal(run([...rows, 'public\tUSAGE\tfalse']).status, 1, 'extra grantee accepted');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

@@ -216,7 +216,7 @@ test('malformed registry tool output replaces the artifact without leaking diagn
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('donor manifest parse failure reports only its fixed stage and no tool output', () => {
+test('donor raw inspection uses a digest-only reference before parsing tool output', () => {
   const dir = mkdtempSync(join(tmpdir(), 'jandibat-probe-donor-tool-'));
   try {
     const bin = join(dir, 'bin');
@@ -228,17 +228,25 @@ test('donor manifest parse failure reports only its fixed stage and no tool outp
 case "$3" in
   docker://registry.access.redhat.com/ubi10/ubi-micro)
     printf '%s\\n' '{"manifests":[{"platform":{"os":"linux","architecture":"amd64"},"digest":"${digest}"}]}' ;;
-  *) printf '%s\\n' '{"password":"SENSITIVE-MARKER"' ;;
+  docker://cockroachdb/cockroach@${donorDigest})
+    printf '%s\\n' "$3" > "$PROBE_REF_TRACE"
+    printf '%s\\n' '{"password":"SENSITIVE-MARKER"' ;;
+  *) printf '%s\\n' "$3" > "$PROBE_REF_TRACE"
+     printf '%s\\n' 'SENSITIVE-MARKER' >&2
+     exit 31 ;;
 esac
 `);
     chmodSync(skopeo, 0o755);
     const path = join(dir, 'candidate.json');
+    const trace = join(dir, 'donor-reference');
     writeFileSync(path, JSON.stringify(evidence()));
     const result = spawnSync('sh', [script, path], {
       cwd: root, encoding: 'utf8',
-      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, NODE_OPTIONS: `--require=${platform}` },
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, NODE_OPTIONS: `--require=${platform}`,
+        PROBE_REF_TRACE: trace },
     });
     assert.notEqual(result.status, 0);
+    assert.equal(readFileSync(trace, 'utf8').trim(), `docker://cockroachdb/cockroach@${donorDigest}`);
     assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')),
       { schema: 1, sourceSha, status: 'rejected', phase: 'inspection', stage: 'donor-manifest-parse' });
     assert.doesNotMatch(result.stdout + result.stderr + readFileSync(path, 'utf8'), /SENSITIVE-MARKER|password/i);
@@ -279,9 +287,9 @@ esac
   });
 }
 
-for (const [name, donorManifest, stage] of [
-  ['amd64 child selection', `{"donor-test-index":true,"manifests":[{"platform":{"os":"linux","architecture":"arm64"},"digest":"${digest}"}]}`, 'donor-amd64-child'],
-  ['single-manifest fallback', '{"donor-test-index":true,"schemaVersion":2}', 'donor-fallback-inspect'],
+for (const [name, donorManifest, stage, requestCount] of [
+  ['amd64 child selection', `{"donor-test-index":true,"manifests":[{"platform":{"os":"linux","architecture":"arm64"},"digest":"${digest}"}]}`, 'donor-amd64-child', 1],
+  ['single-manifest fallback', '{"donor-test-index":true,"schemaVersion":2}', 'donor-fallback-inspect', 2],
 ]) {
   test(`donor ${name} failure reports a fixed stage`, () => {
     const dir = mkdtempSync(join(tmpdir(), 'jandibat-probe-donor-platform-'));
@@ -312,25 +320,35 @@ syncBuiltinESMExports();
 `);
       const skopeo = join(bin, 'skopeo');
       writeFileSync(skopeo, `#!/bin/sh
-case "$3" in
+ref=$3
+if [ "$2" != --raw ]; then ref=$2; fi
+case "$ref" in
   docker://registry.access.redhat.com/ubi10/ubi-micro)
     printf '%s\\n' '{"manifests":[{"platform":{"os":"linux","architecture":"amd64"},"digest":"${digest}"}]}' ;;
-  *)
+  docker://cockroachdb/cockroach@${donorDigest})
+    printf '%s\\n' "$ref" >> "$PROBE_REF_TRACE"
     if [ "$2" = --raw ]; then
       printf '%s\\n' '${donorManifest}'
     else
       printf '%s\\n' '{"password":"SENSITIVE-MARKER"'
     fi ;;
+  *) printf '%s\\n' "$ref" >> "$PROBE_REF_TRACE"
+     printf '%s\\n' 'SENSITIVE-MARKER' >&2
+     exit 31 ;;
 esac
 `);
       chmodSync(skopeo, 0o755);
       const path = join(dir, 'candidate.json');
+      const trace = join(dir, 'donor-references');
       writeFileSync(path, JSON.stringify(evidence()));
       const result = spawnSync('sh', [script, path], {
         cwd: root, encoding: 'utf8',
-        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, NODE_OPTIONS: `--require=${preload}` },
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, NODE_OPTIONS: `--require=${preload}`,
+          PROBE_REF_TRACE: trace },
       });
       assert.notEqual(result.status, 0);
+      assert.deepEqual(readFileSync(trace, 'utf8').trim().split('\n'),
+        Array(requestCount).fill(`docker://cockroachdb/cockroach@${donorDigest}`));
       assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')),
         { schema: 1, sourceSha, status: 'rejected', phase: 'inspection', stage });
       assert.doesNotMatch(result.stdout + result.stderr + readFileSync(path, 'utf8'), /SENSITIVE-MARKER|password/i);

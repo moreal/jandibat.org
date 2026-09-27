@@ -81,9 +81,20 @@ function parseOsRelease(rootfs) {
   return { ID: fields.ID, VERSION_ID: fields.VERSION_ID };
 }
 
+function imageRepository(source) {
+  const name = source.split('@')[0];
+  const tagSeparator = name.lastIndexOf(':');
+  return tagSeparator > name.lastIndexOf('/') ? name.slice(0, tagSeparator) : name;
+}
+
+function skopeoSource(source) {
+  const pinned = source.match(/@(sha256:[a-f0-9]{64})$/)?.[1];
+  return pinned ? `${imageRepository(source)}@${pinned}` : source;
+}
+
 function resolveImage(source, requireIndex, stages = {}) {
   if (stages.fetch) inspectionStage = stages.fetch;
-  const raw = command('skopeo', ['inspect', '--raw', `docker://${source}`]).stdout;
+  const raw = command('skopeo', ['inspect', '--raw', `docker://${skopeoSource(source)}`]).stdout;
   if (stages.parse) inspectionStage = stages.parse;
   const manifest = JSON.parse(raw);
   if (stages.pin) inspectionStage = stages.pin;
@@ -99,14 +110,14 @@ function resolveImage(source, requireIndex, stages = {}) {
   if (requireIndex) throw new Error('missing linux/amd64 child digest');
   if (stages.fallback) inspectionStage = stages.fallback;
   required(pinned && pinned === indexDigest, 'pinned donor manifest');
-  const inspected = JSON.parse(command('skopeo', ['inspect', `docker://${source}`]).stdout);
+  const inspected = JSON.parse(command('skopeo', ['inspect', `docker://${skopeoSource(source)}`]).stdout);
   assert.equal(inspected.Os, 'linux');
   assert.equal(inspected.Architecture, 'amd64');
   return { indexDigest, amd64Digest: indexDigest };
 }
 
 function unpack(source, childDigest, directory) {
-  const image = `${source.split('@')[0].split(':')[0]}@${childDigest}`;
+  const image = `${imageRepository(source)}@${childDigest}`;
   const layout = join(directory, 'oci');
   const bundle = join(directory, 'bundle');
   mkdirSync(directory, { recursive: true });

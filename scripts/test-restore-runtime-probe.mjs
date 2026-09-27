@@ -10,19 +10,19 @@ import test from 'node:test';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const script = join(root, 'scripts/probe-restore-runtime-candidate.sh');
 const sourceSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
-const runtimeIndexDigest = 'sha256:e3a5632d7ae8a97e06f634522d06187f12793e90ac0d7b51bc671c83a96d8eda';
-const digest = 'sha256:d22eab33a72231f57ca04dbb296eb0d1d248bd37b8d5edb6bb18f4bbb80517ea';
+const runtimeIndexDigest = 'sha256:6acf5a19a988abdaf0f3d30247561431a206034e702871442bed66a2c68cc1a2';
+const digest = 'sha256:1e9870bd8b72e908eff47d5f4ffcdca068b2765fbb22223cc5a68c989902d195';
 const donorDigest = 'sha256:771325a0586bf61d53322d24f5a6de8962568b0fc181fa45db364278e5961282';
 const donorChildDigest = `sha256:${'b'.repeat(64)}`;
-const candidateSource = `registry.access.redhat.com/ubi10/ubi-minimal:latest@${runtimeIndexDigest}`;
+const candidateSource = `cgr.dev/chainguard/glibc-dynamic:latest@${runtimeIndexDigest}`;
 const donorSource = `cockroachdb/cockroach:v26.2.5@${donorDigest}`;
 const bootstrapDigest = '6ef912d18d9f40e46546ffcf5777cecf93405b3f5f4dcde60f2878c10bdc2327';
 const runtimeManifestRaw = `{"runtime-test-index":true,"manifests":[{"platform":{"os":"linux","architecture":"amd64"},"digest":"${digest}"}]}\n`;
 const donorManifestRaw = `{"donor-test-index":true,"manifests":[{"platform":{"os":"linux","architecture":"amd64"},"digest":"${donorChildDigest}"}]}\n`;
 const runtimeMetadata = { source: candidateSource, indexDigest: runtimeIndexDigest, amd64Digest: digest };
-const runtimeSkopeoRef = `docker://registry.access.redhat.com/ubi10/ubi-minimal@${runtimeIndexDigest}`;
+const runtimeSkopeoRef = `docker://cgr.dev/chainguard/glibc-dynamic@${runtimeIndexDigest}`;
 const donorSkopeoRef = `docker://cockroachdb/cockroach@${donorDigest}`;
-const runtimeChildRef = `docker://registry.access.redhat.com/ubi10/ubi-minimal@${digest}`;
+const runtimeChildRef = `docker://cgr.dev/chainguard/glibc-dynamic@${digest}`;
 const donorChildRef = `docker://cockroachdb/cockroach@${donorChildDigest}`;
 
 function pinnedLinuxPreload(extra = '') {
@@ -59,7 +59,7 @@ function evidence() {
     schema: 2, sourceSha, status: 'candidate', packageManager: 'apk',
     runtime: { source: candidateSource, indexDigest: runtimeIndexDigest,
       amd64Digest: digest, os: 'linux', architecture: 'amd64',
-      osRelease: { ID: 'rhel', VERSION_ID: '10.0' } },
+      osRelease: { ID: 'wolfi', VERSION_ID: '20230201' } },
     donor: { source: donorSource,
       amd64Digest: donorChildDigest, interpreter: '/lib64/ld-linux-x86-64.so.2',
       needed: ['libvendor.so'],
@@ -245,6 +245,8 @@ test('donor notice inventory hashes conventional root-level files and skips unre
 
 for (const [name, mutate] of [
   ['mutable-only runtime reference', e => { delete e.runtime.amd64Digest; }],
+  ['old UBI runtime source', e => { e.runtime.source = 'registry.access.redhat.com/ubi10/ubi-minimal:latest@sha256:e3a5632d7ae8a97e06f634522d06187f12793e90ac0d7b51bc671c83a96d8eda'; }],
+  ['wrong runtime amd64 child', e => { e.runtime.amd64Digest = `sha256:${'a'.repeat(64)}`; }],
   ['non-amd64 runtime', e => { e.runtime.architecture = 'arm64'; }],
   ['empty APK catalog', e => { e.packages = []; }],
   ['hidden APK type', e => { e.packages[0].type = 'binary'; }],
@@ -584,7 +586,7 @@ for (const [missing, stage] of [
       const runtime = join(dir, 'runtime-image');
       const donor = join(dir, 'donor-image');
       const files = [
-        [join(runtime, 'etc/os-release'), 'ID="rhel"\nVERSION_ID="10.0"\n'],
+        [join(runtime, 'etc/os-release'), 'ID="wolfi"\nVERSION_ID="20230201"\n'],
         [join(runtime, 'lib64/ld-linux-x86-64.so.2'), 'loader'],
         [join(runtime, 'usr/lib64/libc.so.6'), 'libc'],
         [join(runtime, 'usr/share/licenses/glibc/LICENSES'), 'base license'],

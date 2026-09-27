@@ -7,7 +7,8 @@ import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-const runtimeSource = 'registry.access.redhat.com/ubi10/ubi-minimal:latest@sha256:e3a5632d7ae8a97e06f634522d06187f12793e90ac0d7b51bc671c83a96d8eda';
+const runtimeSource = 'cgr.dev/chainguard/glibc-dynamic:latest@sha256:6acf5a19a988abdaf0f3d30247561431a206034e702871442bed66a2c68cc1a2';
+const runtimeAmd64Digest = 'sha256:1e9870bd8b72e908eff47d5f4ffcdca068b2765fbb22223cc5a68c989902d195';
 const donorSource = 'cockroachdb/cockroach:v26.2.5@sha256:771325a0586bf61d53322d24f5a6de8962568b0fc181fa45db364278e5961282';
 const bootstrapSourceSha256 = '6ef912d18d9f40e46546ffcf5777cecf93405b3f5f4dcde60f2878c10bdc2327';
 const applets = ['awk', 'chmod', 'cp', 'mktemp', 'rm', 'sed', 'sha256sum', 'sh', 'tail', 'tr'];
@@ -314,6 +315,7 @@ function validate(evidence, sourceSha, setStage = () => {}) {
   required(digest(evidence.runtime.indexDigest), 'runtime index digest');
   assert.equal(evidence.runtime.indexDigest, runtimeSource.match(/@(sha256:[a-f0-9]{64})$/)?.[1], 'runtime pinned index digest');
   required(digest(evidence.runtime.amd64Digest), 'runtime amd64 child digest');
+  assert.equal(evidence.runtime.amd64Digest, runtimeAmd64Digest, 'runtime pinned amd64 child digest');
   assert.equal(evidence.runtime.os, 'linux');
   assert.equal(evidence.runtime.architecture, 'amd64');
   setStage(probeStages.osRelease);
@@ -455,6 +457,7 @@ function probe() {
   const runtime = resolveImage(runtimeSource, true);
   required(typeof runtime.indexDigest === 'string' && digest(runtime.indexDigest) &&
     typeof runtime.amd64Digest === 'string' && digest(runtime.amd64Digest), 'resolved runtime digests');
+  assert.equal(runtime.amd64Digest, runtimeAmd64Digest, 'resolved runtime amd64 child digest');
   resolvedRuntime = { source: runtimeSource, indexDigest: runtime.indexDigest, amd64Digest: runtime.amd64Digest };
   const donor = resolveImage(donorSource, false, {
     fetch: probeStages.donorRawFetch, parse: probeStages.donorManifestParse,

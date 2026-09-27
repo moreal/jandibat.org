@@ -22,7 +22,9 @@ const probeStages = Object.freeze({
   osRelease: 'os-release', packageCatalog: 'package-catalog', rpmdbInventory: 'rpmdb-inventory',
   trustInventory: 'trust-inventory', baseLicenseInventory: 'base-license-inventory',
   appletInventory: 'applet-inventory', scanEvidence: 'scan-evidence', toolVersions: 'tool-versions',
-  dossierValidation: 'dossier-validation',
+  dossierIdentity: 'dossier-identity', donorNativeLicense: 'donor-native-license',
+  elfClosure: 'elf-closure', packageOwnership: 'package-ownership',
+  toolVersionValidation: 'tool-version-validation', dossierStatus: 'dossier-status',
 });
 let inspectionStage;
 let resolvedRuntime;
@@ -169,7 +171,7 @@ function donorLicenseInventory(rootfs, files) {
 }
 
 function validate(evidence, sourceSha, setStage = () => {}) {
-  setStage(probeStages.dossierValidation);
+  setStage(probeStages.dossierIdentity);
   assert.deepEqual(Object.keys(evidence).sort(), ['applets', 'baseLicenses', 'donor', 'ownership', 'packages', 'rpmdb', 'runtime', 'scan', 'schema', 'sourceSha', 'status', 'toolVersions', 'trust']);
   assert.equal(evidence.schema, 1);
   assert.equal(evidence.sourceSha, sourceSha);
@@ -182,10 +184,11 @@ function validate(evidence, sourceSha, setStage = () => {}) {
   assert.equal(evidence.runtime.architecture, 'amd64');
   setStage(probeStages.osRelease);
   required(evidence.runtime.osRelease?.ID && evidence.runtime.osRelease?.VERSION_ID, 'OS release');
-  setStage(probeStages.dossierValidation);
+  setStage(probeStages.dossierIdentity);
   assert.equal(evidence.donor.source, donorSource);
   required(digest(evidence.donor.amd64Digest), 'donor amd64 digest');
   if (donorSource === runtimeSource) assert.equal(evidence.donor.amd64Digest, evidence.runtime.amd64Digest, 'shared image amd64 child');
+  setStage(probeStages.donorNativeLicense);
   required(absolute(evidence.donor.interpreter), 'ELF interpreter');
   required(evidence.donor.needed?.length, 'ELF dependencies');
   for (const key of ['nativeFiles', 'licenses']) {
@@ -216,6 +219,7 @@ function validate(evidence, sourceSha, setStage = () => {}) {
       } else assert.equal(item.reason, 'non-ELF');
     }
   }
+  setStage(probeStages.elfClosure);
   required(Array.isArray(evidence.donor.elfClosure), 'vendor ELF closure');
   assert.deepEqual(evidence.donor.elfClosure.map(item => item.path).sort(), [...nativePaths].sort(), 'vendor ELF closure paths');
   const mainElf = evidence.donor.elfClosure.find(item => item.path === '/cockroach/cockroach');
@@ -240,7 +244,7 @@ function validate(evidence, sourceSha, setStage = () => {}) {
   }
   setStage(probeStages.rpmdbInventory);
   required(evidence.rpmdb.some(item => /\/(rpmdb\.sqlite|Packages)$/.test(item.path)), 'RPM database file');
-  setStage(probeStages.dossierValidation);
+  setStage(probeStages.packageOwnership);
   const baseNeeded = evidence.donor.elfClosure.flatMap(item => item.needed)
     .filter(name => !evidence.donor.nativeFiles.some(item => item.path.endsWith(`/${name}`)));
   for (const path of [evidence.donor.interpreter, ...baseNeeded.map(name => evidence.ownership.find(item => item.path.endsWith(`/${name}`))?.path)]) {
@@ -262,9 +266,10 @@ function validate(evidence, sourceSha, setStage = () => {}) {
     required(typeof match.package === 'string' && match.package.length > 0, 'matched package');
     required(typeof match.fixState === 'string', 'fix state');
   }
-  setStage(probeStages.dossierValidation);
+  setStage(probeStages.toolVersionValidation);
   assert.deepEqual(Object.keys(evidence.toolVersions ?? {}).sort(), ['grype', 'readelf', 'rpm', 'skopeo', 'syft', 'umoci']);
   for (const value of Object.values(evidence.toolVersions)) required(typeof value === 'string' && value.length > 0 && value.length < 160, 'tool version');
+  setStage(probeStages.dossierStatus);
   if (evidence.scan.matches.some(match => ['High', 'Critical'].includes(match.severity))) assert.equal(evidence.status, 'rejected');
   if (evidence.status === 'candidate') assert.equal(evidence.scan.matches.filter(match => ['High', 'Critical'].includes(match.severity)).length, 0);
   return evidence;
@@ -350,7 +355,7 @@ function probe() {
       matches: findings.matches.map(match => ({ id: match.vulnerability.id, severity: match.vulnerability.severity,
         package: match.artifact?.name ?? '', fixState: match.vulnerability.fix?.state ?? '' })),
       databaseBuilt };
-    inspectionStage = probeStages.dossierValidation;
+    inspectionStage = probeStages.dossierIdentity;
     const evidence = {
       schema: 1, sourceSha, status: 'candidate',
       runtime: { source: runtimeSource, ...runtime, os: 'linux', architecture: 'amd64', osRelease },
@@ -362,7 +367,7 @@ function probe() {
     const hasBlockingFinding = evidence.scan.matches.some(match => ['High', 'Critical'].includes(match.severity));
     if (scan.status !== 0 && !hasBlockingFinding) throw new Error('scanner failed without blocking match');
     if (hasBlockingFinding) evidence.status = 'rejected';
-    inspectionStage = probeStages.dossierValidation;
+    inspectionStage = probeStages.dossierIdentity;
     validate(evidence, sourceSha, stage => { inspectionStage = stage; });
     return evidence;
   } finally { rmSync(scratch, { recursive: true, force: true }); }

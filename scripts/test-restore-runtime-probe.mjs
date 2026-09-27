@@ -450,9 +450,17 @@ for (const [missing, stage] of [
   ['scan', 'scan-evidence'],
   ['db-status', 'scan-evidence'],
   ['tool-versions', 'tool-versions'],
+  ['identity', 'dossier-identity'],
+  ['donor-license', 'donor-native-license'],
+  ['elf-closure', 'elf-closure'],
+  ['ownership', 'package-ownership'],
+  ['empty-version', 'tool-version-validation'],
 ]) {
   const label = { scan: 'scanner exit without finding', 'db-status': 'Grype database status failure',
-    'tool-versions': 'tool version failure', complete: 'synthetic shared-image dossier' }[missing] ?? `missing ${missing} evidence`;
+    'tool-versions': 'tool version failure', complete: 'synthetic shared-image dossier',
+    identity: 'invalid dossier identity', 'donor-license': 'missing donor license',
+    'elf-closure': 'invalid ELF dependency name', ownership: 'unaccounted package owner',
+    'empty-version': 'empty collected tool version' }[missing] ?? `missing ${missing} evidence`;
   test(missing === 'complete' ? 'synthetic shared image yields a coherent candidate dossier' : `${label} reports only its fixed stage`, () => {
     const dir = mkdtempSync(join(tmpdir(), 'jandibat-probe-evidence-'));
     try {
@@ -465,8 +473,9 @@ for (const [missing, stage] of [
         [join(runtime, 'usr/share/licenses/glibc/LICENSES'), 'base license'],
         [join(donor, 'cockroach/cockroach'), 'cockroach'],
         [join(donor, 'cockroach/lib/libvendor.so'), 'vendor library'],
-        [join(donor, 'cockroach/licenses/LICENSE'), 'donor license'],
       ];
+      if (missing !== 'donor-license') files.push([join(donor, 'cockroach/licenses/LICENSE'), 'donor license']);
+      if (missing === 'elf-closure') files.push([join(runtime, 'usr/lib64/notso'), 'invalid ELF dependency fixture']);
       if (missing !== 'rpmdb') files.push([join(runtime, 'usr/lib/sysimage/rpm/rpmdb.sqlite'), 'rpmdb']);
       if (missing !== 'trust') files.push([join(runtime, 'etc/ssl/certs/ca-certificates.crt'), 'trust']);
       for (const [path, bytes] of files) {
@@ -474,7 +483,12 @@ for (const [missing, stage] of [
         writeFileSync(path, bytes);
       }
       const preload = join(dir, 'preload.cjs');
-      writeFileSync(preload, pinnedLinuxPreload());
+      writeFileSync(preload, pinnedLinuxPreload(missing === 'identity' ? `const originalKeys = Object.keys;
+Object.keys = function (value) {
+  const keys = originalKeys(value);
+  return value && value.schema === 1 && value.runtime && value.donor && value.packages && value.status === 'candidate'
+    ? [...keys, 'unexpected-field'] : keys;
+};` : ''));
       const bin = join(dir, 'bin');
       mkdirSync(bin);
       const fakeTool = `#!/bin/sh
@@ -483,6 +497,7 @@ if [ "$1" = --version ]; then
   if [ "$tool" = syft ] && [ "$PROBE_FAIL_VERSION" = 1 ]; then
     printf '%s\\n' 'SENSITIVE-MARKER' >&2; exit 35
   fi
+  if [ "$tool" = syft ] && [ "$PROBE_EMPTY_VERSION" = 1 ]; then exit 0; fi
   printf '%s\\n' 'fixture version'; exit 0
 fi
 case "$tool" in
@@ -514,9 +529,12 @@ case "$tool" in
     case "$1" in
       -h) case "$2" in */cockroach|*/libvendor.so) printf '%s\\n' 'Machine: Advanced Micro Devices X86-64' ;; *) exit 1 ;; esac ;;
       -l) case "$2" in */cockroach) printf '%s\\n' 'Requesting program interpreter: /lib64/ld-linux-x86-64.so.2]' ;; esac ;;
-      -d) case "$2" in */cockroach) printf '%s\\n' '(NEEDED) Shared library: [libvendor.so]' ;; */libvendor.so) printf '%s\\n' '(NEEDED) Shared library: [libc.so.6]' ;; esac ;;
+      -d) case "$2" in */cockroach) printf '%s\\n' '(NEEDED) Shared library: [libvendor.so]' ;; */libvendor.so)
+        if [ "$PROBE_BAD_ELF" = 1 ]; then printf '%s\\n' '(NEEDED) Shared library: [notso]';
+        else printf '%s\\n' '(NEEDED) Shared library: [libc.so.6]'; fi ;;
+      esac ;;
     esac ;;
-  rpm) printf '%s' 'glibc' ;;
+  rpm) if [ "$PROBE_BAD_OWNER" = 1 ]; then printf '%s' 'missing-package'; else printf '%s' 'glibc'; fi ;;
 esac
 `;
       for (const name of ['skopeo', 'umoci', 'syft', 'grype', 'readelf', 'rpm']) {
@@ -534,7 +552,10 @@ esac
           PROBE_COPY_TRACE: copyTrace,
           PROBE_FAIL_SCAN: missing === 'scan' ? '1' : '0',
           PROBE_FAIL_DB_STATUS: missing === 'db-status' ? '1' : '0',
-          PROBE_FAIL_VERSION: missing === 'tool-versions' ? '1' : '0' },
+          PROBE_FAIL_VERSION: missing === 'tool-versions' ? '1' : '0',
+          PROBE_EMPTY_VERSION: missing === 'empty-version' ? '1' : '0',
+          PROBE_BAD_OWNER: missing === 'ownership' ? '1' : '0',
+          PROBE_BAD_ELF: missing === 'elf-closure' ? '1' : '0' },
       });
       assert.deepEqual(readFileSync(copyTrace, 'utf8').trim().split('\n'),
         [`docker://cockroachdb/cockroach@${digest}`, `docker://cockroachdb/cockroach@${digest}`]);

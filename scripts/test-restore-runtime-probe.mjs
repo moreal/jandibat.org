@@ -416,3 +416,110 @@ esac
     assert.doesNotMatch(result.stdout + result.stderr + readFileSync(path, 'utf8'), /SENSITIVE-MARKER/i);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+for (const [missing, stage] of [
+  ['rpmdb', 'rpmdb-inventory'],
+  ['trust', 'trust-inventory'],
+  ['scan', 'scan-evidence'],
+]) {
+  test(`${missing === 'scan' ? 'scanner exit without finding' : `missing ${missing} evidence`} reports only its fixed stage`, () => {
+    const dir = mkdtempSync(join(tmpdir(), 'jandibat-probe-evidence-'));
+    try {
+      const runtime = join(dir, 'runtime');
+      const donor = join(dir, 'donor');
+      const files = [
+        [join(runtime, 'etc/os-release'), 'ID="rhel"\nVERSION_ID="10.0"\n'],
+        [join(runtime, 'lib64/ld-linux-x86-64.so.2'), 'loader'],
+        [join(runtime, 'usr/lib64/libc.so.6'), 'libc'],
+        [join(runtime, 'usr/share/licenses/glibc/LICENSES'), 'base license'],
+        [join(donor, 'cockroach/cockroach'), 'cockroach'],
+        [join(donor, 'cockroach/lib/libvendor.so'), 'vendor library'],
+        [join(donor, 'cockroach/licenses/LICENSE'), 'donor license'],
+      ];
+      if (missing !== 'rpmdb') files.push([join(runtime, 'usr/lib/sysimage/rpm/rpmdb.sqlite'), 'rpmdb']);
+      if (missing !== 'trust') files.push([join(runtime, 'etc/ssl/certs/ca-certificates.crt'), 'trust']);
+      for (const [path, bytes] of files) {
+        mkdirSync(join(path, '..'), { recursive: true });
+        writeFileSync(path, bytes);
+      }
+      const preload = join(dir, 'preload.cjs');
+      writeFileSync(preload, `const crypto = require('node:crypto');
+const { syncBuiltinESMExports } = require('node:module');
+Object.defineProperty(process, 'platform', { value: 'linux' });
+Object.defineProperty(process, 'arch', { value: 'x64' });
+const originalHash = crypto.createHash;
+crypto.createHash = function (...args) {
+  const hash = originalHash(...args);
+  const update = hash.update;
+  const finish = hash.digest;
+  let donorIndex = false;
+  hash.update = function (data, ...rest) {
+    donorIndex = String(data).includes('donor-test-index');
+    return update.call(this, data, ...rest);
+  };
+  hash.digest = function (encoding) {
+    return donorIndex && encoding === 'hex' ? '${donorDigest.slice(7)}' : finish.call(this, encoding);
+  };
+  return hash;
+};
+syncBuiltinESMExports();
+`);
+      const bin = join(dir, 'bin');
+      mkdirSync(bin);
+      const fakeTool = `#!/bin/sh
+tool=$(basename "$0")
+if [ "$1" = --version ]; then printf '%s\\n' 'fixture version'; exit 0; fi
+case "$tool" in
+  skopeo)
+    if [ "$1" = copy ]; then exit 0; fi
+    case "$3" in
+      docker://registry.access.redhat.com/ubi10/ubi-micro)
+        printf '%s\\n' '{"manifests":[{"platform":{"os":"linux","architecture":"amd64"},"digest":"${digest}"}]}' ;;
+      docker://cockroachdb/cockroach@${donorDigest})
+        printf '%s\\n' '{"donor-test-index":true,"manifests":[{"platform":{"os":"linux","architecture":"amd64"},"digest":"${digest}"}]}' ;;
+      *) printf '%s\\n' 'SENSITIVE-MARKER' >&2; exit 31 ;;
+    esac ;;
+  umoci)
+    mkdir -p "$5/rootfs"
+    case "$5" in
+      */runtime/bundle) cp -R "$PROBE_FIXTURE_RUNTIME/." "$5/rootfs/" ;;
+      */donor/bundle) cp -R "$PROBE_FIXTURE_DONOR/." "$5/rootfs/" ;;
+      *) exit 32 ;;
+    esac ;;
+  syft)
+    output=$(printf '%s' "$3" | cut -d= -f2-)
+    printf '%s\\n' '{"artifacts":[{"type":"rpm","name":"glibc","version":"2.39"}]}' > "$output" ;;
+  grype)
+    if [ "$1" = db ]; then printf '%s\\n' 'Built: 2026-09-27T00:00:00Z';
+    else printf '%s\\n' '{"matches":[]}'
+      if [ "$PROBE_FAIL_SCAN" = 1 ]; then exit 34; fi
+    fi ;;
+  readelf)
+    case "$1" in
+      -h) case "$2" in */cockroach|*/libvendor.so) printf '%s\\n' 'Machine: Advanced Micro Devices X86-64' ;; *) exit 1 ;; esac ;;
+      -l) case "$2" in */cockroach) printf '%s\\n' 'Requesting program interpreter: /lib64/ld-linux-x86-64.so.2]' ;; esac ;;
+      -d) case "$2" in */cockroach) printf '%s\\n' '(NEEDED) Shared library: [libvendor.so]' ;; */libvendor.so) printf '%s\\n' '(NEEDED) Shared library: [libc.so.6]' ;; esac ;;
+    esac ;;
+  rpm) printf '%s' 'glibc' ;;
+esac
+`;
+      for (const name of ['skopeo', 'umoci', 'syft', 'grype', 'readelf', 'rpm']) {
+        const path = join(bin, name);
+        writeFileSync(path, fakeTool);
+        chmodSync(path, 0o755);
+      }
+      const path = join(dir, 'candidate.json');
+      writeFileSync(path, JSON.stringify(evidence()));
+      const result = spawnSync('sh', [script, path], {
+        cwd: root, encoding: 'utf8',
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, NODE_OPTIONS: `--require=${preload}`,
+          PROBE_FIXTURE_RUNTIME: runtime, PROBE_FIXTURE_DONOR: donor,
+          PROBE_FAIL_SCAN: missing === 'scan' ? '1' : '0' },
+      });
+      assert.notEqual(result.status, 0);
+      assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')),
+        { schema: 1, sourceSha, status: 'rejected', phase: 'inspection', stage });
+      assert.doesNotMatch(result.stdout + result.stderr + readFileSync(path, 'utf8'), /SENSITIVE-MARKER/i);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+}

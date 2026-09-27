@@ -18,7 +18,10 @@ const probeStages = Object.freeze({
   donorFallbackInspect: 'donor-fallback-inspect',
   scratchAllocation: 'scratch-allocation',
   runtimeUnpack: 'runtime-unpack', donorUnpack: 'donor-unpack', runtimeSbom: 'runtime-sbom',
-  baseScan: 'base-scan', vendorInspection: 'vendor-inspection', evidence: 'evidence-assembly',
+  baseScan: 'base-scan', vendorInspection: 'vendor-inspection',
+  osRelease: 'os-release', packageCatalog: 'package-catalog', rpmdbInventory: 'rpmdb-inventory',
+  trustInventory: 'trust-inventory', baseLicenseInventory: 'base-license-inventory',
+  appletInventory: 'applet-inventory', scanEvidence: 'scan-evidence', dossierValidation: 'dossier-validation',
 });
 let inspectionStage;
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -163,7 +166,8 @@ function donorLicenseInventory(rootfs, files) {
     .map(path => hashPath(rootfs, path));
 }
 
-function validate(evidence, sourceSha) {
+function validate(evidence, sourceSha, setStage = () => {}) {
+  setStage(probeStages.dossierValidation);
   assert.deepEqual(Object.keys(evidence).sort(), ['applets', 'baseLicenses', 'donor', 'ownership', 'packages', 'rpmdb', 'runtime', 'scan', 'schema', 'sourceSha', 'status', 'toolVersions', 'trust']);
   assert.equal(evidence.schema, 1);
   assert.equal(evidence.sourceSha, sourceSha);
@@ -173,7 +177,9 @@ function validate(evidence, sourceSha) {
   required(digest(evidence.runtime.amd64Digest), 'runtime amd64 child digest');
   assert.equal(evidence.runtime.os, 'linux');
   assert.equal(evidence.runtime.architecture, 'amd64');
+  setStage(probeStages.osRelease);
   required(evidence.runtime.osRelease?.ID && evidence.runtime.osRelease?.VERSION_ID, 'OS release');
+  setStage(probeStages.dossierValidation);
   assert.equal(evidence.donor.source, donorSource);
   required(digest(evidence.donor.amd64Digest), 'donor amd64 digest');
   required(absolute(evidence.donor.interpreter), 'ELF interpreter');
@@ -214,6 +220,7 @@ function validate(evidence, sourceSha) {
     required(Array.isArray(entry.needed), 'ELF needed list');
     for (const name of entry.needed) required(/^[A-Za-z0-9._+-]+\.so(\.[A-Za-z0-9._+-]+)?$/.test(name), 'ELF dependency name');
   }
+  setStage(probeStages.packageCatalog);
   required(evidence.packages?.length, 'RPM package inventory');
   const rpmNames = new Set();
   for (const pkg of evidence.packages) {
@@ -222,18 +229,24 @@ function validate(evidence, sourceSha) {
     rpmNames.add(pkg.name);
   }
   for (const key of ['rpmdb', 'trust', 'baseLicenses']) {
+    setStage({ rpmdb: probeStages.rpmdbInventory, trust: probeStages.trustInventory,
+      baseLicenses: probeStages.baseLicenseInventory }[key]);
     required(evidence[key]?.length, key);
     for (const item of evidence[key]) required(absolute(item.path) && hex(item.sha256), `${key} path/hash`);
   }
+  setStage(probeStages.rpmdbInventory);
   required(evidence.rpmdb.some(item => /\/(rpmdb\.sqlite|Packages)$/.test(item.path)), 'RPM database file');
+  setStage(probeStages.dossierValidation);
   const baseNeeded = evidence.donor.elfClosure.flatMap(item => item.needed)
     .filter(name => !evidence.donor.nativeFiles.some(item => item.path.endsWith(`/${name}`)));
   for (const path of [evidence.donor.interpreter, ...baseNeeded.map(name => evidence.ownership.find(item => item.path.endsWith(`/${name}`))?.path)]) {
     const ownership = evidence.ownership.find(item => item.path === path);
     required(ownership && rpmNames.has(ownership.package), `package owner for ${path}`);
   }
+  setStage(probeStages.appletInventory);
   assert.equal(evidence.applets.bootstrapSourceSha256, bootstrapSourceSha256);
   assert.deepEqual(evidence.applets.names, applets, 'frozen BusyBox applets');
+  setStage(probeStages.scanEvidence);
   assert.equal(evidence.scan.tool, 'grype');
   assert.equal(evidence.scan.failOn, 'high');
   required(evidence.scan.databaseBuilt, 'Grype database metadata');
@@ -245,6 +258,7 @@ function validate(evidence, sourceSha) {
     required(typeof match.package === 'string' && match.package.length > 0, 'matched package');
     required(typeof match.fixState === 'string', 'fix state');
   }
+  setStage(probeStages.dossierValidation);
   assert.deepEqual(Object.keys(evidence.toolVersions ?? {}).sort(), ['grype', 'readelf', 'rpm', 'skopeo', 'syft', 'umoci']);
   for (const value of Object.values(evidence.toolVersions)) required(typeof value === 'string' && value.length > 0 && value.length < 160, 'tool version');
   if (evidence.scan.matches.some(match => ['High', 'Critical'].includes(match.severity))) assert.equal(evidence.status, 'rejected');
@@ -309,27 +323,38 @@ function probe() {
     const databaseBuilt = dbStatus.match(/^Built:\s*(\S+)/m)?.[1] ?? '';
     const toolVersions = Object.fromEntries(['skopeo', 'syft', 'grype', 'umoci', 'readelf', 'rpm']
       .map(name => [name, command(name, ['--version']).stdout.trim().split('\n')[0].slice(0, 159)]));
-    inspectionStage = probeStages.evidence;
+    inspectionStage = probeStages.osRelease;
+    const osRelease = parseOsRelease(runtimeRoot);
+    inspectionStage = probeStages.packageCatalog;
+    const packages = catalog.artifacts.filter(pkg => pkg.type === 'rpm').map(pkg => ({ name: pkg.name, version: pkg.version, type: 'rpm' }));
+    inspectionStage = probeStages.rpmdbInventory;
+    const rpmdb = inventory(runtimeRoot, ['usr/lib/sysimage/rpm', 'var/lib/rpm']);
+    inspectionStage = probeStages.trustInventory;
+    const trust = ['/etc/ssl/certs/ca-certificates.crt', '/etc/pki/tls/certs/ca-bundle.crt', '/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem']
+      .filter(path => regular(runtimeRoot, path)).map(path => hashPath(runtimeRoot, path));
+    inspectionStage = probeStages.baseLicenseInventory;
+    const baseLicenses = inventory(runtimeRoot, ['usr/share/licenses']);
+    inspectionStage = probeStages.appletInventory;
+    const appletEvidence = { bootstrapSourceSha256, names: applets };
+    inspectionStage = probeStages.scanEvidence;
+    const scanEvidence = { tool: 'grype', failOn: 'high',
+      matches: findings.matches.map(match => ({ id: match.vulnerability.id, severity: match.vulnerability.severity,
+        package: match.artifact?.name ?? '', fixState: match.vulnerability.fix?.state ?? '' })),
+      databaseBuilt };
+    inspectionStage = probeStages.dossierValidation;
     const evidence = {
       schema: 1, sourceSha, status: 'candidate',
-      runtime: { source: runtimeSource, ...runtime, os: 'linux', architecture: 'amd64', osRelease: parseOsRelease(runtimeRoot) },
+      runtime: { source: runtimeSource, ...runtime, os: 'linux', architecture: 'amd64', osRelease },
       donor: { source: donorSource, amd64Digest: donor.amd64Digest, ...donorElf, elfClosure, nativeFiles, nativeDecisions,
         licenses: donorLicenses },
-      packages: catalog.artifacts.filter(pkg => pkg.type === 'rpm').map(pkg => ({ name: pkg.name, version: pkg.version, type: 'rpm' })),
-      rpmdb: inventory(runtimeRoot, ['usr/lib/sysimage/rpm', 'var/lib/rpm']), ownership,
-      trust: ['/etc/ssl/certs/ca-certificates.crt', '/etc/pki/tls/certs/ca-bundle.crt', '/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem']
-        .filter(path => regular(runtimeRoot, path)).map(path => hashPath(runtimeRoot, path)),
-      baseLicenses: inventory(runtimeRoot, ['usr/share/licenses']),
-      applets: { bootstrapSourceSha256, names: applets },
-      scan: { tool: 'grype', failOn: 'high',
-        matches: findings.matches.map(match => ({ id: match.vulnerability.id, severity: match.vulnerability.severity,
-          package: match.artifact?.name ?? '', fixState: match.vulnerability.fix?.state ?? '' })),
-        databaseBuilt }, toolVersions,
+      packages, rpmdb, ownership, trust, baseLicenses, applets: appletEvidence, scan: scanEvidence, toolVersions,
     };
+    inspectionStage = probeStages.scanEvidence;
     const hasBlockingFinding = evidence.scan.matches.some(match => ['High', 'Critical'].includes(match.severity));
     if (scan.status !== 0 && !hasBlockingFinding) throw new Error('scanner failed without blocking match');
     if (hasBlockingFinding) evidence.status = 'rejected';
-    validate(evidence, sourceSha);
+    inspectionStage = probeStages.dossierValidation;
+    validate(evidence, sourceSha, stage => { inspectionStage = stage; });
     return evidence;
   } finally { rmSync(scratch, { recursive: true, force: true }); }
 }

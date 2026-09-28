@@ -299,6 +299,37 @@ test('restore image packages the named database payload and checks it after impo
   assert.match(builder, /node scripts\/image-release\.mjs import restore-tools[^\n]*\n(?:[^\n]*\n)*?sh scripts\/test-restore-tools-payload\.sh/);
 });
 
+test('restore Dockerfile assembles only the pinned APK runtime and exact donor and Nix payload', () => {
+  const dockerfile = readFileSync(join(root, 'deploy/restore-tools.Dockerfile'), 'utf8');
+  const instructions = dockerfile.split('\n').map(line => line.trim()).filter(line => line && !line.startsWith('#'));
+  assert.deepEqual(instructions, [
+    'FROM scratch AS jandibat-binaries',
+    'COPY jandibat-api /jandibat-api',
+    'COPY jandibat-maintenance /jandibat-maintenance',
+    'COPY busybox /busybox',
+    'COPY bin/backup-tools /workspace/bin/backup-tools',
+    'FROM cockroachdb/cockroach:v26.2.5@sha256:771325a0586bf61d53322d24f5a6de8962568b0fc181fa45db364278e5961282 AS cockroach-donor',
+    'FROM cgr.dev/chainguard/glibc-dynamic:latest@sha256:6acf5a19a988abdaf0f3d30247561431a206034e702871442bed66a2c68cc1a2',
+    'COPY --from=cockroach-donor /cockroach/cockroach /cockroach/cockroach',
+    'COPY --from=cockroach-donor /licenses/LICENSE /licenses/LICENSE',
+    'COPY --from=cockroach-donor /licenses/THIRD-PARTY-NOTICES.txt /licenses/THIRD-PARTY-NOTICES.txt',
+    'COPY --from=jandibat-binaries /jandibat-api /jandibat-api',
+    'COPY --from=jandibat-binaries /jandibat-maintenance /jandibat-maintenance',
+    'COPY --from=jandibat-binaries /busybox /busybox',
+    'COPY --from=jandibat-binaries /workspace/bin/backup-tools /workspace/bin/backup-tools',
+    'COPY applets/ /usr/bin/',
+    'COPY db/migrations/ /workspace/db/migrations/',
+    'COPY scripts/ /workspace/scripts/',
+    'ENV PATH="/cockroach:/bin:/usr/bin" SSL_CERT_FILE="/etc/ssl/certs/ca-certificates.crt"',
+    'WORKDIR /workspace',
+    'USER 65532:65532',
+    'ENTRYPOINT ["/cockroach/cockroach"]',
+    'CMD ["version"]',
+  ]);
+  assert.doesNotMatch(dockerfile, /(?:^|\n)\s*(?:RUN|ADD)\b/im);
+  assert.doesNotMatch(dockerfile, /\/nix\/store|\/bin\/metrics-proxy/);
+});
+
 test('restore payload validation rejects an archive missing the baseline migration', t => {
   const dir = fixture(t);
   executable(dir, 'docker', `

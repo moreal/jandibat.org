@@ -529,11 +529,17 @@ diagnose_custom_s3_create "$CAPTURE"`], {
       ['docker: Error response from daemon: private path /tmp/hidden\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=not-observed validation-write=not-observed category=client-launch SQLSTATE=unavailable (details redacted)\n'],
       ['invalid URL escape in s3://private-host/hidden\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=not-observed validation-write=not-observed category=uri SQLSTATE=unavailable (details redacted)\n'],
       ['x509: certificate signed by unknown authority at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=not-observed validation-write=not-observed category=tls SQLSTATE=unavailable (details redacted)\n'],
+      ['remote error: tls: handshake failure at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=not-observed validation-write=not-observed category=tls SQLSTATE=unavailable (details redacted)\n'],
+      ['unexpected EOF at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=not-observed validation-write=not-observed category=transport-client SQLSTATE=unavailable (details redacted)\n'],
+      ['HTTP/1.1 403 Forbidden at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=not-observed validation-write=not-observed category=http-4xx SQLSTATE=unavailable (details redacted)\n'],
+      ['HTTP status code: 503 at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=not-observed validation-write=not-observed category=http-5xx SQLSTATE=unavailable (details redacted)\n'],
       ['S3 API error: NoSuchBucket at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=not-observed validation-write=not-observed category=storage SQLSTATE=unavailable (details redacted)\n'],
       ['S3 API error: AccessDenied at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=not-observed validation-write=not-observed category=storage SQLSTATE=unavailable (details redacted)\n'],
+      ['<Error><Code>SignatureDoesNotMatch</Code></Error> at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=not-observed validation-write=not-observed category=storage SQLSTATE=unavailable (details redacted)\n'],
       ['dial tcp: connection refused at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=not-observed validation-write=not-observed category=transport-client SQLSTATE=unavailable (details redacted)\n'],
       ['opaque client failure at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=not-observed validation-write=not-observed category=unknown SQLSTATE=unavailable (details redacted)\n'],
       ['x509: certificate error and NoSuchBucket at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=not-observed validation-write=not-observed category=unknown SQLSTATE=unavailable (details redacted)\n'],
+      ['HTTP/1.1 403 Forbidden; S3 API error: AccessDenied at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=not-observed validation-write=not-observed category=unknown SQLSTATE=unavailable (details redacted)\n'],
       ['SQLSTATE: 57014 and x509: certificate error at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=not-observed validation-write=not-observed category=unknown SQLSTATE=57014 (details redacted)\n'],
       ['SQLSTATE: 57014X private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=not-observed validation-write=not-observed category=unknown SQLSTATE=unavailable (details redacted)\n'],
       ['SQLSTATE: 57014x private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=not-observed validation-write=not-observed category=unknown SQLSTATE=unavailable (details redacted)\n'],
@@ -556,6 +562,10 @@ diagnose_custom_s3_create "$CAPTURE"`], {
     assert.equal(rootSuccess.stderr, 'RED: custom S3 CREATE probe capture=nonempty root=success tcp-connect=not-observed validation-write=not-observed category=unknown SQLSTATE=unavailable (details redacted)\n');
     assert.equal(rootSuccess.stdout, '');
     assert.equal(rootSuccess.calls, 'root-create\nroot-drop\nstat-after\n');
+    const rootOnly = run('opaque client failure\n', { TEST_ROOT_OUTPUT: 'HTTP/1.1 500 Internal Server Error at private-host' });
+    assert.equal(rootOnly.stderr, 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=not-observed validation-write=not-observed category=http-5xx SQLSTATE=unavailable (details redacted)\n');
+    const conflictingRoot = run('HTTP/1.1 503 Service Unavailable\n', { TEST_ROOT_OUTPUT: 'x509: certificate error at private-host' });
+    assert.equal(conflictingRoot.stderr, 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=not-observed validation-write=not-observed category=unknown SQLSTATE=unavailable (details redacted)\n');
     const rootOutputSentinel = run('opaque client failure\n', { TEST_ROOT_CREATE: 'success', TEST_ROOT_OUTPUT: secret });
     assert.equal(rootOutputSentinel.status, 1);
     assert.equal(rootOutputSentinel.stderr, 'RED: custom S3 CREATE diagnostic exposed synthetic credential (details redacted)\n');

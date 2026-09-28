@@ -117,7 +117,14 @@ diagnose_custom_s3_create() {
  match_category() {
   label=$1
   pattern=$2
-  grep -Eiq "$pattern" "$capture" 2>/dev/null && match_result=0 || match_result=$?
+  # Both CREATE captures have passed the synthetic-credential scan above.
+  # Storage proxy logs are intentionally excluded: they also contain setup
+  # and mc HEAD traffic, so they cannot be attributed to CREATE here.
+  if [ "$root_result" = failure ]; then
+   grep -Eiq "$pattern" "$capture" "$root_capture" 2>/dev/null && match_result=0 || match_result=$?
+  else
+   grep -Eiq "$pattern" "$capture" 2>/dev/null && match_result=0 || match_result=$?
+  fi
   if [ "$match_result" -eq 0 ]; then
    matched=$((matched + 1))
    category=$label
@@ -128,8 +135,10 @@ diagnose_custom_s3_create() {
  match_category client-launch 'docker: Error response from daemon|Cannot connect to the Docker daemon|OCI runtime create failed|executable file not found'
  match_category uri 'invalid URL escape|invalid (URI|URL)|malformed (URI|URL)|unsupported (scheme|protocol)|unknown (query )?parameter'
  match_category tls 'x509:|tls:|TLS handshake|certificate (signed by unknown authority|verification failed|verify failed|has expired|is not valid)'
- match_category storage 'NoSuchBucket|SignatureDoesNotMatch|InvalidAccessKeyId|AccessDenied|InvalidBucketName|S3 API error'
- match_category transport-client 'dial tcp|connection refused|connection reset|timed out|i/o timeout|network is unreachable|no such host'
+ match_category http-4xx 'HTTP[/][12](\.[01])?[[:space:]]+4[0-9][0-9]([[:space:]]|$)|HTTP status( code)?:[[:space:]]*4[0-9][0-9]([[:space:]]|$)'
+ match_category http-5xx 'HTTP[/][12](\.[01])?[[:space:]]+5[0-9][0-9]([[:space:]]|$)|HTTP status( code)?:[[:space:]]*5[0-9][0-9]([[:space:]]|$)'
+ match_category storage 'NoSuchBucket|SignatureDoesNotMatch|InvalidAccessKeyId|AccessDenied|InvalidBucketName'
+ match_category transport-client 'dial tcp|connection refused|connection reset|timed out|i/o timeout|network is unreachable|no such host|unexpected EOF'
  [ "$matched" -le 1 ] || category=unknown
  fail "custom S3 CREATE probe capture=$capture_state root=$root_result tcp-connect=$tcp_connection validation-write=$validation_write category=$category SQLSTATE=$code"
 }

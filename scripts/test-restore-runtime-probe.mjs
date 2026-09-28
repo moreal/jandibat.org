@@ -285,15 +285,33 @@ for (const [name, mutate] of [
   });
 }
 
-test('workflow is dispatch-only, read-only, and uploads a single sanitized file', () => {
+test('workflow probes main runtime changes and manual dispatch without write access', () => {
   const workflow = readFileSync(join(root, '.github/workflows/restore-runtime-probe.yml'), 'utf8');
-  assert.match(workflow, /workflow_dispatch:/);
-  assert.match(workflow, /contents: read/);
+  const triggers = workflow.match(/^on:\n([\s\S]*?)^permissions:/m)?.[1];
+  assert.ok(triggers, 'workflow triggers missing');
+  assert.match(triggers, /^  workflow_dispatch:\s*$/m);
+  assert.match(triggers, /^  push:\n    branches: \[main\]\n    paths:\n/m);
+  assert.deepEqual([...triggers.matchAll(/^      - '([^']+)'$/gm)].map(match => match[1]), [
+    '.github/workflows/restore-runtime-probe.yml',
+    'scripts/probe-restore-runtime-candidate.sh',
+    'scripts/probe-restore-runtime-candidate.mjs',
+    'scripts/test-restore-runtime-probe.mjs',
+    'scripts/db-bootstrap-roles.sh',
+    'flake.nix',
+    'flake.lock',
+    'nix/**',
+    'yarn.lock',
+  ]);
+  assert.doesNotMatch(triggers, /^  (?:pull_request|schedule|workflow_call):/m);
+  assert.match(workflow, /^permissions:\n  contents: read\n\njobs:/m);
+  assert.equal([...workflow.matchAll(/^\s*permissions:/gm)].length, 1, 'job permissions must not override read-only access');
+  assert.equal([...workflow.matchAll(/^\s*uses: actions\/checkout@/gm)].length, 1, 'only one checkout is allowed');
   assert.match(workflow, /persist-credentials: false/);
+  assert.match(workflow, /ref: \$\{\{ github\.sha \}\}/);
   assert.match(workflow, /nix develop \.#images --command sh scripts\/probe-restore-runtime-candidate\.sh/);
   assert.match(workflow, /candidate\.json/);
   assert.doesNotMatch(workflow, /\b(secrets|packages: write|docker login|skopeo copy .*docker:\/\/.*docker:\/\/|publish|deploy)\b/i);
-  assert.doesNotMatch(workflow, /workflow_call:|push:|pull_request:|inputs:/);
+  assert.doesNotMatch(workflow, /workflow_call:|pull_request:|inputs:/);
 });
 
 test('unsupported host writes a sanitized rejected artifact without registry access', () => {

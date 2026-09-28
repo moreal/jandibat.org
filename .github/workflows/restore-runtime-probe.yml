@@ -2,6 +2,18 @@ name: Probe restore runtime candidate
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/restore-runtime-probe.yml'
+      - 'scripts/probe-restore-runtime-candidate.sh'
+      - 'scripts/probe-restore-runtime-candidate.mjs'
+      - 'scripts/test-restore-runtime-probe.mjs'
+      - 'scripts/db-bootstrap-roles.sh'
+      - 'flake.nix'
+      - 'flake.lock'
+      - 'nix/**'
+      - 'yarn.lock'
 
 permissions:
   contents: read
@@ -13,6 +25,7 @@ jobs:
       - name: Check out exact source
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22

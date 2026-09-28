@@ -98,10 +98,7 @@ for file in db/migrations/*.sql; do
 done
 for file in db-migrate-url.sh db-configure-runtime-roles.sh db-verify-runtime-roles.sh db-bootstrap-roles.sh db-verify-backup-chain.sh db-bootstrap-backup-connection.sh db-configure-backup-schedule.sh db-verify-backup-roles.sh db-observe-backup-schedule.sh; do
 	test -f "scripts/$file" || { echo "missing source script: $file" >&2; exit 1; }
-	if ! docker run --rm --entrypoint /busybox "$image_id" test -f "/workspace/scripts/$file"; then
-		echo "restore-tools payload is missing /workspace/scripts/$file" >&2
-		exit 1
-	fi
+	require_test "/workspace/scripts/$file" -f "/workspace/scripts/$file"
 	expected="$expected/workspace/scripts/$file
 "
 done
@@ -143,7 +140,9 @@ if [ "$(docker image inspect --format '{{.Config.User}}' "$image_id" 2>/dev/null
 fi
 
 # Both configured and explicit identities must load the shell and native CLI
-# under the same restricted container settings used by workloads.
+# under the same restricted container settings used by workloads. The resolver
+# file check is a prerequisite only; hostname DNS is proved by the later
+# secure Cockroach fixture.
 restricted_run() {
 	identity=$1
 	shift
@@ -161,7 +160,7 @@ for identity in default explicit; do
 	fi
 done
 for identity in default explicit; do
-	if ! restricted_run "$identity" --entrypoint /bin/sh "$image_id" -c 'if : >/tmp/restore-tools-write-probe 2>/dev/null; then exit 1; fi' >/dev/null 2>&1; then
+	if ! restricted_run "$identity" --entrypoint /bin/sh "$image_id" -c 'if ( : >/tmp/restore-tools-write-probe ) 2>/dev/null; then exit 1; fi' >/dev/null 2>&1; then
 		echo "restore-tools /tmp write succeeded without tmpfs for $identity user" >&2
 		exit 1
 	fi

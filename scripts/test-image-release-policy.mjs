@@ -371,19 +371,29 @@ for (const [mode, reason] of [
   ['tmp-unwritable-with-tmpfs', 'an unwritable /tmp with tmpfs'],
   ['cli-failure', 'a native CLI that cannot load'],
   ['shell-failure', 'a shell that cannot load'],
+  ['resolver-file-unreadable', 'an unreadable resolver configuration file (DNS lookup deferred)'],
+  ['docker-output-sentinel', 'raw Docker output from a missing script'],
   ['missing-token', 'a verifier that starts without its metrics token'],
   ['checker-scratch', 'checker scratch without writable /tmp'],
-]) test(mode === 'checker-scratch' ? `restore payload validation exercises ${reason}` : `restore payload validation rejects ${reason}`, t => {
+  ['shell-status', 'actual POSIX shell write probes'],
+]) test(['checker-scratch', 'shell-status'].includes(mode) ? `restore payload validation exercises ${reason}` : `restore payload validation rejects ${reason}`, t => {
   const dir = fixture(t);
   const dockerTrace = join(dir, 'docker-trace');
   executable(dir, 'docker', `
 const fs = require('node:fs');
 const { createHash } = require('node:crypto');
+const { spawnSync } = require('node:child_process');
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.DOCKER_TRACE, JSON.stringify(args) + '\\n');
 if (args.includes('/cockroach/cockroach') && args.at(-1) === 'version' && process.env.LEAK_MODE === 'cli-failure') process.exit(1);
 if (args.includes('/bin/sh') && process.env.LEAK_MODE === 'shell-failure') process.exit(1);
+if (args.includes('/bin/sh') && process.env.LEAK_MODE === 'resolver-file-unreadable' && args.at(-1).includes('/etc/resolv.conf')) process.exit(1);
 if (args.includes('/bin/sh') && args.some(arg => arg.includes('restore-tools-write-probe'))) {
+  if (process.env.LEAK_MODE === 'shell-status') {
+    const path = args.includes('--tmpfs') ? process.env.DOCKER_TRACE + '.tmp' : '/dev/null/restore-tools-write-probe';
+    const command = args.at(-1).replaceAll('/tmp/restore-tools-write-probe', path);
+    process.exit(spawnSync('/bin/dash', ['-c', command], { stdio: 'ignore' }).status ?? 99);
+  }
   if (process.env.LEAK_MODE === 'tmp-writable-without-tmpfs' && !args.includes('--tmpfs')) process.exit(1);
   if (process.env.LEAK_MODE === 'tmp-unwritable-with-tmpfs' && args.includes('--tmpfs')) process.exit(1);
 }
@@ -433,6 +443,9 @@ if (args.includes('sha256sum')) {
   process.exit(0);
 }
 if (args.includes('test')) {
+  if (process.env.LEAK_MODE === 'docker-output-sentinel' && args.includes('/workspace/scripts/db-bootstrap-backup-connection.sh')) {
+    console.log('DOCKER_OUTPUT_SENTINEL'); console.error('DOCKER_OUTPUT_SENTINEL'); process.exit(1);
+  }
   if (process.env.LEAK_MODE === 'missing-apk' && args.includes('/usr/lib/apk/db/installed')) process.exit(1);
   if (process.env.LEAK_MODE === 'missing-ca' && args.includes('/etc/ssl/certs/ca-certificates.crt')) process.exit(1);
   if (process.env.LEAK_MODE === 'missing-applet' && args.includes('/usr/bin/awk')) process.exit(1);
@@ -447,7 +460,7 @@ if (args.includes('test')) {
 process.exit(0);
 `);
   const result = invoke('test-restore-tools-payload.sh', { PATH: `${join(dir, 'bin')}:${process.env.PATH}`, LEAK_MODE: mode, DOCKER_TRACE: dockerTrace }, ['sha256:' + 'b'.repeat(64)]);
-  if (mode === 'checker-scratch') {
+  if (['checker-scratch', 'shell-status'].includes(mode)) {
     assert.equal(result.status, 0, result.stderr);
     const calls = readFileSync(dockerTrace, 'utf8').trim().split('\n').map(JSON.parse);
     const check = calls.find(args => args.at(-1) === 'check-once');
@@ -478,7 +491,11 @@ process.exit(0);
     return;
   }
   assert.notEqual(result.status, 0, `restore-tools accepted ${reason}`);
-  assert.match(result.stderr, mode === 'missing-binary' ? /backup-tools/ : mode === 'missing-connection-script' ? /db-bootstrap-backup-connection/ : mode === 'missing-schedule-script' ? /db-configure-backup-schedule/ : mode === 'missing-backup-role-verifier' ? /db-verify-backup-roles/ : mode === 'missing-schedule-observer' ? /db-observe-backup-schedule/ : ['root-user','empty-user','named-user'].includes(mode) ? /non-root User/ : mode === 'source-tree' ? /source tree/ : mode === 'extra-workspace-file' ? /inventory/ : mode.includes('apk') ? /APK database/ : mode === 'missing-ca' ? /CA bundle/ : ['missing-applet','broken-applet'].includes(mode) ? /awk/ : mode === 'linked-binary' ? /jandibat-api/ : mode.startsWith('wrong-') || mode === 'writable-dir-owner' ? /mode|owner/ : mode.startsWith('tmp-') ? /tmp write/ : ['cli-failure','shell-failure'].includes(mode) ? /CLI or shell/ : /metrics token/);
+  assert.match(result.stderr, mode === 'missing-binary' ? /backup-tools/ : ['missing-connection-script','docker-output-sentinel'].includes(mode) ? /db-bootstrap-backup-connection/ : mode === 'missing-schedule-script' ? /db-configure-backup-schedule/ : mode === 'missing-backup-role-verifier' ? /db-verify-backup-roles/ : mode === 'missing-schedule-observer' ? /db-observe-backup-schedule/ : ['root-user','empty-user','named-user'].includes(mode) ? /non-root User/ : mode === 'source-tree' ? /source tree/ : mode === 'extra-workspace-file' ? /inventory/ : mode.includes('apk') ? /APK database/ : mode === 'missing-ca' ? /CA bundle/ : ['missing-applet','broken-applet'].includes(mode) ? /awk/ : mode === 'linked-binary' ? /jandibat-api/ : mode.startsWith('wrong-') || mode === 'writable-dir-owner' ? /mode|owner/ : mode.startsWith('tmp-') ? /tmp write/ : ['cli-failure','shell-failure','resolver-file-unreadable'].includes(mode) ? /CLI or shell/ : /metrics token/);
+  if (mode === 'docker-output-sentinel') {
+    assert.equal(result.stdout, '');
+    assert.doesNotMatch(result.stderr, /DOCKER_OUTPUT_SENTINEL/);
+  }
   if (mode === 'missing-token') {
     const calls = readFileSync(dockerTrace, 'utf8').trim().split('\n').map(JSON.parse);
     const run = calls.find(args => args.at(-1) === 'run-verifier');

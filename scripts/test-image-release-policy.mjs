@@ -844,7 +844,7 @@ else process.exit(2);
   assert.ok(f.trace().some(a => a[0] === 'grype' && a[1] === `docker:${imageId}`));
 });
 
-for (const failure of ['none', 'app-import', 'extract', 'create', 'collision', 'wrong-driver', 'build', 'restore-import', 'payload']) {
+for (const failure of ['none', 'app-import', 'extract', 'create', 'collision', 'wrong-driver', 'base-collision', 'base-bin-alias', 'base-export', 'build', 'restore-import', 'payload']) {
 const uncertainOwnership = ['create', 'collision'].includes(failure);
 test(`release packaging ${uncertainOwnership ? 'preserves uncertain builder after' : 'cleans owned builder after'} ${failure === 'none' ? 'success' : failure + ' failure'}`, t => {
   const dir = fixture(t);
@@ -889,11 +889,26 @@ process.exit(result.status ?? 1);
   executable(dir, 'docker', `
 const fs = require('node:fs'); const a = process.argv.slice(2);
 fs.appendFileSync(process.env.TRACE, JSON.stringify(a)+'\\n');
-if (a[0] === 'create') { console.log('extract-' + (fs.existsSync(process.env.TRACE + '.extract') ? 'maintenance' : 'api')); fs.writeFileSync(process.env.TRACE + '.extract', 'created'); process.exit(0); }
+if (a[0] === 'create') {
+ if (a.at(-1).startsWith('cgr.dev/chainguard/glibc-dynamic:latest@sha256:')) { console.log('b'.repeat(64)); process.exit(0); }
+ console.log('extract-' + (fs.existsSync(process.env.TRACE + '.extract') ? 'maintenance' : 'api')); fs.writeFileSync(process.env.TRACE + '.extract', 'created'); process.exit(0);
+}
 if (a[0] === 'cp') {
+ if (a[1].startsWith('b'.repeat(64) + ':')) { console.error('invalid symlink in base /usr/bin'); process.exit(55); }
  if (process.env.FAILURE === 'extract') { console.error(process.env.SENTINEL); process.exit(54); }
  if (a[1] !== '-L' || !/^extract-(api|maintenance):\\/bin\\/(server|maintenance)$/.test(a[2])) process.exit(17);
  fs.writeFileSync(a.at(-1), 'static fixture executable'); fs.chmodSync(a.at(-1), 0o555); process.exit(0);
+}
+if (a[0] === 'export') {
+ if (a.at(-1) !== 'b'.repeat(64) || a[1] !== '-o') process.exit(56);
+ if (process.env.FAILURE === 'base-export') { console.error(process.env.SENTINEL); process.exit(57); }
+ const root = a[2] + '.rootfs';
+ fs.mkdirSync(root + '/usr/bin', {recursive:true});
+ fs.symlinkSync(process.env.FAILURE === 'base-bin-alias' ? 'other' : 'usr/bin', root + '/bin');
+ fs.symlinkSync('../../lib64/ld-linux-x86-64.so.2', root + '/usr/bin/ld.so');
+ if (process.env.FAILURE === 'base-collision') fs.writeFileSync(root + '/usr/bin/sed', 'APK-owned sed');
+ require('node:child_process').execFileSync('tar', ['-cf', a[2], '-C', root, '.']);
+ process.exit(0);
 }
 if (a[0] === 'rm') process.exit(0);
 if (a[0] !== 'buildx') process.exit(2);
@@ -927,6 +942,15 @@ if (a[1] === 'build') {
    if (!fs.existsSync(path) || !fs.statSync(path).isFile() || fs.lstatSync(path).isSymbolicLink()) process.exit(15);
  }
  if (fs.readFileSync(context + '/busybox', 'utf8') !== 'static fixture executable') process.exit(18);
+ if ((fs.statSync(context + '/busybox').mode & 0o777) !== 0o555) process.exit(19);
+ const applets = fs.readdirSync(context + '/applets').sort();
+ if (JSON.stringify(applets) !== JSON.stringify(['awk','chmod','cp','mktemp','rm','sed','sh','sha256sum','tail','tr'])) process.exit(20);
+ for (const applet of applets) {
+  const path = context + '/applets/' + applet;
+  if (!fs.lstatSync(path).isSymbolicLink() || fs.readlinkSync(path) !== '/busybox') process.exit(21);
+ }
+ if (fs.statSync(context + '/applets').mode & 0o222) process.exit(22);
+ if (fs.readdirSync(context).some(file => file.startsWith('base-'))) process.exit(23);
  if (fs.existsSync(context + '/nix/store')) process.exit(16);
  if (process.env.FAILURE === 'build') { console.error(process.env.SENTINEL); process.exit(9); }
  process.exit(0);
@@ -936,8 +960,8 @@ process.exit(7);
 `);
   const evidence = join(dir, 'evidence');
   const result = invoke('run-image-validation-ci.sh', env, [evidence]);
-  const expectedStatus = { none: 0, 'app-import': 51, extract: 54, create: 8, collision: 8, 'wrong-driver': 1, build: 9, 'restore-import': 52, payload: 53 };
-  const expectedStage = { 'app-import': 'application archive import', extract: 'restore builder/context', create: 'restore builder/context', collision: 'restore builder/context', 'wrong-driver': 'restore builder/context', build: 'restore build', 'restore-import': 'restore image import and scan', payload: 'restore payload contract' };
+  const expectedStatus = { none: 0, 'app-import': 51, extract: 54, create: 8, collision: 8, 'wrong-driver': 1, 'base-collision': 2, 'base-bin-alias': 2, 'base-export': 2, build: 9, 'restore-import': 52, payload: 53 };
+  const expectedStage = { 'app-import': 'application archive import', extract: 'restore builder/context', create: 'restore builder/context', collision: 'restore builder/context', 'wrong-driver': 'restore builder/context', 'base-collision': 'restore builder/context', 'base-bin-alias': 'restore builder/context', 'base-export': 'restore builder/context', build: 'restore build', 'restore-import': 'restore image import and scan', payload: 'restore payload contract' };
   assert.equal(result.status, expectedStatus[failure], result.stderr);
   assert.equal(result.stdout, '');
   assert.equal(result.stderr, failure === 'none' ? '' : `::error::Image validation failed during ${expectedStage[failure]}.\n`);
@@ -948,6 +972,13 @@ process.exit(7);
     return;
   }
   const calls = readFileSync(env.TRACE,'utf8').trim().split('\n').map(JSON.parse);
+  if (!uncertainOwnership && !['extract', 'wrong-driver'].includes(failure)) {
+    assert.ok(calls.some(a => a[0] === 'create' && a.at(-1) === 'cgr.dev/chainguard/glibc-dynamic:latest@sha256:6acf5a19a988abdaf0f3d30247561431a206034e702871442bed66a2c68cc1a2'));
+    assert.ok(calls.some(a => a[0] === 'rm' && a.at(-1) === 'b'.repeat(64)));
+  }
+  if (failure === 'none' || failure.startsWith('base-'))
+    assert.ok(calls.some(a => a[0] === 'export' && a[1] === '-o' && a.at(-1) === 'b'.repeat(64)));
+  if (failure.startsWith('base-')) assert.equal(calls.filter(a => a[1] === 'build').length, 0);
   const creation = calls.find(a => a[1] === 'create');
   assert.match(creation[creation.indexOf('--driver-opt')+1], /^image=moby\/buildkit:v[0-9.]+@sha256:[0-9a-f]{64}$/);
   const builder = creation[creation.indexOf('--name')+1];

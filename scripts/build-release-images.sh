@@ -52,15 +52,19 @@ restore_builder="jandibat-restore-$(basename "$restore_context")"
 builder_created=false
 api_extract_container=
 maintenance_extract_container=
+base_inspect_container=
+base_inspect_dir=
 cleanup() {
 	status=$1
 	record_failure "$status"
 	if [ -n "$api_extract_container" ]; then docker rm -f "$api_extract_container" >/dev/null || :; fi
 	if [ -n "$maintenance_extract_container" ]; then docker rm -f "$maintenance_extract_container" >/dev/null || :; fi
+	if [ -n "$base_inspect_container" ]; then docker rm -f "$base_inspect_container" >/dev/null 2>&1 || :; fi
 	if [ "$builder_created" = true ]; then
 		docker buildx rm "$restore_builder" >/dev/null || :
 	fi
-	for directory in "$restore_context/db/migrations" "$restore_context/scripts" "$restore_context/bin"; do
+	if [ -n "$base_inspect_dir" ]; then rm -r "$base_inspect_dir"; fi
+	for directory in "$restore_context/db/migrations" "$restore_context/scripts" "$restore_context/bin" "$restore_context/applets"; do
 		if [ -d "$directory" ]; then chmod u+w "$directory"; fi
 	done
 	rm -r "$restore_context"
@@ -121,6 +125,14 @@ for binary in jandibat-api jandibat-maintenance busybox bin/backup-tools; do
 	test -s "$restore_context/$binary" && test -f "$restore_context/$binary" && test ! -L "$restore_context/$binary"
 	chmod 0555 "$restore_context/$binary"
 done
+mkdir "$restore_context/applets"
+applets='awk chmod cp mktemp rm sed sha256sum sh tail tr'
+for applet in $applets; do
+	ln -s /busybox "$restore_context/applets/$applet"
+	test -L "$restore_context/applets/$applet"
+	test "$(readlink "$restore_context/applets/$applet")" = /busybox
+done
+chmod 0555 "$restore_context/applets"
 mkdir -p "$restore_context/db/migrations" "$restore_context/scripts"
 cp db/migrations/*.sql "$restore_context/db/migrations/"
 chmod 444 "$restore_context"/db/migrations/*.sql
@@ -129,6 +141,58 @@ for file in db-migrate-url.sh db-configure-runtime-roles.sh db-verify-runtime-ro
 	chmod 555 "$restore_context/scripts/$file"
 done
 chmod 555 "$restore_context/db/migrations" "$restore_context/scripts" "$restore_context/bin"
+
+# Inspect the exact final-stage image without executing it. Docker export
+# exposes the merged rootfs, including the package-owned /bin symlink. Listing
+# the archive avoids extracting base symlinks that Docker cp cannot copy.
+base_image='cgr.dev/chainguard/glibc-dynamic:latest@sha256:6acf5a19a988abdaf0f3d30247561431a206034e702871442bed66a2c68cc1a2'
+if ! awk -v image="$base_image" '$0 == "FROM " image { count++ } END { exit count != 1 }' deploy/restore-tools.Dockerfile; then
+	echo 'restore Dockerfile final base differs from the reviewed pinned image' >&2
+	exit 2
+fi
+base_inspect_dir=$(mktemp -d)
+if created_base=$(docker create --platform linux/amd64 --entrypoint /busybox "$base_image" 2>/dev/null); then
+	case "$created_base" in *[!0-9a-f]*|'') echo 'base inspection returned an invalid container ID; preserving uncertain state' >&2; exit 2;; esac
+	if [ "${#created_base}" -ne 64 ]; then
+		echo 'base inspection returned an invalid container ID; preserving uncertain state' >&2
+		exit 2
+	fi
+	base_inspect_container=$created_base
+else
+	echo 'could not create a container for pinned base inspection; preserving uncertain state' >&2
+	exit 2
+fi
+if ! docker export -o "$base_inspect_dir/rootfs.tar" "$base_inspect_container" >/dev/null 2>&1 ||
+	! tar -tvf "$base_inspect_dir/rootfs.tar" >"$base_inspect_dir/inventory" 2>/dev/null; then
+	echo 'could not inventory pinned base rootfs' >&2
+	exit 2
+fi
+awk -v applet_names="$applets" '
+	BEGIN { split(applet_names, names, " "); for (i in names) applet[names[i]] = 1 }
+	{
+		type = substr($1, 1, 1)
+		if (type == "l" && $(NF - 1) == "->") { path = $(NF - 2); target = $NF }
+		else { path = $NF; target = "" }
+		sub(/^\.\//, "", path)
+		if (path == "bin") { bin_count++; if (type != "l" || target != "usr/bin") invalid = 1 }
+		if (path == "usr/bin/") { usr_bin_count++; if (type != "d") invalid = 1 }
+		if (substr(path, 1, 8) == "usr/bin/") {
+			name = substr(path, 9)
+			sub(/\/$/, "", name)
+			if (name in applet) collision = name
+		}
+	}
+	END {
+		if (invalid || bin_count != 1 || usr_bin_count != 1) {
+			print "pinned base /bin or /usr/bin layout differs from reviewed APK-owned layout" > "/dev/stderr"
+			exit 2
+		}
+		if (collision != "") {
+			print "pinned base destination collision: /usr/bin/" collision > "/dev/stderr"
+			exit 2
+		}
+	}
+' "$base_inspect_dir/inventory"
 stage=restore-build
 docker buildx build --file deploy/restore-tools.Dockerfile --platform linux/amd64 \
 	--builder "$restore_builder" \

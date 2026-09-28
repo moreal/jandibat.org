@@ -56,9 +56,10 @@ function pathsUnder(directory, prefix = '') {
   });
 }
 
-function containedFile(rootfs, path) {
+function containedFile(rootfs, path, allowOwnedDirectoryAlias = false) {
   if (!absolute(path)) throw new Error('invalid inspected path');
   const base = resolve(rootfs);
+  let directoryAlias = false;
   let pending = path.slice(1).split('/');
   let parts = [];
   let links = 0;
@@ -73,6 +74,7 @@ function containedFile(rootfs, path) {
     const target = join(base, ...parts, segment);
     const stat = lstatSync(target);
     if (stat.isSymbolicLink()) {
+      if (allowOwnedDirectoryAlias && !pending.length) directoryAlias = true;
       if (++links > 32) throw new Error('symlink depth exceeded');
       const link = readlinkSync(target);
       if (link.startsWith('/')) parts = [];
@@ -80,11 +82,14 @@ function containedFile(rootfs, path) {
     } else {
       if (pending.length && !stat.isDirectory()) throw new Error('inspected path parent is not a directory');
       parts.push(segment);
-      if (!pending.length && !stat.isFile()) throw new Error('inspected path is not a file');
+      if (!pending.length && !stat.isFile() && !(directoryAlias && stat.isDirectory()))
+        throw new Error('inspected path is not a file');
     }
   }
   const target = join(base, ...parts);
-  if (!lstatSync(target).isFile()) throw new Error('inspected path is not a file');
+  const final = lstatSync(target);
+  if (!final.isFile() && !(allowOwnedDirectoryAlias && directoryAlias && final.isDirectory()))
+    throw new Error('inspected path is not a file');
   return target;
 }
 
@@ -120,11 +125,18 @@ const apkName = /^[A-Za-z0-9][A-Za-z0-9._+~-]{0,127}$/;
 const apkVersion = /^[A-Za-z0-9][A-Za-z0-9._+~:-]{0,159}$/;
 const apkLicense = /^[A-Za-z0-9][A-Za-z0-9 ._+~:()\/-]{0,511}$/;
 const apkPathPart = /^[A-Za-z0-9._+@=,-]+$/;
+const apkRootDirectoryAliases = new Set(['/bin', '/lib', '/lib64', '/sbin']);
 
 function apkOwnedPath(directory, file) {
   const segments = [...(directory ? directory.split('/') : []), file];
   required(segments.length && segments.every(part => part !== '.' && part !== '..' && apkPathPart.test(part)), 'APK ownership path');
   return `/${segments.join('/')}`;
+}
+
+function knownApkPseudoFsAlias(rootfs, path) {
+  return path === '/etc/mtab' && lstatSync(join(rootfs, 'etc')).isDirectory()
+    && lstatSync(join(rootfs, 'etc/mtab')).isSymbolicLink()
+    && readlinkSync(join(rootfs, 'etc/mtab')) === '/proc/mounts';
 }
 
 function parseApkInstalled(rootfs) {
@@ -152,13 +164,17 @@ function parseApkInstalled(rootfs) {
         required(!fields.has(key), 'duplicate APK identity field');
         fields.set(key, value);
       } else if (key === 'F') {
-        required(value && value.split('/').every(part => part !== '.' && part !== '..' && apkPathPart.test(part)), 'APK directory');
+        required(value === '' || value.split('/').every(part => part !== '.' && part !== '..' && apkPathPart.test(part)), 'APK directory');
         directory = value;
       } else if (key === 'R') {
         required(fields.has('P') && directory !== undefined && apkPathPart.test(value) && value !== '.' && value !== '..', 'APK filename');
         const path = apkOwnedPath(directory, value);
         required(!paths.has(path), 'duplicate APK owned path');
-        containedFile(rootfs, path);
+        if (!knownApkPseudoFsAlias(rootfs, path)) {
+          const target = containedFile(rootfs, path, true);
+          if (apkRootDirectoryAliases.has(path))
+            required(lstatSync(target).isDirectory(), 'APK root directory alias');
+        }
         paths.add(path);
         ownership.push({ path, package: fields.get('P') });
         owned++;

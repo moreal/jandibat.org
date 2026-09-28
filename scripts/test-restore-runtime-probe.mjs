@@ -119,10 +119,121 @@ function inspectApk(database = apkDb, options = {}) {
       writeFileSync(file, path);
     }
     if (options.symlink) symlinkSync(options.symlink, join(dir, 'usr/lib/ld-linux-escape.so.2'));
+    if (options.mtabTarget) {
+      mkdirSync(join(dir, 'etc'), { recursive: true });
+      symlinkSync(options.mtabTarget, join(dir, 'etc/mtab'));
+    }
+    for (const [name, target] of Object.entries(options.directoryLinks ?? {})) {
+      if (options.directoryTargets !== false && !target.includes('SENSITIVE-MARKER'))
+        mkdirSync(join(dir, 'usr', name), { recursive: true });
+      symlinkSync(target, join(dir, name));
+    }
+    if (options.regularRootDirectory) mkdirSync(join(dir, options.regularRootDirectory));
+    if (options.nestedDirectoryAlias) {
+      mkdirSync(join(dir, 'usr/share'), { recursive: true });
+      if (options.nestedDirectoryAlias.target === 'real-zoneinfo')
+        mkdirSync(join(dir, 'usr/share/real-zoneinfo'));
+      symlinkSync(options.nestedDirectoryAlias.target, join(dir, 'usr/share/zoneinfo'));
+    }
+    if (options.nestedOrdinaryDirectory) mkdirSync(join(dir, 'usr/share/zoneinfo'), { recursive: true });
     const args = options.owner ? ['--inspect-apk-owner', dir, options.owner] : ['--inspect-apk-db', dir];
     const result = spawnSync('sh', [script, ...args], { cwd: root, encoding: 'utf8' });
     return { ...result, value: result.status === 0 ? JSON.parse(result.stdout) : null };
   } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
+const apkRootLinks = `P:baselayout\nV:2026.09-r0\nL:MIT\nF:\nR:bin\nR:lib\nR:lib64\nR:sbin\n\n${apkDb}`;
+const safeRootLinks = { bin: 'usr/bin', lib: 'usr/lib', lib64: 'usr/lib64', sbin: 'usr/sbin' };
+const apkWithMtab = `${apkDb.trimEnd()}\nF:etc\nR:mtab\n`;
+const apkWithNestedDirectoryAlias = `${apkDb.trimEnd()}\nF:usr/share\nR:zoneinfo\n`;
+
+test('APK inventories a directly owned non-root directory symlink with in-root target', () => {
+  const result = inspectApk(apkWithNestedDirectoryAlias,
+    { nestedDirectoryAlias: { target: 'real-zoneinfo' } });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.value.ownership.at(-1), { path: '/usr/share/zoneinfo', package: 'ld-linux' });
+});
+
+for (const [label, options] of [
+  ['escaping root', { nestedDirectoryAlias: { target: '../../../../SENSITIVE-MARKER' } }],
+  ['dangling target', { nestedDirectoryAlias: { target: 'missing-zoneinfo' } }],
+  ['ordinary directory', { nestedOrdinaryDirectory: true }],
+]) {
+  test(`APK rejects non-root owned directory ${label}`, () => {
+    const result = inspectApk(apkWithNestedDirectoryAlias, options);
+    assert.notEqual(result.status, 0);
+    assert.doesNotMatch(result.stderr, /SENSITIVE-MARKER|missing-zoneinfo|ld-linux/i);
+  });
+}
+
+test('APK inventories only its exact /etc/mtab -> /proc/mounts OCI pseudo-fs alias', () => {
+  const result = inspectApk(apkWithMtab, { mtabTarget: '/proc/mounts' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.value.ownership.at(-1), { path: '/etc/mtab', package: 'ld-linux' });
+});
+
+test('APK pseudo-fs alias never satisfies direct regular ELF file ownership', () => {
+  const result = inspectApk(apkWithMtab, { mtabTarget: '/proc/mounts', owner: '/etc/mtab' });
+  assert.notEqual(result.status, 0);
+});
+
+for (const target of ['/proc/self/mounts', '/proc/missing', '../SENSITIVE-MARKER']) {
+  test(`APK rejects mismatched or escaping mtab alias without leaking ${target}`, () => {
+    const result = inspectApk(apkWithMtab, { mtabTarget: target });
+    assert.notEqual(result.status, 0);
+    assert.doesNotMatch(result.stderr, /SENSITIVE-MARKER|proc\/self|proc\/missing|ld-linux/i);
+  });
+}
+
+test('APK root F directory and owned in-root directory symlinks are inventoried', () => {
+  const result = inspectApk(apkRootLinks, { directoryLinks: safeRootLinks });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.value.ownership.slice(0, 4), Object.keys(safeRootLinks)
+    .map(name => ({ path: `/${name}`, package: 'baselayout' })));
+  assert.equal(result.value.packageDb.sha256, createHash('sha256').update(apkRootLinks).digest('hex'));
+});
+
+test('APK owner through a safe directory alias still requires canonical regular bytes directly owned', () => {
+  const result = inspectApk(apkRootLinks, { directoryLinks: safeRootLinks, owner: '/lib/libc.so.6' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.value, { path: '/lib/libc.so.6',
+    resolvedPath: '/usr/lib/libc.so.6', package: 'glibc' });
+});
+
+test('APK directory alias cannot stand in for direct canonical file ownership', () => {
+  const db = apkRootLinks.replace('R:libc.so.6', '');
+  const result = inspectApk(db, { directoryLinks: safeRootLinks, owner: '/lib/libc.so.6' });
+  assert.notEqual(result.status, 0);
+});
+
+test('APK root directory ownership rejects an ordinary directory instead of an alias', () => {
+  const db = apkRootLinks.replace('R:lib\nR:lib64\nR:sbin\n', '');
+  const result = inspectApk(db, { regularRootDirectory: 'bin' });
+  assert.notEqual(result.status, 0);
+});
+
+test('APK root directory alias rejects a regular file target', () => {
+  const db = apkRootLinks.replace('R:lib\nR:lib64\nR:sbin\n', '');
+  const result = inspectApk(db, { directoryLinks: { bin: 'usr/lib/libc.so.6' }, directoryTargets: false });
+  assert.notEqual(result.status, 0);
+});
+
+test('APK root directory alias cannot be claimed twice by different packages', () => {
+  const db = apkRootLinks.replace('F:usr/lib\nR:libc.so.6', 'F:\nR:lib\nF:usr/lib\nR:libc.so.6');
+  const result = inspectApk(db, { directoryLinks: safeRootLinks });
+  assert.notEqual(result.status, 0);
+});
+
+for (const [label, links, options] of [
+  ['escaping root', { bin: '../SENSITIVE-MARKER' }, {}],
+  ['dangling target', { bin: 'usr/missing' }, { directoryTargets: false }],
+]) {
+  test(`rejects APK owned directory symlink ${label} without disclosing target`, () => {
+    const db = apkRootLinks.replace('R:lib\nR:lib64\nR:sbin\n', '');
+    const result = inspectApk(db, { directoryLinks: links, ...options });
+    assert.notEqual(result.status, 0);
+    assert.doesNotMatch(result.stderr, /SENSITIVE-MARKER|usr\/missing|baselayout/i);
+  });
 }
 
 test('APK installed DB yields exact hashed packages, licenses and owned paths', () => {
@@ -168,10 +279,12 @@ test('rejects APK owned symlink escaping extracted root', () => {
   assert.doesNotMatch(result.stderr, /SENSITIVE-MARKER|outside/i);
 });
 
-test('rejects APK owned symlink resolving to a directory', () => {
-  const result = inspectApk(apkDb.replace('R:ld-linux-x86-64.so.2', 'R:ld-linux-escape.so.2'),
-    { symlink: '.' });
-  assert.notEqual(result.status, 0);
+test('APK inventories a directory symlink but never treats it as regular ELF bytes', () => {
+  const db = apkDb.replace('R:ld-linux-x86-64.so.2', 'R:ld-linux-escape.so.2');
+  const inventory = inspectApk(db, { symlink: '.' });
+  assert.equal(inventory.status, 0, inventory.stderr);
+  const owner = inspectApk(db, { symlink: '.', owner: '/usr/lib/ld-linux-escape.so.2' });
+  assert.notEqual(owner.status, 0);
 });
 
 test('APK owner lookup accepts a symlink only when its canonical bytes have a direct package owner', () => {

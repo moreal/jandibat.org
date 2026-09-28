@@ -335,12 +335,15 @@ test('restore payload validation rejects an archive missing the baseline migrati
   executable(dir, 'docker', `
 const args = process.argv.slice(2);
 if (args.includes('test')) process.exit(0);
+if (args.includes('stat')) { console.log('555'); process.exit(0); }
+if (args.includes('readlink')) { console.log(args.at(-1) === '/bin' ? 'usr/bin' : '/busybox'); process.exit(0); }
+if (args.includes('sha256sum')) { console.log('1ab604c045cac5dba49efa80d7baed9b083f7f9821074e0b572ac7b9ccc7d4f8  /usr/lib/apk/db/installed'); process.exit(0); }
 if (args.includes('find')) { console.log('/workspace/db/migrations/0002_ingest_reservation_token.sql'); process.exit(0); }
 process.exit(2);
 `);
   const result = invoke('test-restore-tools-payload.sh', { PATH: `${join(dir, 'bin')}:${process.env.PATH}` }, ['sha256:' + 'b'.repeat(64)]);
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /0001_baseline\.sql/);
+  assert.match(result.stderr, /payload inventory/);
 });
 
 for (const [mode, reason] of [
@@ -352,6 +355,22 @@ for (const [mode, reason] of [
   ['source-tree', 'an embedded application source tree'],
   ['extra-workspace-file', 'an unreviewed workspace file'],
   ['root-user', 'a root default User'],
+  ['empty-user', 'an empty default User'],
+  ['named-user', 'a named default User'],
+  ['missing-apk', 'a missing APK database'],
+  ['changed-apk', 'a changed APK database'],
+  ['missing-ca', 'a missing CA bundle'],
+  ['missing-applet', 'a missing BusyBox applet'],
+  ['broken-applet', 'a BusyBox applet with another target'],
+  ['linked-binary', 'a linked Nix executable'],
+  ['wrong-mode', 'a writable payload executable'],
+  ['wrong-sql-mode', 'a writable migration'],
+  ['wrong-dir-mode', 'a writable payload directory'],
+  ['writable-dir-owner', 'a payload directory owned by the runtime user'],
+  ['tmp-writable-without-tmpfs', 'a writable /tmp without tmpfs'],
+  ['tmp-unwritable-with-tmpfs', 'an unwritable /tmp with tmpfs'],
+  ['cli-failure', 'a native CLI that cannot load'],
+  ['shell-failure', 'a shell that cannot load'],
   ['missing-token', 'a verifier that starts without its metrics token'],
   ['checker-scratch', 'checker scratch without writable /tmp'],
 ]) test(mode === 'checker-scratch' ? `restore payload validation exercises ${reason}` : `restore payload validation rejects ${reason}`, t => {
@@ -362,6 +381,12 @@ const fs = require('node:fs');
 const { createHash } = require('node:crypto');
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.DOCKER_TRACE, JSON.stringify(args) + '\\n');
+if (args.includes('/cockroach/cockroach') && args.at(-1) === 'version' && process.env.LEAK_MODE === 'cli-failure') process.exit(1);
+if (args.includes('/bin/sh') && process.env.LEAK_MODE === 'shell-failure') process.exit(1);
+if (args.includes('/bin/sh') && args.some(arg => arg.includes('restore-tools-write-probe'))) {
+  if (process.env.LEAK_MODE === 'tmp-writable-without-tmpfs' && !args.includes('--tmpfs')) process.exit(1);
+  if (process.env.LEAK_MODE === 'tmp-unwritable-with-tmpfs' && args.includes('--tmpfs')) process.exit(1);
+}
 if (args.at(-1) === 'run-verifier') process.exit(process.env.LEAK_MODE === 'missing-token' ? 0 : 1);
 if (args.at(-1) === 'check-once') {
   const mount = args.filter((arg, index) => args[index - 1] === '--mount').find(arg => arg.includes('dst=/var/run/jandibat-backup'));
@@ -372,10 +397,21 @@ if (args.at(-1) === 'check-once') {
   process.exit(1);
 }
 if (args[0] === 'image' && args[1] === 'inspect') {
-  console.log(process.env.LEAK_MODE === 'root-user' ? '' : '65532:65532');
+  console.log(process.env.LEAK_MODE === 'root-user' ? '0' : process.env.LEAK_MODE === 'empty-user' ? '' : process.env.LEAK_MODE === 'named-user' ? 'nonroot' : '65532:65532');
   process.exit(0);
 }
+if (args.includes('stat')) {
+  const file = args.at(-1);
+  if (args.includes('%u:%g')) { console.log(process.env.LEAK_MODE === 'writable-dir-owner' && file === '/workspace/bin' ? '65532:65532' : '0:0'); process.exit(0); }
+  console.log(process.env.LEAK_MODE === 'wrong-mode' && file === '/workspace/bin/backup-tools' ? '755' : process.env.LEAK_MODE === 'wrong-sql-mode' && file.endsWith('0001_baseline.sql') ? '644' : process.env.LEAK_MODE === 'wrong-dir-mode' && file === '/workspace/scripts' ? '777' : ['/workspace/bin','/workspace/db/migrations','/workspace/scripts'].includes(file) ? '755' : file.endsWith('.sql') ? '444' : '555');
+  process.exit(0);
+}
+if (args.includes('readlink')) { console.log(args.at(-1) === '/bin' ? 'usr/bin' : process.env.LEAK_MODE === 'broken-applet' && args.at(-1) === '/usr/bin/awk' ? '/other' : '/busybox'); process.exit(0); }
 if (args.includes('find')) {
+  if (!args.includes('-type')) {
+    console.log('/workspace'); console.log('/workspace/db'); console.log('/workspace/db/migrations');
+    console.log('/workspace/scripts'); console.log('/workspace/bin');
+  }
   for (const file of fs.readdirSync('db/migrations').filter(file => file.endsWith('.sql')))
     console.log('/workspace/db/migrations/' + file);
   for (const file of ['db-migrate-url.sh', 'db-configure-runtime-roles.sh', 'db-verify-runtime-roles.sh', 'db-bootstrap-roles.sh', 'db-verify-backup-chain.sh', 'db-bootstrap-backup-connection.sh', 'db-configure-backup-schedule.sh', 'db-verify-backup-roles.sh', 'db-observe-backup-schedule.sh']) {
@@ -389,10 +425,18 @@ if (args.includes('find')) {
 }
 if (args.includes('sha256sum')) {
   const file = args.at(-1);
+  if (file === '/usr/lib/apk/db/installed') {
+    console.log((process.env.LEAK_MODE === 'changed-apk' ? 'f'.repeat(64) : '1ab604c045cac5dba49efa80d7baed9b083f7f9821074e0b572ac7b9ccc7d4f8') + '  ' + file);
+    process.exit(0);
+  }
   console.log(createHash('sha256').update(fs.readFileSync(file.replace(/^\\/workspace\\//, ''))).digest('hex') + '  ' + file);
   process.exit(0);
 }
 if (args.includes('test')) {
+  if (process.env.LEAK_MODE === 'missing-apk' && args.includes('/usr/lib/apk/db/installed')) process.exit(1);
+  if (process.env.LEAK_MODE === 'missing-ca' && args.includes('/etc/ssl/certs/ca-certificates.crt')) process.exit(1);
+  if (process.env.LEAK_MODE === 'missing-applet' && args.includes('/usr/bin/awk')) process.exit(1);
+  if (process.env.LEAK_MODE === 'linked-binary' && args.includes('/jandibat-api') && args.includes('-L')) process.exit(1);
   if (process.env.LEAK_MODE === 'missing-connection-script' && args.includes('/workspace/scripts/db-bootstrap-backup-connection.sh')) process.exit(1);
   if (process.env.LEAK_MODE === 'missing-schedule-script' && args.includes('/workspace/scripts/db-configure-backup-schedule.sh')) process.exit(1);
   if (process.env.LEAK_MODE === 'missing-backup-role-verifier' && args.includes('/workspace/scripts/db-verify-backup-roles.sh')) process.exit(1);
@@ -409,19 +453,38 @@ process.exit(0);
     const check = calls.find(args => args.at(-1) === 'check-once');
     assert.ok(check, 'read-only checker smoke was not exercised');
     assert.ok(check.includes('--read-only'));
+    assert.ok(check.includes('--cap-drop') && check.includes('ALL'));
+    assert.ok(check.includes('--security-opt') && check.includes('no-new-privileges'));
     assert.equal(check.includes('--tmpfs') && check.includes('/tmp'), false);
-    assert.equal(check[check.indexOf('--entrypoint') + 1], '/usr/bin/timeout');
-    assert.deepEqual(check.slice(-3), ['10s', '/workspace/bin/backup-tools', 'check-once']);
+    assert.equal(check[check.indexOf('--entrypoint') + 1], '/busybox');
+    assert.deepEqual(check.slice(-4), ['timeout', '10s', '/workspace/bin/backup-tools', 'check-once']);
+    const tmpWrites = calls.filter(args => args.includes('/bin/sh') && args.some(arg => arg.includes('restore-tools-write-probe')));
+    assert.equal(tmpWrites.length, 4);
+    for (const user of [false, true]) {
+      const writes = tmpWrites.filter(args => args.includes('--user') === user);
+      assert.equal(writes.length, 2);
+      assert.ok(writes.some(args => args.includes('--tmpfs') && args.includes('/tmp')));
+      assert.ok(writes.some(args => !args.includes('--tmpfs') && args.includes('--read-only')));
+    }
+    const cli = calls.filter(args => args.includes('/cockroach/cockroach') && args.at(-1) === 'version');
+    assert.equal(cli.length, 2);
+    assert.ok(cli.some(args => args.includes('--user') && args.includes('65532:65532')));
+    assert.ok(cli.some(args => !args.includes('--user')));
+    for (const args of cli) {
+      assert.ok(args.includes('--read-only'));
+      assert.ok(args.includes('--cap-drop') && args.includes('ALL'));
+      assert.ok(args.includes('--security-opt') && args.includes('no-new-privileges'));
+    }
     return;
   }
   assert.notEqual(result.status, 0, `restore-tools accepted ${reason}`);
-  assert.match(result.stderr, mode === 'missing-binary' ? /backup-tools/ : mode === 'missing-connection-script' ? /db-bootstrap-backup-connection/ : mode === 'missing-schedule-script' ? /db-configure-backup-schedule/ : mode === 'missing-backup-role-verifier' ? /db-verify-backup-roles/ : mode === 'missing-schedule-observer' ? /db-observe-backup-schedule/ : mode === 'root-user' ? /non-root User/ : mode === 'source-tree' ? /source tree/ : mode === 'extra-workspace-file' ? /inventory/ : /metrics token/);
+  assert.match(result.stderr, mode === 'missing-binary' ? /backup-tools/ : mode === 'missing-connection-script' ? /db-bootstrap-backup-connection/ : mode === 'missing-schedule-script' ? /db-configure-backup-schedule/ : mode === 'missing-backup-role-verifier' ? /db-verify-backup-roles/ : mode === 'missing-schedule-observer' ? /db-observe-backup-schedule/ : ['root-user','empty-user','named-user'].includes(mode) ? /non-root User/ : mode === 'source-tree' ? /source tree/ : mode === 'extra-workspace-file' ? /inventory/ : mode.includes('apk') ? /APK database/ : mode === 'missing-ca' ? /CA bundle/ : ['missing-applet','broken-applet'].includes(mode) ? /awk/ : mode === 'linked-binary' ? /jandibat-api/ : mode.startsWith('wrong-') || mode === 'writable-dir-owner' ? /mode|owner/ : mode.startsWith('tmp-') ? /tmp write/ : ['cli-failure','shell-failure'].includes(mode) ? /CLI or shell/ : /metrics token/);
   if (mode === 'missing-token') {
     const calls = readFileSync(dockerTrace, 'utf8').trim().split('\n').map(JSON.parse);
     const run = calls.find(args => args.at(-1) === 'run-verifier');
     assert.ok(run, 'missing-token smoke did not run backup-tools');
-    assert.equal(run[run.indexOf('--entrypoint') + 1], '/usr/bin/timeout');
-    assert.deepEqual(run.slice(-3), ['10s', '/workspace/bin/backup-tools', 'run-verifier']);
+    assert.equal(run[run.indexOf('--entrypoint') + 1], '/busybox');
+    assert.deepEqual(run.slice(-4), ['timeout', '10s', '/workspace/bin/backup-tools', 'run-verifier']);
     assert.ok(run.includes('--rm'));
   }
 });

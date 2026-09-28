@@ -146,7 +146,7 @@ chmod 555 "$restore_context/db/migrations" "$restore_context/scripts" "$restore_
 # exposes the merged rootfs, including the package-owned /bin symlink. Listing
 # the archive avoids extracting base symlinks that Docker cp cannot copy.
 base_image='cgr.dev/chainguard/glibc-dynamic:latest@sha256:6acf5a19a988abdaf0f3d30247561431a206034e702871442bed66a2c68cc1a2'
-if ! awk -v image="$base_image" '$0 == "FROM " image { count++ } END { exit count != 1 }' deploy/restore-tools.Dockerfile; then
+if ! awk -v image="$base_image" 'toupper($1) == "FROM" { final = $0 } END { exit final != "FROM " image }' deploy/restore-tools.Dockerfile; then
 	echo 'restore Dockerfile final base differs from the reviewed pinned image' >&2
 	exit 2
 fi
@@ -163,19 +163,33 @@ else
 	exit 2
 fi
 if ! docker export -o "$base_inspect_dir/rootfs.tar" "$base_inspect_container" >/dev/null 2>&1 ||
-	! tar -tvf "$base_inspect_dir/rootfs.tar" >"$base_inspect_dir/inventory" 2>/dev/null; then
+	! tar -tvf "$base_inspect_dir/rootfs.tar" >"$base_inspect_dir/inventory" 2>/dev/null ||
+	! tar -tf "$base_inspect_dir/rootfs.tar" >"$base_inspect_dir/members" 2>/dev/null; then
 	echo 'could not inventory pinned base rootfs' >&2
 	exit 2
 fi
-awk -v applet_names="$applets" '
-	BEGIN { split(applet_names, names, " "); for (i in names) applet[names[i]] = 1 }
+awk '
 	{
 		type = substr($1, 1, 1)
 		if (type == "l" && $(NF - 1) == "->") { path = $(NF - 2); target = $NF }
-		else { path = $NF; target = "" }
+		else if (type == "d") { path = $NF; target = "" }
+		else next
 		sub(/^\.\//, "", path)
 		if (path == "bin") { bin_count++; if (type != "l" || target != "usr/bin") invalid = 1 }
-		if (path == "usr/bin/") { usr_bin_count++; if (type != "d") invalid = 1 }
+		if (path == "usr/bin/" || path == "usr/bin") { usr_bin_count++; if (type != "d") invalid = 1 }
+	}
+	END {
+		if (invalid || bin_count != 1 || usr_bin_count != 1) {
+			print "pinned base /bin or /usr/bin layout differs from reviewed APK-owned layout" > "/dev/stderr"
+			exit 2
+		}
+	}
+' "$base_inspect_dir/inventory"
+awk -v applet_names="$applets" '
+	BEGIN { split(applet_names, names, " "); for (i in names) applet[names[i]] = 1 }
+	{
+		path = $0
+		sub(/^\.\//, "", path)
 		if (substr(path, 1, 8) == "usr/bin/") {
 			name = substr(path, 9)
 			sub(/\/$/, "", name)
@@ -183,16 +197,12 @@ awk -v applet_names="$applets" '
 		}
 	}
 	END {
-		if (invalid || bin_count != 1 || usr_bin_count != 1) {
-			print "pinned base /bin or /usr/bin layout differs from reviewed APK-owned layout" > "/dev/stderr"
-			exit 2
-		}
 		if (collision != "") {
 			print "pinned base destination collision: /usr/bin/" collision > "/dev/stderr"
 			exit 2
 		}
 	}
-' "$base_inspect_dir/inventory"
+' "$base_inspect_dir/members"
 stage=restore-build
 docker buildx build --file deploy/restore-tools.Dockerfile --platform linux/amd64 \
 	--builder "$restore_builder" \

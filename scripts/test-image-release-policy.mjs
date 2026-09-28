@@ -24,9 +24,9 @@ function fixture(t) {
 function executable(dir, name, body) {
   writeFileSync(join(dir, 'bin', name), `#!${process.execPath}\n` + body, { mode: 0o755 });
 }
-function invoke(file, env, args = []) {
+function invoke(file, env, args = [], cwd = root) {
   return spawnSync(file.endsWith('.mjs') ? process.execPath : 'sh', [script(file), ...args], {
-    cwd: root, env: { ...process.env, ...env }, encoding: 'utf8', timeout: 30000,
+    cwd, env: { ...process.env, ...env }, encoding: 'utf8', timeout: 30000,
   });
 }
 function deployment(t, overrides = {}) {
@@ -844,7 +844,7 @@ else process.exit(2);
   assert.ok(f.trace().some(a => a[0] === 'grype' && a[1] === `docker:${imageId}`));
 });
 
-for (const failure of ['none', 'app-import', 'extract', 'create', 'collision', 'wrong-driver', 'base-collision', 'base-bin-alias', 'base-export', 'build', 'restore-import', 'payload']) {
+for (const failure of ['none', 'app-import', 'extract', 'create', 'collision', 'wrong-driver', 'base-collision', 'base-hardlink-collision', 'base-bin-alias', 'base-export', 'base-late-from', 'build', 'restore-import', 'payload']) {
 const uncertainOwnership = ['create', 'collision'].includes(failure);
 test(`release packaging ${uncertainOwnership ? 'preserves uncertain builder after' : 'cleans owned builder after'} ${failure === 'none' ? 'success' : failure + ' failure'}`, t => {
   const dir = fixture(t);
@@ -905,9 +905,16 @@ if (a[0] === 'export') {
  const root = a[2] + '.rootfs';
  fs.mkdirSync(root + '/usr/bin', {recursive:true});
  fs.symlinkSync(process.env.FAILURE === 'base-bin-alias' ? 'other' : 'usr/bin', root + '/bin');
- fs.symlinkSync('../../lib64/ld-linux-x86-64.so.2', root + '/usr/bin/ld.so');
- if (process.env.FAILURE === 'base-collision') fs.writeFileSync(root + '/usr/bin/sed', 'APK-owned sed');
- require('node:child_process').execFileSync('tar', ['-cf', a[2], '-C', root, '.']);
+ if (process.env.FAILURE === 'base-hardlink-collision') {
+  require('node:child_process').execFileSync('tar', ['-cf', a[2], '-C', root, '.']);
+  fs.writeFileSync(root + '/usr/bin/source', 'APK-owned source');
+  fs.linkSync(root + '/usr/bin/source', root + '/usr/bin/sed');
+  require('node:child_process').execFileSync('tar', ['-rf', a[2], '-C', root, './usr/bin/source', './usr/bin/sed']);
+ } else {
+  fs.symlinkSync('../../lib64/ld-linux-x86-64.so.2', root + '/usr/bin/ld.so');
+  if (process.env.FAILURE === 'base-collision') fs.writeFileSync(root + '/usr/bin/sed', 'APK-owned sed');
+  require('node:child_process').execFileSync('tar', ['-cf', a[2], '-C', root, '.']);
+ }
  process.exit(0);
 }
 if (a[0] === 'rm') process.exit(0);
@@ -958,10 +965,19 @@ if (a[1] === 'build') {
 if (a[1] === 'rm') { if (a.at(-1) !== fs.readFileSync(process.env.BUILDER_STATE,'utf8')) process.exit(6); fs.unlinkSync(process.env.BUILDER_STATE); process.exit(0); }
 process.exit(7);
 `);
+  let cwd = root;
+  if (failure === 'base-late-from') {
+    cpSync(join(root, 'scripts'), join(dir, 'scripts'), { recursive: true });
+    cpSync(join(root, 'db/migrations'), join(dir, 'db/migrations'), { recursive: true });
+    mkdirSync(join(dir, 'deploy'));
+    writeFileSync(join(dir, 'deploy/restore-tools.Dockerfile'),
+      readFileSync(join(root, 'deploy/restore-tools.Dockerfile'), 'utf8') + '\nFROM scratch\n');
+    cwd = dir;
+  }
   const evidence = join(dir, 'evidence');
-  const result = invoke('run-image-validation-ci.sh', env, [evidence]);
-  const expectedStatus = { none: 0, 'app-import': 51, extract: 54, create: 8, collision: 8, 'wrong-driver': 1, 'base-collision': 2, 'base-bin-alias': 2, 'base-export': 2, build: 9, 'restore-import': 52, payload: 53 };
-  const expectedStage = { 'app-import': 'application archive import', extract: 'restore builder/context', create: 'restore builder/context', collision: 'restore builder/context', 'wrong-driver': 'restore builder/context', 'base-collision': 'restore builder/context', 'base-bin-alias': 'restore builder/context', 'base-export': 'restore builder/context', build: 'restore build', 'restore-import': 'restore image import and scan', payload: 'restore payload contract' };
+  const result = invoke('run-image-validation-ci.sh', env, [evidence], cwd);
+  const expectedStatus = { none: 0, 'app-import': 51, extract: 54, create: 8, collision: 8, 'wrong-driver': 1, 'base-collision': 2, 'base-hardlink-collision': 2, 'base-bin-alias': 2, 'base-export': 2, 'base-late-from': 2, build: 9, 'restore-import': 52, payload: 53 };
+  const expectedStage = { 'app-import': 'application archive import', extract: 'restore builder/context', create: 'restore builder/context', collision: 'restore builder/context', 'wrong-driver': 'restore builder/context', 'base-collision': 'restore builder/context', 'base-hardlink-collision': 'restore builder/context', 'base-bin-alias': 'restore builder/context', 'base-export': 'restore builder/context', 'base-late-from': 'restore builder/context', build: 'restore build', 'restore-import': 'restore image import and scan', payload: 'restore payload contract' };
   assert.equal(result.status, expectedStatus[failure], result.stderr);
   assert.equal(result.stdout, '');
   assert.equal(result.stderr, failure === 'none' ? '' : `::error::Image validation failed during ${expectedStage[failure]}.\n`);
@@ -972,13 +988,17 @@ process.exit(7);
     return;
   }
   const calls = readFileSync(env.TRACE,'utf8').trim().split('\n').map(JSON.parse);
-  if (!uncertainOwnership && !['extract', 'wrong-driver'].includes(failure)) {
+  if (!uncertainOwnership && !['extract', 'wrong-driver', 'base-late-from'].includes(failure)) {
     assert.ok(calls.some(a => a[0] === 'create' && a.at(-1) === 'cgr.dev/chainguard/glibc-dynamic:latest@sha256:6acf5a19a988abdaf0f3d30247561431a206034e702871442bed66a2c68cc1a2'));
     assert.ok(calls.some(a => a[0] === 'rm' && a.at(-1) === 'b'.repeat(64)));
   }
-  if (failure === 'none' || failure.startsWith('base-'))
+  if (failure === 'none' || (failure.startsWith('base-') && failure !== 'base-late-from'))
     assert.ok(calls.some(a => a[0] === 'export' && a[1] === '-o' && a.at(-1) === 'b'.repeat(64)));
   if (failure.startsWith('base-')) assert.equal(calls.filter(a => a[1] === 'build').length, 0);
+  if (failure === 'base-late-from') {
+    assert.equal(calls.some(a => a[0] === 'create' && a.at(-1).startsWith('cgr.dev/chainguard/')), false);
+    assert.match(readFileSync(join(evidence, '.image-validation-output'), 'utf8'), /final base differs/);
+  }
   const creation = calls.find(a => a[1] === 'create');
   assert.match(creation[creation.indexOf('--driver-opt')+1], /^image=moby\/buildkit:v[0-9.]+@sha256:[0-9a-f]{64}$/);
   const builder = creation[creation.indexOf('--name')+1];

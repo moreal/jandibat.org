@@ -111,7 +111,7 @@ function atomicEvidence(output, evidence) {
 }
 
 function parseOsRelease(rootfs) {
-  const path = join(rootfs, 'etc/os-release');
+  const path = containedFile(rootfs, '/etc/os-release');
   const lines = readFileSync(path, 'utf8').split('\n');
   const fields = Object.fromEntries(lines.map(line => line.match(/^([A-Z_]+)="?([^"\n]*)"?$/)).filter(Boolean).map(match => [match[1], match[2]]));
   return { ID: fields.ID, VERSION_ID: fields.VERSION_ID };

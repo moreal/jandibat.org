@@ -79,6 +79,32 @@ test('final runtime inventory hashes real owned bytes and preserves exact APK/Sy
   assert.ok(result.copiedFiles.some(file => file.path === '/workspace/bin/backup-tools'));
 });
 
+for (const [label, target] of [
+  ['root-relative absolute', '/usr/lib/os-release'],
+  ['relative', '../usr/lib/os-release'],
+]) test(`final runtime OS identity accepts an in-image ${label} symlink`, async t => {
+  const result = await inspect(t, f => {
+    const path = join(f.rootfs, 'etc/os-release');
+    f.file('/usr/lib/os-release', readFileSync(path));
+    rmSync(path);
+    symlinkSync(target, path);
+  });
+  assert.equal(result.packages.length, 2);
+});
+
+for (const label of ['escaping relative', 'absolute host']) {
+  test(`final runtime OS identity rejects an ${label} symlink even when host bytes match`, async t => {
+    await assert.rejects(() => inspect(t, f => {
+      const path = join(f.rootfs, 'etc/os-release');
+      const host = join(f.directory, 'host-os-release');
+      // Matching bytes make an accidental host read pass OS identity validation.
+      writeFileSync(host, readFileSync(path));
+      rmSync(path);
+      symlinkSync(label === 'absolute host' ? host : '../../host-os-release', path);
+    }));
+  });
+}
+
 test('owned directory symlink records metadata without transferring ownership to target bytes', async t => {
   const result = await inspect(t, f => {
     const path = join(f.rootfs, 'usr/lib/apk/db/installed');

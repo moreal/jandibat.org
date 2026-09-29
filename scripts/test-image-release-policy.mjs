@@ -6,6 +6,7 @@ import { join, resolve, basename } from 'node:path';
 import test from 'node:test';
 import { createHash } from 'node:crypto';
 import './test-restore-tools-runtime.mjs';
+import './test-restore-tools-secure.test.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const names = ['api', 'worker', 'maintenance', 'web', 'restore-tools'];
@@ -932,7 +933,7 @@ else process.exit(2);
   assert.ok(f.trace().some(a => a[0] === 'grype' && a[1] === `docker:${imageId}`));
 });
 
-for (const failure of ['none', 'app-import', 'extract', 'create', 'collision', 'wrong-driver', 'base-collision', 'base-hardlink-collision', 'base-bin-alias', 'base-export', 'base-late-from', 'build', 'restore-import', 'payload']) {
+for (const failure of ['none', 'app-import', 'extract', 'create', 'collision', 'wrong-driver', 'base-collision', 'base-hardlink-collision', 'base-bin-alias', 'base-export', 'base-late-from', 'build', 'restore-import', 'payload', 'runtime', 'secure']) {
 const uncertainOwnership = ['create', 'collision'].includes(failure);
 test(`release packaging ${uncertainOwnership ? 'preserves uncertain builder after' : 'cleans owned builder after'} ${failure === 'none' ? 'success' : failure + ' failure'}`, t => {
   const dir = fixture(t);
@@ -961,6 +962,10 @@ console.log(a[0] === 'eval' ? 'x86_64-linux' : a.includes('.#restore-tools-busyb
   executable(dir, 'node', `
 const a = process.argv.slice(2);
 if (a[0] === '-e') process.stdout.write('sha256:' + 'a'.repeat(64));
+else if (a[0] === 'scripts/restore-tools-runtime.mjs') {
+ require('node:fs').appendFileSync(process.env.TRACE + '.proofs', JSON.stringify(a) + '\\n');
+ if (process.env.FAILURE === 'runtime') { console.error(process.env.SENTINEL); process.exit(59); }
+}
 else if (a[0] === 'scripts/image-release.mjs' && a[1] === 'import') {
  if (process.env.FAILURE === 'app-import' && a[2] === 'api') { console.error(process.env.SENTINEL); process.exit(51); }
  if (process.env.FAILURE === 'restore-import' && a[2] === 'restore-tools') { console.error(process.env.SENTINEL); process.exit(52); }
@@ -969,7 +974,12 @@ else if (a[0] === 'scripts/image-release.mjs' && a[1] === 'import') {
   executable(dir, 'sh', `
 const {spawnSync} = require('node:child_process');
 const args = process.argv.slice(2);
-if (args[0] === 'scripts/test-restore-tools-payload.sh') { if (process.env.FAILURE === 'payload') { console.error(process.env.SENTINEL); process.exit(53); } process.exit(0); }
+if (args[0] === 'scripts/test-restore-tools-payload.sh' || args[0] === 'scripts/test-restore-tools-secure.sh') {
+ require('node:fs').appendFileSync(process.env.TRACE + '.proofs', JSON.stringify(args) + '\\n');
+ if (process.env.FAILURE === 'payload' && args[0].includes('payload')) { console.error(process.env.SENTINEL); process.exit(53); }
+ if (process.env.FAILURE === 'secure' && args[0].includes('secure')) { console.error(process.env.SENTINEL); process.exit(58); }
+ process.exit(0);
+}
 const result = spawnSync('/bin/sh', args, {stdio:'inherit', env:process.env});
 process.exit(result.status ?? 1);
 `);
@@ -1064,12 +1074,20 @@ process.exit(7);
   }
   const evidence = join(dir, 'evidence');
   const result = invoke('run-image-validation-ci.sh', env, [evidence], cwd);
-  const expectedStatus = { none: 0, 'app-import': 51, extract: 54, create: 8, collision: 8, 'wrong-driver': 1, 'base-collision': 2, 'base-hardlink-collision': 2, 'base-bin-alias': 2, 'base-export': 2, 'base-late-from': 2, build: 9, 'restore-import': 52, payload: 53 };
-  const expectedStage = { 'app-import': 'application archive import', extract: 'restore builder/context', create: 'restore builder/context', collision: 'restore builder/context', 'wrong-driver': 'restore builder/context', 'base-collision': 'restore builder/context', 'base-hardlink-collision': 'restore builder/context', 'base-bin-alias': 'restore builder/context', 'base-export': 'restore builder/context', 'base-late-from': 'restore builder/context', build: 'restore build', 'restore-import': 'restore image import and scan', payload: 'restore payload contract' };
+  const expectedStatus = { none: 0, 'app-import': 51, extract: 54, create: 8, collision: 8, 'wrong-driver': 1, 'base-collision': 2, 'base-hardlink-collision': 2, 'base-bin-alias': 2, 'base-export': 2, 'base-late-from': 2, build: 9, 'restore-import': 52, payload: 53, runtime: 59, secure: 58 };
+  const expectedStage = { 'app-import': 'application archive import', extract: 'restore builder/context', create: 'restore builder/context', collision: 'restore builder/context', 'wrong-driver': 'restore builder/context', 'base-collision': 'restore builder/context', 'base-hardlink-collision': 'restore builder/context', 'base-bin-alias': 'restore builder/context', 'base-export': 'restore builder/context', 'base-late-from': 'restore builder/context', build: 'restore build', 'restore-import': 'restore image import and scan', payload: 'restore payload contract', runtime: 'restore runtime evidence', secure: 'restore secure client proof' };
   assert.equal(result.status, expectedStatus[failure], result.stderr);
   assert.equal(result.stdout, '');
   assert.equal(result.stderr, failure === 'none' ? '' : `::error::Image validation failed during ${expectedStage[failure]}.\n`);
   assert.doesNotMatch(result.stdout + result.stderr, /SENTINEL|injected|sha256:|jandibat-restore-/);
+  if (['none', 'runtime', 'secure'].includes(failure)) {
+    const proofs = readFileSync(env.TRACE + '.proofs', 'utf8').trim().split('\n').map(JSON.parse);
+    assert.deepEqual(proofs, [
+      ['scripts/test-restore-tools-payload.sh', 'sha256:' + 'a'.repeat(64)],
+      ['scripts/restore-tools-runtime.mjs', 'sha256:' + 'a'.repeat(64), evidence],
+      ...(failure === 'runtime' ? [] : [['scripts/test-restore-tools-secure.sh', 'sha256:' + 'a'.repeat(64), evidence]]),
+    ]);
+  }
   if (failure === 'app-import') {
     assert.equal(existsSync(env.TRACE), false);
     assert.equal(existsSync(env.BUILDER_STATE), false);

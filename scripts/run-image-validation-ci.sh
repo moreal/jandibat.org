@@ -36,6 +36,8 @@ case "$(cat "$marker" 2>/dev/null)" in
 	restore-build) printf '%s\n' '::error::Image validation failed during restore build.' >&2 ;;
 	restore-import) printf '%s\n' '::error::Image validation failed during restore image import and scan.' >&2 ;;
 	restore-payload) printf '%s\n' '::error::Image validation failed during restore payload contract.' >&2 ;;
+	restore-runtime) printf '%s\n' '::error::Image validation failed during restore runtime evidence.' >&2 ;;
+	restore-secure) printf '%s\n' '::error::Image validation failed during restore secure client proof.' >&2 ;;
 	*) printf '%s\n' '::error::Image validation failed during setup.' >&2 ;;
 esac
 exit "$status"

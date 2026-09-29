@@ -6,6 +6,19 @@ stage=setup
 record_failure() {
 	status=$1
 	if [ "$status" -ne 0 ] && [ -n "${IMAGE_VALIDATION_STAGE_FILE:-}" ]; then
+		if [ "$stage" = restore-runtime ]; then
+			case "$(dd if="$IMAGE_VALIDATION_STAGE_FILE" bs=64 count=1 2>/dev/null | od -An -tu1 | awk '
+				{ for (i = 1; i <= NF; i++) {
+					count++; byte = $i
+					if (byte == 10) { if (newline++) invalid = 1 }
+					else if (newline || (byte != 45 && (byte < 97 || byte > 122))) invalid = 1
+					else value = value sprintf("%c", byte)
+				} }
+				END { if (!invalid && count > 0 && count < 64 && length(value) > 0) print value }
+			')" in
+				restore-runtime-preflight|restore-runtime-scan|restore-runtime-imported-config|restore-runtime-daemon-oci-copy|restore-runtime-oci-unpack|restore-runtime-final-inventory|restore-runtime-cleanup|restore-runtime-sidecar-write) return ;;
+			esac
+		fi
 		printf '%s\n' "$stage" 2>/dev/null >"$IMAGE_VALIDATION_STAGE_FILE" || :
 	fi
 }

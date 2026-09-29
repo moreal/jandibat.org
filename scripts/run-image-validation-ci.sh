@@ -26,7 +26,15 @@ else
 	status=$?
 fi
 
-case "$(cat "$marker" 2>/dev/null)" in
+case "$(dd if="$marker" bs=64 count=1 2>/dev/null | od -An -tu1 | awk '
+	{ for (i = 1; i <= NF; i++) {
+		count++; byte = $i
+		if (byte == 10) { if (newline++) invalid = 1 }
+		else if (newline || (byte != 45 && (byte < 97 || byte > 122))) invalid = 1
+		else value = value sprintf("%c", byte)
+	} }
+	END { if (!invalid && count > 0 && count < 64 && length(value) > 0) print value }
+')" in
 	payload-build) printf '%s\n' '::error::Image validation failed during payload build.' >&2 ;;
 	payload-rebuild) printf '%s\n' '::error::Image validation failed during payload rebuild.' >&2 ;;
 	payload-compare) printf '%s\n' '::error::Image validation failed during payload comparison.' >&2 ;;
@@ -37,6 +45,14 @@ case "$(cat "$marker" 2>/dev/null)" in
 	restore-import) printf '%s\n' '::error::Image validation failed during restore image import and scan.' >&2 ;;
 	restore-payload) printf '%s\n' '::error::Image validation failed during restore payload contract.' >&2 ;;
 	restore-runtime) printf '%s\n' '::error::Image validation failed during restore runtime evidence.' >&2 ;;
+	restore-runtime-preflight) printf '%s\n' '::error::Image validation failed during restore runtime preflight.' >&2 ;;
+	restore-runtime-scan) printf '%s\n' '::error::Image validation failed during restore runtime scan.' >&2 ;;
+	restore-runtime-imported-config) printf '%s\n' '::error::Image validation failed during restore runtime imported config.' >&2 ;;
+	restore-runtime-daemon-oci-copy) printf '%s\n' '::error::Image validation failed during restore runtime daemon OCI copy.' >&2 ;;
+	restore-runtime-oci-unpack) printf '%s\n' '::error::Image validation failed during restore runtime OCI unpack.' >&2 ;;
+	restore-runtime-final-inventory) printf '%s\n' '::error::Image validation failed during restore runtime final inventory.' >&2 ;;
+	restore-runtime-cleanup) printf '%s\n' '::error::Image validation failed during restore runtime cleanup.' >&2 ;;
+	restore-runtime-sidecar-write) printf '%s\n' '::error::Image validation failed during restore runtime sidecar write.' >&2 ;;
 	restore-secure) printf '%s\n' '::error::Image validation failed during restore secure client proof.' >&2 ;;
 	*) printf '%s\n' '::error::Image validation failed during setup.' >&2 ;;
 esac

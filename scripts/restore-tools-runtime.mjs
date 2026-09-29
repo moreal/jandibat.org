@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,6 +18,18 @@ const json = path => JSON.parse(readFileSync(path, 'utf8'));
 const fileHash = path => sha(readFileSync(path));
 const digest = value => /^sha256:[a-f0-9]{64}$/.test(value ?? '');
 const sorted = items => [...items].sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+const runtimeStages = Object.freeze({
+  preflight: 'restore-runtime-preflight', scan: 'restore-runtime-scan',
+  importedConfig: 'restore-runtime-imported-config', daemonOciCopy: 'restore-runtime-daemon-oci-copy',
+  ociUnpack: 'restore-runtime-oci-unpack', finalInventory: 'restore-runtime-final-inventory',
+  cleanup: 'restore-runtime-cleanup', sidecarWrite: 'restore-runtime-sidecar-write',
+});
+let runtimeStage = runtimeStages.preflight;
+function recordRuntimeFailure() {
+  if (!process.env.IMAGE_VALIDATION_STAGE_FILE || !Object.values(runtimeStages).includes(runtimeStage)) return;
+  try { writeFileSync(process.env.IMAGE_VALIDATION_STAGE_FILE, `${runtimeStage}\n`); }
+  catch { /* A missing/unwritable marker cannot disclose diagnostics or grant acceptance. */ }
+}
 function command(program, args) {
   const result = spawnSync(program, args, { cwd: root, encoding: 'utf8', maxBuffer: 128 * 1024 * 1024 });
   assert.equal(result.status, 0, 'runtime evidence tool failed');
@@ -138,6 +150,7 @@ export function assembleRuntimeSidecar(inventory, candidate, scanned, sourceSha,
 }
 
 export function produceRuntimeEvidence(imageId, evidence) {
+  runtimeStage = runtimeStages.preflight;
   const output = join(evidence, 'restore-tools-runtime.json');
   // An unsuccessful retry must not leave a previous passing sidecar.
   if (existsSync(output)) { assert.ok(lstatSync(output).isFile(), 'regular runtime sidecar'); rmSync(output); }
@@ -148,17 +161,21 @@ export function produceRuntimeEvidence(imageId, evidence) {
   assert.match(sourceSha, /^[a-f0-9]{40}$/);
   if (process.env.GITHUB_SHA) assert.equal(sourceSha, process.env.GITHUB_SHA, 'CI source identity');
   const candidate = loadPreflight();
+  runtimeStage = runtimeStages.importedConfig;
   const imported = json(join(evidence, 'restore-tools.json'));
   assert.equal(imported.name, 'restore-tools');
   assert.equal(imported.imageId, imageId);
   assert.equal(resolve(imported.layout), join(evidence, 'restore-tools'), 'imported layout path');
+  runtimeStage = runtimeStages.scan;
   const scanned = verifyImportedScan(evidence, imageId);
+  runtimeStage = runtimeStages.importedConfig;
   assert.equal(json(join(imported.layout, 'manifest.json')).config.digest, imageId);
   const [loaded] = JSON.parse(command('docker', ['image', 'inspect', imageId]));
   assert.equal(loaded.Id, imageId);
   assert.equal(loaded.Os, 'linux');
   assert.equal(loaded.Architecture, 'amd64');
   assert.equal(loaded.Config.User, '65532:65532');
+  runtimeStage = runtimeStages.daemonOciCopy;
   const scratch = mkdtempSync(join(tmpdir(), 'jandibat-final-runtime-'));
   let sidecar;
   try {
@@ -172,11 +189,19 @@ export function produceRuntimeEvidence(imageId, evidence) {
     const ociManifest = json(join(layout, 'blobs/sha256', ociIndex.manifests[0].digest.slice(7)));
     assert.equal(ociManifest.config.digest, imageId, 'unpacked image config identity');
     assert.equal(`sha256:${fileHash(join(layout, 'blobs/sha256', imageId.slice(7)))}`, imageId);
+    runtimeStage = runtimeStages.ociUnpack;
     command('umoci', ['unpack', '--rootless', '--image', `${layout}:final`, join(scratch, 'bundle')]);
+    runtimeStage = runtimeStages.finalInventory;
     const inventory = inspectFinalInventory(join(scratch, 'bundle/rootfs'), scanned.artifacts.syft, candidate, imageId);
     sidecar = assembleRuntimeSidecar(inventory, candidate, scanned, sourceSha, imageId);
-  } finally { removeScratch(scratch); }
+  } finally {
+    const inspectionStage = runtimeStage;
+    runtimeStage = runtimeStages.cleanup;
+    removeScratch(scratch);
+    runtimeStage = inspectionStage;
+  }
   // Write only after inspection and cleanup pass; external diagnostics never enter the sidecar.
+  runtimeStage = runtimeStages.sidecarWrite;
   atomicEvidence(output, sidecar);
 }
 
@@ -187,6 +212,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     mkdirSync(evidence, { recursive: true });
     produceRuntimeEvidence(process.argv[2], evidence);
   } catch {
+    recordRuntimeFailure();
     process.stderr.write('restore-tools runtime evidence rejected: imported image inspection failed\n');
     process.exitCode = 1;
   }

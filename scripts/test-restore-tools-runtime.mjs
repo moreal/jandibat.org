@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
@@ -258,3 +258,145 @@ test('runtime producer extracts only the immutable imported Docker image and san
   assert.ok(args.includes('--format') && args.includes('oci'));
   assert.ok(args.includes(`docker-daemon:${imageId}`), 'rootfs must come from imported immutable image ID');
 });
+
+// Synthetic Linux/tool/preflight boundaries exercise phase propagation, not
+// real-image eligibility. Rootfs, inventories, receipts and hashes stay real.
+async function diagnosticFixture(t, phase) {
+  const { loadPreflight } = await implementation();
+  const f = fixture(t);
+  const frozen = loadPreflight();
+  const candidate = { ...frozen, ...f.candidate, runtime: frozen.runtime,
+    donor: { ...frozen.donor, ...f.candidate.donor, source: frozen.donor.source,
+      amd64Digest: frozen.donor.amd64Digest, needed: ['libc.so.6'], nativeDecisions: [
+        { ...f.candidate.donor.nativeFiles[0], decision: 'include', reason: 'main-executable' },
+      ] }, scan: { ...frozen.scan, matches: [] } };
+  const candidateBytes = JSON.stringify(candidate);
+  const configBytes = JSON.stringify({ architecture: 'amd64', os: 'linux', config: { User: '65532:65532' } });
+  const id = `sha256:${hash(configBytes)}`;
+  const prefix = `restore-tools-${id.replace(':', '-')}`;
+  const artifacts = { syft: { ...f.sbom, source: { metadata: { imageID: id } } },
+    spdx: { spdxVersion: 'SPDX-2.3' }, grype: { source: { target: { imageID: id } }, matches: [] } };
+  const references = {};
+  for (const [kind, value] of Object.entries(artifacts)) {
+    const bytes = JSON.stringify(value);
+    const file = `${prefix}.${kind}.json`;
+    writeFileSync(join(f.directory, file), bytes);
+    references[kind] = { file, sha256: hash(bytes) };
+  }
+  writeFileSync(join(f.directory, `${prefix}.release.json`), JSON.stringify({ name: 'restore-tools',
+    target: `docker:${id}`, imageId: id, manifestDigest: null, artifacts: references }));
+  const layout = join(f.directory, 'restore-tools');
+  mkdirSync(layout);
+  writeFileSync(join(layout, 'manifest.json'), JSON.stringify({ config: { digest: id } }));
+  writeFileSync(join(f.directory, 'restore-tools.json'), JSON.stringify({ name: 'restore-tools', imageId: id, layout }));
+  writeFileSync(join(f.directory, 'restore-tools-runtime.json'), '{"status":"passed"}');
+  const sentinel = ['SYNTHETIC', randomUUID(), 'postgresql:', '//fixture-user:fixture-pass@fixture.invalid/private/path'].join('-');
+  const preload = join(f.directory, 'diagnostic.cjs');
+  writeFileSync(preload, `const fs = require('node:fs'); const crypto = require('node:crypto');
+const {syncBuiltinESMExports} = require('node:module');
+Object.defineProperty(process,'platform',{value:'linux'}); Object.defineProperty(process,'arch',{value:'x64'});
+const originalRead = fs.readFileSync; const candidate = ${JSON.stringify(candidateBytes)};
+fs.readFileSync = function(path,...args) {
+ if (String(path) === ${JSON.stringify(join(root, 'docs/evidence/restore-runtime/preflight-36411980538.json'))}) {
+  if (process.env.DIAGNOSTIC_PHASE === 'preflight') throw new Error(process.env.DIAGNOSTIC_SENTINEL);
+  return Buffer.from(candidate);
+ }
+ if (process.env.DIAGNOSTIC_PHASE === 'scan' && String(path).endsWith('.syft.json')) throw new Error(process.env.DIAGNOSTIC_SENTINEL);
+ if (process.env.DIAGNOSTIC_PHASE === 'final-inventory' && String(path).includes('/bundle/rootfs/usr/lib/apk/db/installed')) throw new Error(process.env.DIAGNOSTIC_SENTINEL);
+ return originalRead.call(this,path,...args);
+};
+// Only the frozen preflight I/O boundary is synthetic; other digests are real.
+const originalHash = crypto.createHash;
+crypto.createHash = function(...args) {
+ const instance = originalHash(...args); const update = instance.update; const digest = instance.digest; let fixture=false;
+ instance.update = function(bytes,...rest) { fixture = String(bytes) === candidate; return update.call(this,bytes,...rest); };
+ instance.digest = function(encoding) { return fixture && encoding === 'hex' ? 'a963547f904eff70405115c0371717f59fdd856585081d31f59365a6bd2b6878' : digest.call(this,encoding); }; return instance;
+};
+const originalScratch = fs.mkdtempSync;
+fs.mkdtempSync = function(prefix,...args) { return originalScratch.call(this,String(prefix).includes('jandibat-final-runtime-') ? ${JSON.stringify(join(f.directory, 'scratch-'))} : prefix,...args); };
+const originalRemove = fs.rmSync;
+fs.rmSync = function(path,options) { if (process.env.DIAGNOSTIC_PHASE === 'cleanup' && options?.recursive && String(path).startsWith(${JSON.stringify(join(f.directory, 'scratch-'))})) throw new Error(process.env.DIAGNOSTIC_SENTINEL); return originalRemove.call(this,path,options); };
+const originalWrite = fs.writeFileSync;
+fs.writeFileSync = function(path,...args) {
+ if (process.env.DIAGNOSTIC_MARKER_DENIED && String(path).endsWith('/.image-validation-stage')) throw new Error(process.env.DIAGNOSTIC_SENTINEL);
+ if (process.env.DIAGNOSTIC_PHASE === 'sidecar-write' && String(path).startsWith(${JSON.stringify(join(f.directory, 'restore-tools-runtime.json.'))})) throw new Error(process.env.DIAGNOSTIC_SENTINEL);
+ return originalWrite.call(this,path,...args);
+};
+syncBuiltinESMExports();`);
+  function executable(name, body) {
+    writeFileSync(join(f.directory, 'bin', name), `#!${process.execPath}\n${body}`, { mode: 0o755 });
+  }
+  executable('nix', `const {spawnSync}=require('node:child_process'); const result=spawnSync(${JSON.stringify(process.execPath)},[${JSON.stringify(producer)},${JSON.stringify(id)},${JSON.stringify(f.directory)}],{stdio:'inherit'}); process.exit(result.status ?? 99);`);
+  executable('docker', `if (process.env.DIAGNOSTIC_PHASE === 'imported-config') { console.log(process.env.DIAGNOSTIC_SENTINEL); console.error(process.env.DIAGNOSTIC_SENTINEL); process.exit(62); } console.log(JSON.stringify([{Id:${JSON.stringify(id)},Os:'linux',Architecture:'amd64',Config:{User:'65532:65532'}}]));`);
+  executable('skopeo', `const fs=require('node:fs'); const path=require('node:path');
+if (process.env.DIAGNOSTIC_PHASE === 'daemon-oci-copy') { console.log(process.env.DIAGNOSTIC_SENTINEL); console.error(process.env.DIAGNOSTIC_SENTINEL); process.exit(63); }
+const destination=process.argv.at(-1).slice(4,-':final'.length); fs.mkdirSync(path.join(destination,'blobs/sha256'),{recursive:true});
+const config=${JSON.stringify(configBytes)}; const manifest=JSON.stringify({config:{digest:${JSON.stringify(id)}}}); const manifestId=require('node:crypto').createHash('sha256').update(manifest).digest('hex');
+fs.writeFileSync(path.join(destination,'index.json'),JSON.stringify({manifests:[{digest:'sha256:'+manifestId}]}));
+fs.writeFileSync(path.join(destination,'blobs/sha256',manifestId),manifest); fs.writeFileSync(path.join(destination,'blobs/sha256',${JSON.stringify(id.slice(7))}),config);`);
+  executable('umoci', `const fs=require('node:fs'); if (process.env.DIAGNOSTIC_PHASE === 'oci-unpack') { console.log(process.env.DIAGNOSTIC_SENTINEL); console.error(process.env.DIAGNOSTIC_SENTINEL); process.exit(64); } fs.cpSync(${JSON.stringify(f.rootfs)},process.argv.at(-1)+'/rootfs',{recursive:true});`);
+  return { ...f, sentinel, env: { ...process.env, PATH: `${join(f.directory, 'bin')}:${process.env.PATH}`,
+    GITHUB_SHA: '', NODE_OPTIONS: `--require=${preload}`, DIAGNOSTIC_PHASE: phase, DIAGNOSTIC_SENTINEL: sentinel } };
+}
+
+for (const [phase, label] of [
+  ['preflight', 'preflight'], ['scan', 'scan'], ['imported-config', 'imported config'],
+  ['daemon-oci-copy', 'daemon OCI copy'], ['oci-unpack', 'OCI unpack'],
+  ['final-inventory', 'final inventory'], ['cleanup', 'cleanup'], ['sidecar-write', 'sidecar write'],
+]) test(`runtime CI diagnostic localizes ${phase} with a fixed safe annotation`, async t => {
+  const f = await diagnosticFixture(t, phase);
+  const result = spawnSync('sh', [join(root, 'scripts/run-image-validation-ci.sh'), f.directory], { cwd: root, env: f.env, encoding: 'utf8' });
+  assert.notEqual(result.status, 0);
+  assert.equal(result.stdout, '');
+  assert.equal(result.stderr, `::error::Image validation failed during restore runtime ${label}.\n`);
+  assert.equal(readFileSync(join(f.directory, '.image-validation-stage'), 'utf8'), `restore-runtime-${phase}\n`);
+  assert.equal(existsSync(join(f.directory, 'restore-tools-runtime.json')), false, 'failed rerun retained stale success');
+  assert.ok(!JSON.stringify(readdirSync(f.directory).filter(name => !name.startsWith('.')).map(name =>
+    { try { return readFileSync(join(f.directory, name), 'utf8'); } catch { return ''; } })).includes(f.sentinel), 'raw diagnostic entered public artifact');
+  const diff = spawnSync('git', ['-c', 'core.fsmonitor=false', 'diff', '--no-ext-diff'], { cwd: root, encoding: 'utf8' });
+  assert.equal(diff.status, 0);
+  assert.ok(!diff.stdout.includes(f.sentinel), 'synthetic credentials entered Git diff');
+});
+
+test('runtime CI diagnostic leaves successful synthetic evidence and pending license semantics unchanged', async t => {
+  const f = await diagnosticFixture(t, 'none');
+  const result = spawnSync('sh', [join(root, 'scripts/run-image-validation-ci.sh'), f.directory], { cwd: root, env: f.env, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout + result.stderr, '');
+  const sidecar = JSON.parse(readFileSync(join(f.directory, 'restore-tools-runtime.json'), 'utf8'));
+  assert.equal(sidecar.status, 'passed');
+  assert.equal(sidecar.licenseReview.status, 'license-review-pending');
+  assert.ok(!JSON.stringify(sidecar).includes(f.sentinel));
+});
+
+test('runtime CI diagnostic still rejects when writing the phase marker fails', async t => {
+  const f = await diagnosticFixture(t, 'daemon-oci-copy');
+  const result = spawnSync('sh', [join(root, 'scripts/run-image-validation-ci.sh'), f.directory], {
+    cwd: root, env: { ...f.env, DIAGNOSTIC_MARKER_DENIED: '1' }, encoding: 'utf8',
+  });
+  assert.notEqual(result.status, 0);
+  assert.equal(result.stdout, '');
+  assert.equal(result.stderr, '::error::Image validation failed during setup.\n');
+  assert.ok(!result.stderr.includes(f.sentinel));
+  assert.equal(existsSync(join(f.directory, 'restore-tools-runtime.json')), false);
+});
+
+for (const kind of ['absent', 'empty', 'unknown', 'multiline', 'extra-newline', 'nul', 'oversized']) {
+  test(`runtime CI diagnostic fails closed on a ${kind} phase marker`, t => {
+    const f = fixture(t);
+    const sentinel = `SYNTHETIC-${randomUUID()}`;
+    const marker = { empty: '', unknown: sentinel, multiline: `restore-runtime-scan\n${sentinel}`,
+      'extra-newline': 'restore-runtime-scan\n\n', nul: 'restore-runtime-scan\0',
+      oversized: 'restore-runtime-scan' + 'x'.repeat(1000) }[kind];
+    writeFileSync(join(f.directory, 'bin/nix'), `#!${process.execPath}\nif (process.env.DIAGNOSTIC_MARKER) require('node:fs').writeFileSync(process.env.IMAGE_VALIDATION_STAGE_FILE,Buffer.from(process.env.DIAGNOSTIC_MARKER,'base64')); console.error(process.env.DIAGNOSTIC_SENTINEL); process.exit(67);`, { mode: 0o755 });
+    const result = spawnSync('sh', [join(root, 'scripts/run-image-validation-ci.sh'), f.directory], {
+      cwd: root, encoding: 'utf8', env: { ...process.env, PATH: `${join(f.directory, 'bin')}:${process.env.PATH}`,
+        DIAGNOSTIC_MARKER: marker === undefined ? '' : Buffer.from(marker).toString('base64'), DIAGNOSTIC_SENTINEL: sentinel },
+    });
+    assert.equal(result.status, 67);
+    assert.equal(result.stdout, '');
+    assert.equal(result.stderr, '::error::Image validation failed during setup.\n');
+    assert.ok(!result.stderr.includes(sentinel));
+    assert.ok(readFileSync(join(f.directory, '.image-validation-output'), 'utf8').includes(sentinel));
+  });
+}

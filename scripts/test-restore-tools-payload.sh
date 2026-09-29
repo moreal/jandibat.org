@@ -212,4 +212,7 @@ test -f "$scratch_probe/record/sql-reached" || {
 	echo 'backup checker did not reach SQL with only record storage writable' >&2
 	exit 1
 }
+if [ -n "${2:-}" ]; then
+	node scripts/restore-tools-runtime.mjs "$image_id" "$2"
+fi
 printf '%s\n' 'restore-tools payload, permissions, Cockroach CLI and non-root /tmp passed'

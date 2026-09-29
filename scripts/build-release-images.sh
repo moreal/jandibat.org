@@ -213,4 +213,4 @@ stage=restore-import
 node scripts/image-release.mjs import restore-tools "$restore_context/restore-tools.tar" "$evidence"
 image_id=$(node -e 'process.stdout.write(require(process.argv[1]).imageId)' "$evidence/restore-tools.json")
 stage=restore-payload
-sh scripts/test-restore-tools-payload.sh "$image_id"
+sh scripts/test-restore-tools-payload.sh "$image_id" "$evidence"

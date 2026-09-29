@@ -56,7 +56,7 @@ function pathsUnder(directory, prefix = '') {
   });
 }
 
-function containedFile(rootfs, path, allowOwnedDirectoryAlias = false) {
+function containedFile(rootfs, path, allowOwnedDirectoryAlias = false, entryOnly = false) {
   if (!absolute(path)) throw new Error('invalid inspected path');
   const base = resolve(rootfs);
   let directoryAlias = false;
@@ -73,6 +73,7 @@ function containedFile(rootfs, path, allowOwnedDirectoryAlias = false) {
     }
     const target = join(base, ...parts, segment);
     const stat = lstatSync(target);
+    if (entryOnly && !pending.length) return target;
     if (stat.isSymbolicLink()) {
       if (allowOwnedDirectoryAlias && !pending.length) directoryAlias = true;
       if (++links > 32) throw new Error('symlink depth exceeded');
@@ -573,6 +574,10 @@ function probe() {
   }
 }
 
+export { parseApkInstalled, containedFile, apkOwner, hashPath, elf, parseOsRelease,
+  validate as validateCandidate, atomicEvidence, removeScratch };
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
 if (process.argv[2] === '--inspect-donor-licenses') {
   try {
     assert.equal(process.argv.length, 4);
@@ -629,4 +634,5 @@ if (process.argv[2] === '--inspect-donor-licenses') {
     process.stderr.write('restore runtime probe rejected: inspection failed\n');
     process.exitCode = 1;
   }
+}
 }

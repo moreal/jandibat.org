@@ -1,0 +1,568 @@
+{
+  "schema": 2,
+  "sourceSha": "6da761b20045d8fbb88ebaf186fab2e13b37c6e0",
+  "status": "candidate",
+  "packageManager": "apk",
+  "runtime": {
+    "source": "cgr.dev/chainguard/glibc-dynamic:latest@sha256:6acf5a19a988abdaf0f3d30247561431a206034e702871442bed66a2c68cc1a2",
+    "indexDigest": "sha256:6acf5a19a988abdaf0f3d30247561431a206034e702871442bed66a2c68cc1a2",
+    "amd64Digest": "sha256:1e9870bd8b72e908eff47d5f4ffcdca068b2765fbb22223cc5a68c989902d195",
+    "os": "linux",
+    "architecture": "amd64",
+    "osRelease": {
+      "ID": "wolfi",
+      "VERSION_ID": "20230201"
+    }
+  },
+  "donor": {
+    "source": "cockroachdb/cockroach:v26.2.5@sha256:771325a0586bf61d53322d24f5a6de8962568b0fc181fa45db364278e5961282",
+    "amd64Digest": "sha256:c95fcef260b068d00d3715e707e75641ef5ec8b4275854e5cdb987b50824a3bf",
+    "interpreter": "/lib64/ld-linux-x86-64.so.2",
+    "needed": [
+      "librt.so.1",
+      "libpthread.so.0",
+      "libresolv.so.2",
+      "libm.so.6",
+      "libdl.so.2",
+      "libc.so.6",
+      "ld-linux-x86-64.so.2"
+    ],
+    "elfClosure": [
+      {
+        "path": "/cockroach/cockroach",
+        "needed": [
+          "librt.so.1",
+          "libpthread.so.0",
+          "libresolv.so.2",
+          "libm.so.6",
+          "libdl.so.2",
+          "libc.so.6",
+          "ld-linux-x86-64.so.2"
+        ]
+      }
+    ],
+    "nativeFiles": [
+      {
+        "path": "/cockroach/cockroach",
+        "sha256": "5ad89c804abb3bf5afa9c073faecb3710a1c4f34a870f08cdef889c1c91d314b"
+      }
+    ],
+    "nativeDecisions": [
+      {
+        "path": "/cockroach/cockroach",
+        "sha256": "5ad89c804abb3bf5afa9c073faecb3710a1c4f34a870f08cdef889c1c91d314b",
+        "decision": "include",
+        "reason": "main-executable"
+      },
+      {
+        "path": "/cockroach/cockroach.sh",
+        "sha256": "e34880c3890457e3592c401861cd1af2bd2e55d11f3f8867ac51e6c52ffd1c94",
+        "decision": "exclude",
+        "reason": "non-ELF"
+      }
+    ],
+    "licenses": [
+      {
+        "path": "/licenses/LICENSE",
+        "sha256": "cb4f34a516b09ec1815bd8376a34de7ea5e6da06c70bed756110943ad1b340e4"
+      },
+      {
+        "path": "/licenses/THIRD-PARTY-NOTICES.txt",
+        "sha256": "095d2ca30ec81ac102e1773e08ac51760e1233dbfd6ebaece3e7a73553194e3b"
+      }
+    ]
+  },
+  "packages": [
+    {
+      "name": "ca-certificates-bundle",
+      "version": "20260909-r1",
+      "type": "apk"
+    },
+    {
+      "name": "glibc-2.44",
+      "version": "2.44-r6",
+      "type": "apk"
+    },
+    {
+      "name": "glibc-2.44-locale-posix",
+      "version": "2.44-r6",
+      "type": "apk"
+    },
+    {
+      "name": "ld-linux-2.44",
+      "version": "2.44-r6",
+      "type": "apk"
+    },
+    {
+      "name": "libgcc",
+      "version": "16.2.0-r1",
+      "type": "apk"
+    },
+    {
+      "name": "libstdc++",
+      "version": "16.2.0-r1",
+      "type": "apk"
+    },
+    {
+      "name": "wolfi-baselayout",
+      "version": "20230201-r30",
+      "type": "apk"
+    }
+  ],
+  "packageDb": {
+    "path": "/usr/lib/apk/db/installed",
+    "sha256": "1ab604c045cac5dba49efa80d7baed9b083f7f9821074e0b572ac7b9ccc7d4f8"
+  },
+  "licenseDeclarations": [
+    {
+      "name": "wolfi-baselayout",
+      "version": "20230201-r30",
+      "license": "MIT"
+    },
+    {
+      "name": "ca-certificates-bundle",
+      "version": "20260909-r1",
+      "license": "MPL-2.0 AND MIT"
+    },
+    {
+      "name": "glibc-2.44-locale-posix",
+      "version": "2.44-r6",
+      "license": "LGPL-2.1-or-later"
+    },
+    {
+      "name": "ld-linux-2.44",
+      "version": "2.44-r6",
+      "license": "LGPL-2.1-or-later"
+    },
+    {
+      "name": "libgcc",
+      "version": "16.2.0-r1",
+      "license": "GPL-3.0-or-later WITH GCC-exception-3.1"
+    },
+    {
+      "name": "glibc-2.44",
+      "version": "2.44-r6",
+      "license": "LGPL-2.1-or-later"
+    },
+    {
+      "name": "libstdc++",
+      "version": "16.2.0-r1",
+      "license": "GPL-3.0-or-later WITH GCC-exception-3.1"
+    }
+  ],
+  "ownership": [
+    {
+      "path": "/bin",
+      "package": "wolfi-baselayout"
+    },
+    {
+      "path": "/lib",
+      "package": "wolfi-baselayout"
+    },
+    {
+      "path": "/lib64",
+      "package": "wolfi-baselayout"
+    },
+    {
+      "path": "/sbin",
+      "package": "wolfi-baselayout"
+    },
+    {
+      "path": "/etc/group",
+      "package": "wolfi-baselayout"
+    },
+    {
+      "path": "/etc/host.conf",
+      "package": "wolfi-baselayout"
+    },
+    {
+      "path": "/etc/hosts",
+      "package": "wolfi-baselayout"
+    },
+    {
+      "path": "/etc/mtab",
+      "package": "wolfi-baselayout"
+    },
+    {
+      "path": "/etc/nsswitch.conf",
+      "package": "wolfi-baselayout"
+    },
+    {
+      "path": "/etc/os-release",
+      "package": "wolfi-baselayout"
+    },
+    {
+      "path": "/etc/passwd",
+      "package": "wolfi-baselayout"
+    },
+    {
+      "path": "/etc/profile",
+      "package": "wolfi-baselayout"
+    },
+    {
+      "path": "/etc/protocols",
+      "package": "wolfi-baselayout"
+    },
+    {
+      "path": "/etc/services",
+      "package": "wolfi-baselayout"
+    },
+    {
+      "path": "/etc/shadow",
+      "package": "wolfi-baselayout"
+    },
+    {
+      "path": "/etc/shells",
+      "package": "wolfi-baselayout"
+    },
+    {
+      "path": "/etc/profile.d/locale.sh",
+      "package": "wolfi-baselayout"
+    },
+    {
+      "path": "/etc/secfixes.d/wolfi",
+      "package": "wolfi-baselayout"
+    },
+    {
+      "path": "/usr/lib64",
+      "package": "wolfi-baselayout"
+    },
+    {
+      "path": "/usr/sbin",
+      "package": "wolfi-baselayout"
+    },
+    {
+      "path": "/usr/tmp",
+      "package": "wolfi-baselayout"
+    },
+    {
+      "path": "/usr/local/lib64",
+      "package": "wolfi-baselayout"
+    },
+    {
+      "path": "/var/lock",
+      "package": "wolfi-baselayout"
+    },
+    {
+      "path": "/var/run",
+      "package": "wolfi-baselayout"
+    },
+    {
+      "path": "/var/lib/db/sbom/wolfi-baselayout-20230201-r30.spdx.json",
+      "package": "wolfi-baselayout"
+    },
+    {
+      "path": "/var/spool/mail",
+      "package": "wolfi-baselayout"
+    },
+    {
+      "path": "/etc/pki/tls/certs/ca-bundle.crt",
+      "package": "ca-certificates-bundle"
+    },
+    {
+      "path": "/etc/ssl/cert.pem",
+      "package": "ca-certificates-bundle"
+    },
+    {
+      "path": "/etc/ssl/certs/ca-bundle.crt",
+      "package": "ca-certificates-bundle"
+    },
+    {
+      "path": "/etc/ssl/certs/ca-certificates.crt",
+      "package": "ca-certificates-bundle"
+    },
+    {
+      "path": "/var/lib/db/sbom/ca-certificates-bundle-20260909-r1.spdx.json",
+      "package": "ca-certificates-bundle"
+    },
+    {
+      "path": "/usr/lib/locale/C.utf8/LC_ADDRESS",
+      "package": "glibc-2.44-locale-posix"
+    },
+    {
+      "path": "/usr/lib/locale/C.utf8/LC_COLLATE",
+      "package": "glibc-2.44-locale-posix"
+    },
+    {
+      "path": "/usr/lib/locale/C.utf8/LC_CTYPE",
+      "package": "glibc-2.44-locale-posix"
+    },
+    {
+      "path": "/usr/lib/locale/C.utf8/LC_IDENTIFICATION",
+      "package": "glibc-2.44-locale-posix"
+    },
+    {
+      "path": "/usr/lib/locale/C.utf8/LC_MEASUREMENT",
+      "package": "glibc-2.44-locale-posix"
+    },
+    {
+      "path": "/usr/lib/locale/C.utf8/LC_MONETARY",
+      "package": "glibc-2.44-locale-posix"
+    },
+    {
+      "path": "/usr/lib/locale/C.utf8/LC_NAME",
+      "package": "glibc-2.44-locale-posix"
+    },
+    {
+      "path": "/usr/lib/locale/C.utf8/LC_NUMERIC",
+      "package": "glibc-2.44-locale-posix"
+    },
+    {
+      "path": "/usr/lib/locale/C.utf8/LC_PAPER",
+      "package": "glibc-2.44-locale-posix"
+    },
+    {
+      "path": "/usr/lib/locale/C.utf8/LC_TELEPHONE",
+      "package": "glibc-2.44-locale-posix"
+    },
+    {
+      "path": "/usr/lib/locale/C.utf8/LC_TIME",
+      "package": "glibc-2.44-locale-posix"
+    },
+    {
+      "path": "/usr/lib/locale/C.utf8/LC_MESSAGES/SYS_LC_MESSAGES",
+      "package": "glibc-2.44-locale-posix"
+    },
+    {
+      "path": "/var/lib/db/sbom/glibc-2.44-locale-posix-2.44-r6.spdx.json",
+      "package": "glibc-2.44-locale-posix"
+    },
+    {
+      "path": "/etc/ld.so.conf",
+      "package": "ld-linux-2.44"
+    },
+    {
+      "path": "/etc/ld.so.conf.d/libc.conf",
+      "package": "ld-linux-2.44"
+    },
+    {
+      "path": "/usr/lib/ld-linux-x86-64.so.2",
+      "package": "ld-linux-2.44"
+    },
+    {
+      "path": "/var/lib/db/sbom/ld-linux-2.44-2.44-r6.spdx.json",
+      "package": "ld-linux-2.44"
+    },
+    {
+      "path": "/usr/lib/libgcc_s.so.1",
+      "package": "libgcc"
+    },
+    {
+      "path": "/usr/lib/libgcc_s_asneeded.so",
+      "package": "libgcc"
+    },
+    {
+      "path": "/var/lib/db/sbom/libgcc-16.2.0-r1.spdx.json",
+      "package": "libgcc"
+    },
+    {
+      "path": "/etc/rpc",
+      "package": "glibc-2.44"
+    },
+    {
+      "path": "/etc/apk/commit_hooks.d/ldconfig-commit.sh",
+      "package": "glibc-2.44"
+    },
+    {
+      "path": "/usr/bin/ld.so",
+      "package": "glibc-2.44"
+    },
+    {
+      "path": "/usr/bin/ldconfig",
+      "package": "glibc-2.44"
+    },
+    {
+      "path": "/usr/lib/libBrokenLocale.so.1",
+      "package": "glibc-2.44"
+    },
+    {
+      "path": "/usr/lib/libanl.so.1",
+      "package": "glibc-2.44"
+    },
+    {
+      "path": "/usr/lib/libc.so.6",
+      "package": "glibc-2.44"
+    },
+    {
+      "path": "/usr/lib/libc_malloc_debug.so.0",
+      "package": "glibc-2.44"
+    },
+    {
+      "path": "/usr/lib/libdl.so.2",
+      "package": "glibc-2.44"
+    },
+    {
+      "path": "/usr/lib/libm.so.6",
+      "package": "glibc-2.44"
+    },
+    {
+      "path": "/usr/lib/libmemusage.so",
+      "package": "glibc-2.44"
+    },
+    {
+      "path": "/usr/lib/libmvec.so.1",
+      "package": "glibc-2.44"
+    },
+    {
+      "path": "/usr/lib/libnsl.so.1",
+      "package": "glibc-2.44"
+    },
+    {
+      "path": "/usr/lib/libnss_compat.so.2",
+      "package": "glibc-2.44"
+    },
+    {
+      "path": "/usr/lib/libnss_dns.so.2",
+      "package": "glibc-2.44"
+    },
+    {
+      "path": "/usr/lib/libnss_files.so.2",
+      "package": "glibc-2.44"
+    },
+    {
+      "path": "/usr/lib/libpthread.so.0",
+      "package": "glibc-2.44"
+    },
+    {
+      "path": "/usr/lib/libresolv.so.2",
+      "package": "glibc-2.44"
+    },
+    {
+      "path": "/usr/lib/librt.so.1",
+      "package": "glibc-2.44"
+    },
+    {
+      "path": "/usr/lib/libthread_db.so.1",
+      "package": "glibc-2.44"
+    },
+    {
+      "path": "/usr/lib/libutil.so.1",
+      "package": "glibc-2.44"
+    },
+    {
+      "path": "/var/lib/db/sbom/glibc-2.44-2.44-r6.spdx.json",
+      "package": "glibc-2.44"
+    },
+    {
+      "path": "/usr/lib/libstdc++.so.6",
+      "package": "libstdc++"
+    },
+    {
+      "path": "/usr/lib/libstdc++.so.6.0.36",
+      "package": "libstdc++"
+    },
+    {
+      "path": "/usr/lib/libstdc++.so.6.0.36-gdb.py",
+      "package": "libstdc++"
+    },
+    {
+      "path": "/var/lib/db/sbom/libstdc++-16.2.0-r1.spdx.json",
+      "package": "libstdc++"
+    }
+  ],
+  "baseDependencies": [
+    {
+      "path": "/lib64/ld-linux-x86-64.so.2",
+      "resolvedPath": "/usr/lib/ld-linux-x86-64.so.2",
+      "package": "ld-linux-2.44"
+    },
+    {
+      "path": "/usr/lib/librt.so.1",
+      "resolvedPath": "/usr/lib/librt.so.1",
+      "package": "glibc-2.44"
+    },
+    {
+      "path": "/usr/lib/libpthread.so.0",
+      "resolvedPath": "/usr/lib/libpthread.so.0",
+      "package": "glibc-2.44"
+    },
+    {
+      "path": "/usr/lib/libresolv.so.2",
+      "resolvedPath": "/usr/lib/libresolv.so.2",
+      "package": "glibc-2.44"
+    },
+    {
+      "path": "/usr/lib/libm.so.6",
+      "resolvedPath": "/usr/lib/libm.so.6",
+      "package": "glibc-2.44"
+    },
+    {
+      "path": "/usr/lib/libdl.so.2",
+      "resolvedPath": "/usr/lib/libdl.so.2",
+      "package": "glibc-2.44"
+    },
+    {
+      "path": "/usr/lib/libc.so.6",
+      "resolvedPath": "/usr/lib/libc.so.6",
+      "package": "glibc-2.44"
+    },
+    {
+      "path": "/usr/lib/ld-linux-x86-64.so.2",
+      "resolvedPath": "/usr/lib/ld-linux-x86-64.so.2",
+      "package": "ld-linux-2.44"
+    }
+  ],
+  "trust": [
+    {
+      "path": "/etc/ssl/certs/ca-certificates.crt",
+      "sha256": "028fca5150ee1915c4474489985d55c54fceaa680c754cc8d1301734f01b2232"
+    },
+    {
+      "path": "/etc/pki/tls/certs/ca-bundle.crt",
+      "sha256": "028fca5150ee1915c4474489985d55c54fceaa680c754cc8d1301734f01b2232"
+    }
+  ],
+  "applets": {
+    "bootstrapSourceSha256": "6ef912d18d9f40e46546ffcf5777cecf93405b3f5f4dcde60f2878c10bdc2327",
+    "names": [
+      "awk",
+      "chmod",
+      "cp",
+      "mktemp",
+      "rm",
+      "sed",
+      "sha256sum",
+      "sh",
+      "tail",
+      "tr"
+    ]
+  },
+  "scan": {
+    "tool": "grype",
+    "failOn": "high",
+    "matches": [
+      {
+        "id": "CVE-2026-77117",
+        "severity": "Medium",
+        "package": "glibc-2.44",
+        "fixState": ""
+      },
+      {
+        "id": "CVE-2026-80489",
+        "severity": "Medium",
+        "package": "glibc-2.44",
+        "fixState": ""
+      },
+      {
+        "id": "CVE-2026-8674",
+        "severity": "Medium",
+        "package": "glibc-2.44",
+        "fixState": ""
+      },
+      {
+        "id": "CVE-2026-89092",
+        "severity": "Medium",
+        "package": "glibc-2.44",
+        "fixState": "unknown"
+      }
+    ],
+    "databaseBuilt": "2026-09-28T06:42:30Z"
+  },
+  "toolVersions": {
+    "skopeo": "skopeo version 1.24.1",
+    "syft": "syft 1.52.0",
+    "grype": "grype 0.119.0",
+    "umoci": "umoci version 0.6.0",
+    "readelf": "GNU readelf (GNU Binutils) 2.46"
+  }
+}

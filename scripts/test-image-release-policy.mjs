@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve, basename } from 'node:path';
 import test from 'node:test';
 import { createHash } from 'node:crypto';
+import './test-restore-tools-runtime.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const names = ['api', 'worker', 'maintenance', 'web', 'restore-tools'];
@@ -376,6 +377,7 @@ for (const [mode, reason] of [
   ['missing-token', 'a verifier that starts without its metrics token'],
   ['checker-scratch', 'checker scratch without writable /tmp'],
   ['shell-status', 'actual POSIX shell write probes'],
+  ['evidence-sidecar-missing', 'missing imported-image scan evidence when a sidecar is requested'],
 ]) test(['checker-scratch', 'shell-status'].includes(mode) ? `restore payload validation exercises ${reason}` : `restore payload validation rejects ${reason}`, t => {
   const dir = fixture(t);
   const dockerTrace = join(dir, 'docker-trace');
@@ -459,7 +461,13 @@ if (args.includes('test')) {
 }
 process.exit(0);
 `);
-  const result = invoke('test-restore-tools-payload.sh', { PATH: `${join(dir, 'bin')}:${process.env.PATH}`, LEAK_MODE: mode, DOCKER_TRACE: dockerTrace }, ['sha256:' + 'b'.repeat(64)]);
+  const result = invoke('test-restore-tools-payload.sh', { PATH: `${join(dir, 'bin')}:${process.env.PATH}`, LEAK_MODE: mode, DOCKER_TRACE: dockerTrace }, ['sha256:' + 'b'.repeat(64), ...(mode === 'evidence-sidecar-missing' ? [dir] : [])]);
+  if (mode === 'evidence-sidecar-missing') {
+    assert.notEqual(result.status, 0, 'payload accepted absent imported-image evidence');
+    assert.match(result.stderr, /restore-tools runtime evidence rejected/);
+    assert.equal(existsSync(join(dir, 'restore-tools-runtime.json')), false);
+    return;
+  }
   if (['checker-scratch', 'shell-status'].includes(mode)) {
     assert.equal(result.status, 0, result.stderr);
     const calls = readFileSync(dockerTrace, 'utf8').trim().split('\n').map(JSON.parse);

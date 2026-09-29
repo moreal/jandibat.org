@@ -117,6 +117,9 @@
 
           buildGoModule = pkgs.buildGoModule.override { inherit go; };
 
+          govulncheck = pkgs.govulncheck.override { buildGoLatestModule = buildGoModule; };
+          gosec = pkgs.gosec.override { inherit buildGoModule; };
+
           staticcheck = (pkgs.go-tools.override { inherit buildGoModule; }).overrideAttrs (_: {
             # Upstream go/ir.TestStdlib has a fixed 10-minute deadline and
             # times out while the pinned toolchain builds on Darwin. Keep all
@@ -189,6 +192,8 @@
             staticcheck
             exhaustive
             goCheckSumtype
+            govulncheck
+            gosec
           ];
         in
         {
@@ -196,6 +201,8 @@
             buildGoModule
             go
             goCheckSumtype
+            govulncheck
+            gosec
             exhaustive
             nodejs
             pkgs

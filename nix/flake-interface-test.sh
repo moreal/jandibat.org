@@ -31,14 +31,14 @@ if [ "$yarn_node_version" != 'v24.21.0' ]; then
 	exit 1
 fi
 
-for command_name in scythe staticcheck exhaustive go-check-sumtype rg; do
+for command_name in scythe staticcheck exhaustive go-check-sumtype govulncheck gosec rg; do
 	command -v "$command_name" >/dev/null 2>&1 || {
 		echo "missing required command: $command_name" >&2
 		exit 1
 	}
 done
 
-for analyzer in staticcheck exhaustive go-check-sumtype; do
+for analyzer in staticcheck exhaustive go-check-sumtype govulncheck gosec; do
 	analyzer_path=$(command -v "$analyzer")
 	analyzer_go_version=$(go version -m "$analyzer_path" | sed -n '1s/.*: //p')
 	if [ "$analyzer_go_version" != 'go1.27.1' ]; then
@@ -60,10 +60,10 @@ EOF
 cat >"$fixture_dir/compat.go" <<'EOF'
 package analyzercompat
 
-import "math/rand/v2"
+import "crypto/rand"
 
-func BoundedInt() int {
-	return rand.IntN(2)
+func SecureToken() string {
+	return rand.Text()
 }
 EOF
 
@@ -75,4 +75,10 @@ EOF
 	staticcheck ./...
 	exhaustive -check=switch,map ./...
 	go-check-sumtype ./...
+	# Exercise loading Go 1.27 source with Nix binaries without network access.
+	# govulncheck requires a vulnerability database even for a clean fixture.
+	mkdir -p "$fixture_dir/vulndb/index"
+	printf '{}\n' >"$fixture_dir/vulndb/index/modules.json"
+	govulncheck -db "file://$fixture_dir/vulndb" ./...
+	gosec -severity high -confidence medium -nosec-require-rules -nosec-require-justification ./...
 )

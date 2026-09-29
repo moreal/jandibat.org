@@ -161,6 +161,7 @@ contract-change-check:
 ci-version-authority-check:
 	sh scripts/check-ci-version-authority.test.sh
 	sh scripts/check-ci-version-authority.sh
+	sh scripts/check-security-dependencies.test.sh
 
 secret-scan:
 	sh scripts/check-secrets.sh

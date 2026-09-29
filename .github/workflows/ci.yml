@@ -144,9 +144,9 @@ jobs:
       - name: Scan repository for secret patterns
         run: nix develop --command make secret-scan
       - name: Scan reachable Go vulnerabilities
-        run: nix develop --command sh -c 'cd apps/api && go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...'
+        run: nix develop --command sh -c 'cd apps/api && govulncheck ./...'
       - name: Run Go static security analysis
-        run: nix develop --command sh -c 'cd apps/api && go run github.com/securego/gosec/v2/cmd/gosec@v2.28.0 -severity high -confidence medium -nosec-require-rules -nosec-require-justification ./...'
+        run: nix develop --command sh -c 'cd apps/api && gosec -severity high -confidence medium -nosec-require-rules -nosec-require-justification ./...'
       - name: Install dependencies
         run: nix develop --command make install
       - name: Audit all JavaScript workspaces

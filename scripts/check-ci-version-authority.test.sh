@@ -85,4 +85,17 @@ jobs:
 YAML
 expect_status 0 clean-workflow sh "$guard" "$clean"
 
+security=$tmp_dir/security
+mkdir -p "$security"
+for module in golang.org/x/vuln/cmd/govulncheck github.com/securego/gosec/v2/cmd/gosec; do
+  printf 'steps:\n  - run: nix develop --command sh -c '\''cd apps/api && go run %s@v1.0.0 ./...'\''\n' "$module" >"$security/ci.yml"
+  expect_status 1 runtime-security-install sh "$guard" "$security"
+done
+printf 'steps:\n  - run: |\n      go \\\n        run golang.org/x/vuln/cmd/govulncheck@v1.0.0 ./...\n' >"$security/ci.yml"
+expect_status 1 split-security-install sh "$guard" "$security"
+printf 'steps:\n  - run: nix develop --command govulncheck ./...\n  - run: nix develop --command gosec -severity high ./...\n' >"$security/ci.yml"
+expect_status 0 nix-security-binaries sh "$guard" "$security"
+printf 'steps:\n  - run: go install github.com/securego/gosec/v2/cmd/gosec@v1.0.0\n' >"$security/ci.yml"
+expect_status 1 runtime-security-go-install sh "$guard" "$security"
+
 echo "CI version authority continuation and failure-mode tests passed"

@@ -15,7 +15,7 @@ if [ -z "$workflow_files" ]; then
   exit 2
 fi
 
-pattern='GO_VERSION|NODE_VERSION|YARN_VERSION|setup-go|setup-node|corepack[[:space:]]+prepare|pnpm[[:space:]]+install|bun[[:space:]]+install|docker[[:space:]]+(build|buildx[[:space:]]+build)([[:space:]]|$)|apps/(api|web)/Dockerfile'
+pattern='GO_VERSION|NODE_VERSION|YARN_VERSION|setup-go|setup-node|corepack[[:space:]]+prepare|go[[:space:]]+(run|install)[[:space:]]+[^[:space:]]+@[^[:space:]]+|pnpm[[:space:]]+install|bun[[:space:]]+install|docker[[:space:]]+(build|buildx[[:space:]]+build)([[:space:]]|$)|apps/(api|web)/Dockerfile'
 violations=0
 
 normalize_continuations() {

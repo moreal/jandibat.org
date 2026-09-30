@@ -12,24 +12,26 @@ if (process.argv.length !== 5 || !counterPath || listenPort === null || upstream
 }
 
 let accepted = 0;
+let sent = 0;
+let received = 0;
 const sockets = new Set();
 function saveCount() {
+  if ([accepted, sent, received].some((value) => !Number.isSafeInteger(value) || value > 999999999999)) throw new Error('counter overflow');
   const temporary = `${counterPath}.tmp.${process.pid}`;
-  writeFileSync(temporary, `${accepted}\n`, { flag: 'wx', mode: 0o600 });
+  writeFileSync(temporary, `${accepted} ${sent} ${received}\n`, { flag: 'wx', mode: 0o600 });
   renameSync(temporary, counterPath);
 }
 
 try { saveCount(); } catch { process.exit(1); }
+function stopOnCounterFailure() {
+  try { unlinkSync(counterPath); } catch { /* liveness check also fails closed */ }
+  for (const socket of sockets) socket.destroy();
+  server.close();
+  process.exit(1);
+}
 const server = createServer((client) => {
   accepted += 1;
-  try { saveCount(); } catch {
-    // A stale count must never be interpreted as an observed/no-observed probe.
-    try { unlinkSync(counterPath); } catch { /* liveness check also fails closed */ }
-    client.destroy();
-    for (const socket of sockets) socket.destroy();
-    server.close();
-    process.exit(1);
-  }
+  try { saveCount(); } catch { client.destroy(); stopOnCounterFailure(); }
   const upstream = connect(upstreamPort, '127.0.0.1');
   sockets.add(client);
   sockets.add(upstream);
@@ -38,6 +40,8 @@ const server = createServer((client) => {
   upstream.on('error', closePair);
   client.on('close', () => sockets.delete(client));
   upstream.on('close', () => sockets.delete(upstream));
+  client.on('data', (bytes) => { sent += bytes.length; try { saveCount(); } catch { stopOnCounterFailure(); } });
+  upstream.on('data', (bytes) => { received += bytes.length; try { saveCount(); } catch { stopOnCounterFailure(); } });
   client.pipe(upstream);
   upstream.pipe(client);
 });

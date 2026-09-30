@@ -21,7 +21,7 @@ async function freePort() {
 async function waitReady(child, counter, getOutput) {
   for (let i = 0; i < 100; i++) {
     if (child.exitCode !== null) throw new Error('observer exited early');
-    try { if (readFileSync(counter, 'utf8') === '0\n' && getOutput() === 'READY\n') return; } catch { /* startup */ }
+    try { if (readFileSync(counter, 'utf8') === '0 0 0\n' && getOutput() === 'READY\n') return; } catch { /* startup */ }
     await delay(10);
   }
   throw new Error('observer did not create a counter');
@@ -57,7 +57,7 @@ test('opaque observer forwards both directions and counts only accepted TCP conn
       socket.once('data', (bytes) => { socket.end(); resolve(bytes.toString('utf8')); });
     });
     assert.equal(response, `echo:${payload}`);
-    assert.equal(readFileSync(counter, 'utf8'), '1\n');
+    assert.equal(readFileSync(counter, 'utf8'), `${1} ${Buffer.byteLength(payload)} ${Buffer.byteLength(response)}\n`);
     assert.equal(statSync(counter).mode & 0o777, 0o600);
     assert.doesNotMatch(output, /private|credential|path/);
     assert.match(output, /^READY\n$/);
@@ -98,8 +98,8 @@ test('counter write failure fatally stops observer and existing opaque streams',
     first = connect(listenPort, '127.0.0.1');
     first.on('error', () => {});
     await new Promise((resolve) => first.once('connect', resolve));
-    for (let i = 0; i < 100 && readFileSync(counter, 'utf8') !== '1\n'; i++) await delay(10);
-    assert.equal(readFileSync(counter, 'utf8'), '1\n');
+    for (let i = 0; i < 100 && readFileSync(counter, 'utf8') !== '1 0 0\n'; i++) await delay(10);
+    assert.equal(readFileSync(counter, 'utf8'), '1 0 0\n');
     mkdirSync(`${counter}.tmp.${child.pid}`);
     const exited = new Promise((resolve) => child.once('exit', resolve));
     const second = connect(listenPort, '127.0.0.1');

@@ -94,7 +94,7 @@ test('synthetic TCP observer separates baseline, CREATE differential, and post-s
   const order = [
     's3proxy.secure-endpoint=https://127.0.0.1:9010',
     'node scripts/fixtures/synthetic-s3-tcp-observer.mjs',
-    'assert_validation_object_absent\ntcp_baseline=$(tcp_read_count)',
+    'assert_validation_object_absent\ntcp_bootstrap_baseline=$(tcp_read_count)',
     'CREATE EXTERNAL CONNECTION jandibat_privilege_probe',
   ];
   let previous = -1;
@@ -105,7 +105,8 @@ test('synthetic TCP observer separates baseline, CREATE differential, and post-s
   }
   assert.match(fixture, /probe_uri="s3:\/\/disposable-backup\/fixture-only\?[^\n]*127\.0\.0\.1%3A9009/);
   assert.match(fixture, /MC_HOST_fixture="https:\/\/[^\n]*@127\.0\.0\.1:9009"/);
-  assert.match(fixture, /tcp_connection_state\n validation_object_state "\$fixture_dir\/validation-stat-after"/, 'post-stat must follow TCP snapshot');
+  assert.match(fixture, /tcp_bootstrap_baseline=\$\(tcp_read_count\)[\s\S]*CREATE EXTERNAL CONNECTION jandibat_privilege_probe[\s\S]*tcp_snapshot "\$tcp_bootstrap_baseline"/, 'bootstrap CREATE must be snapshotted');
+  assert.match(fixture, /CREATE EXTERNAL CONNECTION jandibat_root_diagnostic[\s\S]*tcp_snapshot "\$tcp_root_baseline"[\s\S]*validation_object_state "\$fixture_dir\/validation-stat-after"/, 'root CREATE snapshot must precede post-stat');
 });
 
 test('non-Linux host reports a non-passing skip without contacting Docker', () => {
@@ -218,7 +219,7 @@ case "$1" in image|rm|stop|wait|cp|logs) exit 0;; esac
 exit 1
 `,
       s3proxy: '#!/bin/sh\nprintf "%s\\n" "$$" >"$TEST_S3PID"\nexec /bin/sleep 30\n',
-      node: '#!/bin/sh\nprintf "%s\\n" "$$" >"$TEST_TCPPID"\nif [ "$TEST_NODE_FAIL" = true ]; then echo "private-credential /private/path" >&2; exit 99; fi\nprintf "0\\n" >"$2"\nprintf "READY\\n"\nexec /bin/sleep 30\n',
+      node: '#!/bin/sh\nprintf "%s\\n" "$$" >"$TEST_TCPPID"\nif [ "$TEST_NODE_FAIL" = true ]; then echo "private-credential /private/path" >&2; exit 99; fi\nprintf "0 0 0\\n" >"$2"\nprintf "READY\\n"\nexec /bin/sleep 30\n',
       mc: '#!/bin/sh\nexit 0\n',
       openssl: '#!/bin/sh\nexit 0\n',
       sleep: '#!/bin/sh\nexit 0\n',
@@ -485,14 +486,15 @@ fail() { echo "RED: $1 (details redacted)" >&2; exit 1; }
 fixture_dir=$TEST_FIXTURE_DIR
 probe_uri=$TEST_PROBE_URI
 tcp_counter=$TEST_FIXTURE_DIR/tcp-counter
-tcp_baseline=4
+bootstrap_tcp=\${TEST_BOOTSTRAP_TCP:-not-observed} bootstrap_accepted=\${TEST_BOOTSTRAP_ACCEPTED:-0} bootstrap_sent=\${TEST_BOOTSTRAP_SENT:-0} bootstrap_received=\${TEST_BOOTSTRAP_RECEIVED:-0}
+tcp_bootstrap_after=\${TEST_BOOTSTRAP_AFTER:-4 0 0}
 tcp_observer_pid=$$
-printf '%s\n' 4 >"$tcp_counter"
+printf '%s\n' "$tcp_bootstrap_after" >"$tcp_counter"
 validation_object=fixture/disposable-backup/fixture-only/crdb_external_storage_location
 mc() {
  [ "$1" = stat ] && [ "$2" = --no-list ] && [ "$3" = "$validation_object" ] || return 2
  printf 'stat-after\n' >>"$TEST_CALLS"
- printf '%s\n' 99 >"$tcp_counter"
+ printf '%s\n' '99 0 0' >"$tcp_counter"
  [ "$TEST_STAT_OUTPUT" = empty ] || printf '%s\n' "$TEST_STAT_OUTPUT" >&2
  [ "$TEST_STAT_EXIT" = empty ] || return "$TEST_STAT_EXIT"
  [ "$TEST_VALIDATION_AFTER" = present ]
@@ -502,7 +504,7 @@ sql_as() {
  case "$2" in
   "CREATE EXTERNAL CONNECTION jandibat_root_diagnostic AS '$TEST_PROBE_URI';")
    printf 'root-create\\n' >>"$TEST_CALLS"
-   printf '%s\\n' "\${TEST_TCP_AFTER:-4}" >"$tcp_counter"
+   printf '%s\\n' "\${TEST_TCP_AFTER:-4 0 0}" >"$tcp_counter"
    [ "$TEST_ROOT_OUTPUT" = empty ] || printf '%s\\n' "$TEST_ROOT_OUTPUT" >&2
    [ "$TEST_ROOT_CREATE" = success ];;
   'DROP EXTERNAL CONNECTION jandibat_root_diagnostic;')
@@ -524,25 +526,25 @@ diagnose_custom_s3_create "$CAPTURE"`], {
       return { ...result, calls: readFileSync(calls, 'utf8') };
     };
     for (const [output, expected] of [
-      ['', 'RED: custom S3 CREATE probe capture=empty root=failure tcp-connect=not-observed validation-write=not-observed category=unknown SQLSTATE=unavailable (details redacted)\n'],
-      ['ERROR: operation failed\nSQLSTATE: 57014\nprivate path /tmp/hidden\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=not-observed validation-write=not-observed category=sql SQLSTATE=57014 (details redacted)\n'],
-      ['docker: Error response from daemon: private path /tmp/hidden\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=not-observed validation-write=not-observed category=client-launch SQLSTATE=unavailable (details redacted)\n'],
-      ['invalid URL escape in s3://private-host/hidden\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=not-observed validation-write=not-observed category=uri SQLSTATE=unavailable (details redacted)\n'],
-      ['x509: certificate signed by unknown authority at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=not-observed validation-write=not-observed category=tls SQLSTATE=unavailable (details redacted)\n'],
-      ['remote error: tls: handshake failure at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=not-observed validation-write=not-observed category=tls SQLSTATE=unavailable (details redacted)\n'],
-      ['unexpected EOF at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=not-observed validation-write=not-observed category=transport-client SQLSTATE=unavailable (details redacted)\n'],
-      ['HTTP/1.1 403 Forbidden at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=not-observed validation-write=not-observed category=http-4xx SQLSTATE=unavailable (details redacted)\n'],
-      ['HTTP status code: 503 at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=not-observed validation-write=not-observed category=http-5xx SQLSTATE=unavailable (details redacted)\n'],
-      ['S3 API error: NoSuchBucket at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=not-observed validation-write=not-observed category=storage SQLSTATE=unavailable (details redacted)\n'],
-      ['S3 API error: AccessDenied at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=not-observed validation-write=not-observed category=storage SQLSTATE=unavailable (details redacted)\n'],
-      ['<Error><Code>SignatureDoesNotMatch</Code></Error> at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=not-observed validation-write=not-observed category=storage SQLSTATE=unavailable (details redacted)\n'],
-      ['dial tcp: connection refused at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=not-observed validation-write=not-observed category=transport-client SQLSTATE=unavailable (details redacted)\n'],
-      ['opaque client failure at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=not-observed validation-write=not-observed category=unknown SQLSTATE=unavailable (details redacted)\n'],
-      ['x509: certificate error and NoSuchBucket at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=not-observed validation-write=not-observed category=unknown SQLSTATE=unavailable (details redacted)\n'],
-      ['HTTP/1.1 403 Forbidden; S3 API error: AccessDenied at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=not-observed validation-write=not-observed category=unknown SQLSTATE=unavailable (details redacted)\n'],
-      ['SQLSTATE: 57014 and x509: certificate error at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=not-observed validation-write=not-observed category=unknown SQLSTATE=57014 (details redacted)\n'],
-      ['SQLSTATE: 57014X private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=not-observed validation-write=not-observed category=unknown SQLSTATE=unavailable (details redacted)\n'],
-      ['SQLSTATE: 57014x private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=not-observed validation-write=not-observed category=unknown SQLSTATE=unavailable (details redacted)\n'],
+      ['', 'RED: custom S3 CREATE probe capture=empty root=failure bootstrap-tcp=not-observed bootstrap-accepted=0 bootstrap-c2u=0 bootstrap-u2c=0 root-tcp=not-observed root-accepted=0 root-c2u=0 root-u2c=0 validation-write=not-observed category=unknown SQLSTATE=unavailable (details redacted)\n'],
+      ['ERROR: operation failed\nSQLSTATE: 57014\nprivate path /tmp/hidden\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure bootstrap-tcp=not-observed bootstrap-accepted=0 bootstrap-c2u=0 bootstrap-u2c=0 root-tcp=not-observed root-accepted=0 root-c2u=0 root-u2c=0 validation-write=not-observed category=sql SQLSTATE=57014 (details redacted)\n'],
+      ['docker: Error response from daemon: private path /tmp/hidden\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure bootstrap-tcp=not-observed bootstrap-accepted=0 bootstrap-c2u=0 bootstrap-u2c=0 root-tcp=not-observed root-accepted=0 root-c2u=0 root-u2c=0 validation-write=not-observed category=client-launch SQLSTATE=unavailable (details redacted)\n'],
+      ['invalid URL escape in s3://private-host/hidden\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure bootstrap-tcp=not-observed bootstrap-accepted=0 bootstrap-c2u=0 bootstrap-u2c=0 root-tcp=not-observed root-accepted=0 root-c2u=0 root-u2c=0 validation-write=not-observed category=uri SQLSTATE=unavailable (details redacted)\n'],
+      ['x509: certificate signed by unknown authority at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure bootstrap-tcp=not-observed bootstrap-accepted=0 bootstrap-c2u=0 bootstrap-u2c=0 root-tcp=not-observed root-accepted=0 root-c2u=0 root-u2c=0 validation-write=not-observed category=tls SQLSTATE=unavailable (details redacted)\n'],
+      ['remote error: tls: handshake failure at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure bootstrap-tcp=not-observed bootstrap-accepted=0 bootstrap-c2u=0 bootstrap-u2c=0 root-tcp=not-observed root-accepted=0 root-c2u=0 root-u2c=0 validation-write=not-observed category=tls SQLSTATE=unavailable (details redacted)\n'],
+      ['unexpected EOF at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure bootstrap-tcp=not-observed bootstrap-accepted=0 bootstrap-c2u=0 bootstrap-u2c=0 root-tcp=not-observed root-accepted=0 root-c2u=0 root-u2c=0 validation-write=not-observed category=transport-client SQLSTATE=unavailable (details redacted)\n'],
+      ['HTTP/1.1 403 Forbidden at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure bootstrap-tcp=not-observed bootstrap-accepted=0 bootstrap-c2u=0 bootstrap-u2c=0 root-tcp=not-observed root-accepted=0 root-c2u=0 root-u2c=0 validation-write=not-observed category=http-4xx SQLSTATE=unavailable (details redacted)\n'],
+      ['HTTP status code: 503 at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure bootstrap-tcp=not-observed bootstrap-accepted=0 bootstrap-c2u=0 bootstrap-u2c=0 root-tcp=not-observed root-accepted=0 root-c2u=0 root-u2c=0 validation-write=not-observed category=http-5xx SQLSTATE=unavailable (details redacted)\n'],
+      ['S3 API error: NoSuchBucket at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure bootstrap-tcp=not-observed bootstrap-accepted=0 bootstrap-c2u=0 bootstrap-u2c=0 root-tcp=not-observed root-accepted=0 root-c2u=0 root-u2c=0 validation-write=not-observed category=storage SQLSTATE=unavailable (details redacted)\n'],
+      ['S3 API error: AccessDenied at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure bootstrap-tcp=not-observed bootstrap-accepted=0 bootstrap-c2u=0 bootstrap-u2c=0 root-tcp=not-observed root-accepted=0 root-c2u=0 root-u2c=0 validation-write=not-observed category=storage SQLSTATE=unavailable (details redacted)\n'],
+      ['<Error><Code>SignatureDoesNotMatch</Code></Error> at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure bootstrap-tcp=not-observed bootstrap-accepted=0 bootstrap-c2u=0 bootstrap-u2c=0 root-tcp=not-observed root-accepted=0 root-c2u=0 root-u2c=0 validation-write=not-observed category=storage SQLSTATE=unavailable (details redacted)\n'],
+      ['dial tcp: connection refused at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure bootstrap-tcp=not-observed bootstrap-accepted=0 bootstrap-c2u=0 bootstrap-u2c=0 root-tcp=not-observed root-accepted=0 root-c2u=0 root-u2c=0 validation-write=not-observed category=transport-client SQLSTATE=unavailable (details redacted)\n'],
+      ['opaque client failure at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure bootstrap-tcp=not-observed bootstrap-accepted=0 bootstrap-c2u=0 bootstrap-u2c=0 root-tcp=not-observed root-accepted=0 root-c2u=0 root-u2c=0 validation-write=not-observed category=unknown SQLSTATE=unavailable (details redacted)\n'],
+      ['x509: certificate error and NoSuchBucket at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure bootstrap-tcp=not-observed bootstrap-accepted=0 bootstrap-c2u=0 bootstrap-u2c=0 root-tcp=not-observed root-accepted=0 root-c2u=0 root-u2c=0 validation-write=not-observed category=unknown SQLSTATE=unavailable (details redacted)\n'],
+      ['HTTP/1.1 403 Forbidden; S3 API error: AccessDenied at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure bootstrap-tcp=not-observed bootstrap-accepted=0 bootstrap-c2u=0 bootstrap-u2c=0 root-tcp=not-observed root-accepted=0 root-c2u=0 root-u2c=0 validation-write=not-observed category=unknown SQLSTATE=unavailable (details redacted)\n'],
+      ['SQLSTATE: 57014 and x509: certificate error at private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure bootstrap-tcp=not-observed bootstrap-accepted=0 bootstrap-c2u=0 bootstrap-u2c=0 root-tcp=not-observed root-accepted=0 root-c2u=0 root-u2c=0 validation-write=not-observed category=unknown SQLSTATE=57014 (details redacted)\n'],
+      ['SQLSTATE: 57014X private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure bootstrap-tcp=not-observed bootstrap-accepted=0 bootstrap-c2u=0 bootstrap-u2c=0 root-tcp=not-observed root-accepted=0 root-c2u=0 root-u2c=0 validation-write=not-observed category=unknown SQLSTATE=unavailable (details redacted)\n'],
+      ['SQLSTATE: 57014x private-host\n', 'RED: custom S3 CREATE probe capture=nonempty root=failure bootstrap-tcp=not-observed bootstrap-accepted=0 bootstrap-c2u=0 bootstrap-u2c=0 root-tcp=not-observed root-accepted=0 root-c2u=0 root-u2c=0 validation-write=not-observed category=unknown SQLSTATE=unavailable (details redacted)\n'],
     ]) {
       const result = run(output);
       assert.equal(result.status, 1);
@@ -559,13 +561,13 @@ diagnose_custom_s3_create "$CAPTURE"`], {
     }
     const rootSuccess = run('opaque client failure\n', { TEST_ROOT_CREATE: 'success', TEST_ROOT_OUTPUT: 'empty' });
     assert.equal(rootSuccess.status, 1);
-    assert.equal(rootSuccess.stderr, 'RED: custom S3 CREATE probe capture=nonempty root=success tcp-connect=not-observed validation-write=not-observed category=unknown SQLSTATE=unavailable (details redacted)\n');
+    assert.equal(rootSuccess.stderr, 'RED: custom S3 CREATE probe capture=nonempty root=success bootstrap-tcp=not-observed bootstrap-accepted=0 bootstrap-c2u=0 bootstrap-u2c=0 root-tcp=not-observed root-accepted=0 root-c2u=0 root-u2c=0 validation-write=not-observed category=unknown SQLSTATE=unavailable (details redacted)\n');
     assert.equal(rootSuccess.stdout, '');
     assert.equal(rootSuccess.calls, 'root-create\nroot-drop\nstat-after\n');
     const rootOnly = run('opaque client failure\n', { TEST_ROOT_OUTPUT: 'HTTP/1.1 500 Internal Server Error at private-host' });
-    assert.equal(rootOnly.stderr, 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=not-observed validation-write=not-observed category=http-5xx SQLSTATE=unavailable (details redacted)\n');
+    assert.equal(rootOnly.stderr, 'RED: custom S3 CREATE probe capture=nonempty root=failure bootstrap-tcp=not-observed bootstrap-accepted=0 bootstrap-c2u=0 bootstrap-u2c=0 root-tcp=not-observed root-accepted=0 root-c2u=0 root-u2c=0 validation-write=not-observed category=http-5xx SQLSTATE=unavailable (details redacted)\n');
     const conflictingRoot = run('HTTP/1.1 503 Service Unavailable\n', { TEST_ROOT_OUTPUT: 'x509: certificate error at private-host' });
-    assert.equal(conflictingRoot.stderr, 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=not-observed validation-write=not-observed category=unknown SQLSTATE=unavailable (details redacted)\n');
+    assert.equal(conflictingRoot.stderr, 'RED: custom S3 CREATE probe capture=nonempty root=failure bootstrap-tcp=not-observed bootstrap-accepted=0 bootstrap-c2u=0 bootstrap-u2c=0 root-tcp=not-observed root-accepted=0 root-c2u=0 root-u2c=0 validation-write=not-observed category=unknown SQLSTATE=unavailable (details redacted)\n');
     const rootOutputSentinel = run('opaque client failure\n', { TEST_ROOT_CREATE: 'success', TEST_ROOT_OUTPUT: secret });
     assert.equal(rootOutputSentinel.status, 1);
     assert.equal(rootOutputSentinel.stderr, 'RED: custom S3 CREATE diagnostic exposed synthetic credential (details redacted)\n');
@@ -583,24 +585,27 @@ diagnose_custom_s3_create "$CAPTURE"`], {
     assert.equal(dropOutputSentinel.stderr, 'RED: custom S3 CREATE diagnostic exposed synthetic credential (details redacted)\n');
     assert.equal(dropOutputSentinel.calls, 'root-create\nroot-drop\n');
     const observed = run('opaque client failure\n', { TEST_VALIDATION_AFTER: 'present', TEST_STAT_OUTPUT: 'empty' });
-    assert.equal(observed.stderr, 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=not-observed validation-write=observed category=unknown SQLSTATE=unavailable (details redacted)\n');
+    assert.equal(observed.stderr, 'RED: custom S3 CREATE probe capture=nonempty root=failure bootstrap-tcp=not-observed bootstrap-accepted=0 bootstrap-c2u=0 bootstrap-u2c=0 root-tcp=not-observed root-accepted=0 root-c2u=0 root-u2c=0 validation-write=observed category=unknown SQLSTATE=unavailable (details redacted)\n');
     assert.equal(observed.calls, 'root-create\nstat-after\n');
-    const tcpObserved = run('opaque client failure\n', { TEST_TCP_AFTER: '5' });
-    assert.equal(tcpObserved.stderr, 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=observed validation-write=not-observed category=unknown SQLSTATE=unavailable (details redacted)\n');
+    const tcpObserved = run('opaque client failure\n', { TEST_TCP_AFTER: '5 0 0' });
+    assert.equal(tcpObserved.stderr, 'RED: custom S3 CREATE probe capture=nonempty root=failure bootstrap-tcp=not-observed bootstrap-accepted=0 bootstrap-c2u=0 bootstrap-u2c=0 root-tcp=observed root-accepted=1 root-c2u=0 root-u2c=0 validation-write=not-observed category=unknown SQLSTATE=unavailable (details redacted)\n');
     assert.equal(tcpObserved.calls, 'root-create\nstat-after\n');
+    const separated = run('opaque client failure\n', { TEST_BOOTSTRAP_TCP: 'observed', TEST_BOOTSTRAP_ACCEPTED: '2', TEST_BOOTSTRAP_SENT: '12', TEST_BOOTSTRAP_RECEIVED: '7', TEST_BOOTSTRAP_AFTER: '4 12 7', TEST_TCP_AFTER: '5 20 10' });
+    assert.equal(separated.stderr, 'RED: custom S3 CREATE probe capture=nonempty root=failure bootstrap-tcp=observed bootstrap-accepted=2 bootstrap-c2u=12 bootstrap-u2c=7 root-tcp=observed root-accepted=1 root-c2u=8 root-u2c=3 validation-write=not-observed category=unknown SQLSTATE=unavailable (details redacted)\n');
+    assert.equal(separated.calls, 'root-create\nstat-after\n');
     const tcpUnavailable = run('opaque client failure\n', { TEST_TCP_AFTER: 'malformed' });
-    assert.equal(tcpUnavailable.stderr, 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=inspection-unavailable validation-write=not-observed category=unknown SQLSTATE=unavailable (details redacted)\n');
+    assert.equal(tcpUnavailable.stderr, 'RED: custom S3 CREATE probe capture=nonempty root=failure bootstrap-tcp=not-observed bootstrap-accepted=0 bootstrap-c2u=0 bootstrap-u2c=0 root-tcp=inspection-unavailable root-accepted=inspection-unavailable root-c2u=inspection-unavailable root-u2c=inspection-unavailable validation-write=not-observed category=unknown SQLSTATE=unavailable (details redacted)\n');
     assert.equal(tcpUnavailable.calls, 'root-create\nstat-after\n');
     const unknown = run('opaque client failure\n', { TEST_STAT_OUTPUT: 'private network failure' });
-    assert.equal(unknown.stderr, 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=not-observed validation-write=inspection-unavailable category=unknown SQLSTATE=unavailable (details redacted)\n');
+    assert.equal(unknown.stderr, 'RED: custom S3 CREATE probe capture=nonempty root=failure bootstrap-tcp=not-observed bootstrap-accepted=0 bootstrap-c2u=0 bootstrap-u2c=0 root-tcp=not-observed root-accepted=0 root-c2u=0 root-u2c=0 validation-write=inspection-unavailable category=unknown SQLSTATE=unavailable (details redacted)\n');
     assert.equal(unknown.calls, 'root-create\nstat-after\n');
     const unknownStatus = run('opaque client failure\n', { TEST_STAT_EXIT: '2' });
-    assert.equal(unknownStatus.stderr, 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=not-observed validation-write=inspection-unavailable category=unknown SQLSTATE=unavailable (details redacted)\n');
+    assert.equal(unknownStatus.stderr, 'RED: custom S3 CREATE probe capture=nonempty root=failure bootstrap-tcp=not-observed bootstrap-accepted=0 bootstrap-c2u=0 bootstrap-u2c=0 root-tcp=not-observed root-accepted=0 root-c2u=0 root-u2c=0 validation-write=inspection-unavailable category=unknown SQLSTATE=unavailable (details redacted)\n');
     assert.equal(unknownStatus.calls, 'root-create\nstat-after\n');
     const mixedOutput = run('opaque client failure\n', { TEST_STAT_OUTPUT: `${validationNotFound}\nprivate network failure` });
-    assert.equal(mixedOutput.stderr, 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=not-observed validation-write=inspection-unavailable category=unknown SQLSTATE=unavailable (details redacted)\n');
+    assert.equal(mixedOutput.stderr, 'RED: custom S3 CREATE probe capture=nonempty root=failure bootstrap-tcp=not-observed bootstrap-accepted=0 bootstrap-c2u=0 bootstrap-u2c=0 root-tcp=not-observed root-accepted=0 root-c2u=0 root-u2c=0 validation-write=inspection-unavailable category=unknown SQLSTATE=unavailable (details redacted)\n');
     const ambiguous = run('opaque client failure\n', { TEST_STAT_OUTPUT: `AccessDenied; ${validationNotFound}` });
-    assert.equal(ambiguous.stderr, 'RED: custom S3 CREATE probe capture=nonempty root=failure tcp-connect=not-observed validation-write=inspection-unavailable category=unknown SQLSTATE=unavailable (details redacted)\n');
+    assert.equal(ambiguous.stderr, 'RED: custom S3 CREATE probe capture=nonempty root=failure bootstrap-tcp=not-observed bootstrap-accepted=0 bootstrap-c2u=0 bootstrap-u2c=0 root-tcp=not-observed root-accepted=0 root-c2u=0 root-u2c=0 validation-write=inspection-unavailable category=unknown SQLSTATE=unavailable (details redacted)\n');
     const statSentinel = run('opaque client failure\n', { TEST_STAT_OUTPUT: secret });
     assert.equal(statSentinel.stderr, 'RED: custom S3 CREATE diagnostic exposed synthetic credential (details redacted)\n');
     assert.equal(statSentinel.calls, 'root-create\nstat-after\n');
@@ -674,7 +679,7 @@ sql_as bootstrap CREATE`], {
     assert.equal(misleading.status, 1);
     assert.equal(misleading.stderr, 'RED: custom S3 validation object inspection unavailable (details redacted)\n');
     assert.equal(misleading.calls, 'stat-before\n');
-    const preflight = fixture.indexOf('assert_validation_object_absent\ntcp_baseline=$(tcp_read_count) || fail \'TCP observer baseline unavailable\'\nif ! sql_as bootstrap "CREATE EXTERNAL CONNECTION jandibat_privilege_probe');
+    const preflight = fixture.indexOf('assert_validation_object_absent\ntcp_bootstrap_baseline=$(tcp_read_count) || fail \'TCP observer baseline unavailable\'\nif sql_as bootstrap "CREATE EXTERNAL CONNECTION jandibat_privilege_probe');
     assert.ok(preflight >= 0, 'exact-key preflight must precede the first custom S3 CREATE');
     assert.match(fixture, /validation_object='fixture\/disposable-backup\/fixture-only\/crdb_external_storage_location'/);
     assert.match(fixture, /"\$fixture_dir"\/validation-stat-before[\s\S]*"\$fixture_dir"\/validation-stat-after/, 'private stat captures must be sentinel-scanned during cleanup');
@@ -692,7 +697,7 @@ test('TCP observer snapshot compares only CREATE-window connections and fails cl
     const counter = join(dir, 'counter');
     const run = (before, after, liveness = 'alive') => {
       writeFileSync(counter, `${after}\n`);
-      const result = spawnSync('sh', ['-c', `${code}\ntcp_baseline=$TEST_BASELINE\ntcp_counter=$TEST_COUNTER\ntcp_observer_pid=$TEST_OBSERVER_PID\nif [ "$TEST_LIVENESS" = after ]; then kill() { calls=$((calls + 1)); [ "$calls" -eq 1 ]; }; fi\ntcp_connection_state\nprintf '%s\\n' "$tcp_connection"`], {
+      const result = spawnSync('sh', ['-c', `${code}\ntcp_counter=$TEST_COUNTER\ntcp_observer_pid=$TEST_OBSERVER_PID\nif [ "$TEST_LIVENESS" = after ]; then kill() { calls=$((calls + 1)); [ "$calls" -eq 1 ]; }; fi\ntcp_snapshot "$TEST_BASELINE"\nprintf '%s\\n' "$tcp_connection"`], {
         encoding: 'utf8', env: { ...process.env, TEST_BASELINE: before, TEST_COUNTER: counter,
           TEST_OBSERVER_PID: liveness === 'dead' ? '99999999' : String(process.pid), TEST_LIVENESS: liveness },
       });
@@ -700,18 +705,50 @@ test('TCP observer snapshot compares only CREATE-window connections and fails cl
       assert.equal(result.stderr, '');
       return result.stdout;
     };
-    assert.equal(run('4', '4'), 'not-observed\n');
-    assert.equal(run('4', '5'), 'observed\n');
-    assert.equal(run('4', '5', 'dead'), 'inspection-unavailable\n');
-    assert.equal(run('4', '5', 'after'), 'inspection-unavailable\n');
-    assert.equal(run('4', '3'), 'inspection-unavailable\n');
-    assert.equal(run('4', 'invalid'), 'inspection-unavailable\n');
-    assert.equal(run('invalid', '5'), 'inspection-unavailable\n');
-    writeFileSync(counter, '5\n6\n');
-    const extra = spawnSync('sh', ['-c', `${code}\ntcp_baseline=4\ntcp_counter=$TEST_COUNTER\ntcp_connection_state\nprintf '%s\\n' "$tcp_connection"`], {
+    assert.equal(run('4 0 0', '4 0 0'), 'not-observed\n');
+    assert.equal(run('4 0 0', '5 0 0'), 'observed\n');
+    assert.equal(run('4 0 0', '5 0 0', 'dead'), 'inspection-unavailable\n');
+    assert.equal(run('4 0 0', '5 0 0', 'after'), 'inspection-unavailable\n');
+    assert.equal(run('4 0 0', '3 0 0'), 'inspection-unavailable\n');
+    assert.equal(run('4 0 0', 'invalid'), 'inspection-unavailable\n');
+    assert.equal(run('invalid', '5 0 0'), 'inspection-unavailable\n');
+    writeFileSync(counter, '5 0 0\n6 0 0\n');
+    const extra = spawnSync('sh', ['-c', `${code}\ntcp_counter=$TEST_COUNTER\ntcp_snapshot '4 0 0'\nprintf '%s\\n' "$tcp_connection"`], {
       encoding: 'utf8', env: { ...process.env, TEST_COUNTER: counter },
     });
     assert.equal(extra.stdout, 'inspection-unavailable\n');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('TCP observer attributes bounded directional bytes separately and rejects malformed evidence', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'backup-tcp-attribution-'));
+  try {
+    const fixture = readFileSync('scripts/test-db-backup-roles-secure.sh', 'utf8');
+    const start = fixture.indexOf('\ntcp_read_count() {');
+    const end = fixture.indexOf('\ndiagnose_custom_s3_create() {', start);
+    const code = fixture.slice(start, end);
+    const counter = join(dir, 'counter');
+    const run = (before, after) => {
+      if (after === null) rmSync(counter, { force: true });
+      else writeFileSync(counter, after);
+      return spawnSync('sh', ['-c', `${code}\ntcp_counter=$TEST_COUNTER\ntcp_observer_pid=$TEST_OBSERVER_PID\ntcp_snapshot "$TEST_BASELINE"\nprintf '%s %s %s %s\\n' "$tcp_connection" "$tcp_accepted" "$tcp_sent" "$tcp_received"`], {
+        encoding: 'utf8', env: { ...process.env, TEST_COUNTER: counter, TEST_BASELINE: before, TEST_OBSERVER_PID: String(process.pid) },
+      });
+    };
+    for (const [before, after, expected] of [
+      ['4 100 40', '5 112 47\n', 'observed 1 12 7\n'],
+      ['5 112 47', '5 112 47\n', 'not-observed 0 0 0\n'],
+      ['4 100 40', null, 'inspection-unavailable inspection-unavailable inspection-unavailable inspection-unavailable\n'],
+      ['4 100 40', '5 112\n', 'inspection-unavailable inspection-unavailable inspection-unavailable inspection-unavailable\n'],
+      ['4 100 40', '5 112 47\nprivate payload\n', 'inspection-unavailable inspection-unavailable inspection-unavailable inspection-unavailable\n'],
+      ['4 100 40', '5 99 47\n', 'inspection-unavailable inspection-unavailable inspection-unavailable inspection-unavailable\n'],
+    ]) {
+      const result = run(before, after);
+      assert.equal(result.status, 0);
+      assert.equal(result.stdout, expected);
+      assert.equal(result.stderr, '');
+      assert.doesNotMatch(result.stdout + result.stderr, /private payload/);
+    }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

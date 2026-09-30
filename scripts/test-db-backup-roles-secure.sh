@@ -35,22 +35,41 @@ tcp_observer_pid=
 audit_expected=false
 fail() { echo "RED: $1 (details redacted)" >&2; exit 1; }
 tcp_read_count() {
- awk 'NR==1 && /^[0-9]+$/ && length($0)<=12 { count=$0; good=1; next }
+ ( tcp_validate_count <"$tcp_counter" ) 2>/dev/null
+}
+tcp_validate_count() {
+ awk 'NR==1 && NF==3 && $0 ~ /^[0-9]+ [0-9]+ [0-9]+$/ &&
+      length($1)<=12 && length($2)<=12 && length($3)<=12 {
+       fields[1]=$1; fields[2]=$2; fields[3]=$3; good=1; next
+      }
       { good=0 }
-      END { if (NR!=1 || !good) exit 1; print count }' "$tcp_counter" 2>/dev/null
+      END { if (NR!=1 || !good) exit 1; printf "%.0f %.0f %.0f\n", fields[1], fields[2], fields[3] }'
 }
 tcp_observer_live() {
  [ -n "${tcp_observer_pid:-}" ] && kill -0 "$tcp_observer_pid" >/dev/null 2>&1
 }
-tcp_connection_state() {
+tcp_snapshot() {
  tcp_connection=inspection-unavailable
- case "$tcp_baseline" in ''|*[!0-9]*) return 0 ;; esac
- [ "${#tcp_baseline}" -le 12 ] || return 0
+ tcp_accepted=inspection-unavailable
+ tcp_sent=inspection-unavailable
+ tcp_received=inspection-unavailable
+ tcp_after=
+ tcp_before=$(printf '%s\n' "$1" | tcp_validate_count 2>/dev/null) || return 0
  tcp_observer_live || return 0
  tcp_after=$(tcp_read_count) || return 0
  tcp_observer_live || return 0
- [ "$tcp_after" -ge "$tcp_baseline" ] || return 0
- if [ "$tcp_after" -gt "$tcp_baseline" ]; then
+ # The validator has reduced both strings to three bounded decimal fields.
+ # shellcheck disable=SC2086
+ set -- $tcp_before
+ before_connections=$1 before_sent=$2 before_received=$3
+ # shellcheck disable=SC2086
+ set -- $tcp_after
+ [ "$1" -ge "$before_connections" ] && [ "$2" -ge "$before_sent" ] &&
+  [ "$3" -ge "$before_received" ] || return 0
+ tcp_accepted=$(($1 - before_connections))
+ tcp_sent=$(($2 - before_sent))
+ tcp_received=$(($3 - before_received))
+ if [ "$1" -gt "$before_connections" ]; then
   tcp_connection=observed
  else
   tcp_connection=not-observed
@@ -65,9 +84,12 @@ diagnose_custom_s3_create() {
   fail 'custom S3 CREATE diagnostic inspection unavailable'
  fi
  [ -f "$capture" ] || fail 'custom S3 CREATE diagnostic inspection unavailable'
+ tcp_root_baseline=$tcp_bootstrap_after
  root_capture="$fixture_dir/root-diagnostic-create"
  if sql_as root "CREATE EXTERNAL CONNECTION jandibat_root_diagnostic AS '$probe_uri';" \
   >"$root_capture" 2>&1; then root_result=success; else root_result=failure; fi
+ tcp_snapshot "$tcp_root_baseline"
+ root_tcp=$tcp_connection root_accepted=$tcp_accepted root_sent=$tcp_sent root_received=$tcp_received
  fixture_has_sentinel "$root_capture" 2>/dev/null && root_scan=0 || root_scan=$?
  drop_scan=1
  if [ "$root_result" = success ]; then
@@ -85,8 +107,7 @@ diagnose_custom_s3_create() {
  if [ "$root_result" = success ] && [ "$drop_result" != success ]; then
   fail 'custom S3 CREATE root diagnostic DROP incomplete'
  fi
- # Snapshot before mc HEAD: the latter itself opens a TCP connection.
- tcp_connection_state
+ # Both CREATE snapshots precede mc HEAD, which opens its own connection.
  validation_object_state "$fixture_dir/validation-stat-after" 'custom S3 CREATE diagnostic'
  case "$validation_state" in
   present) validation_write=observed ;;
@@ -140,7 +161,7 @@ diagnose_custom_s3_create() {
  match_category storage 'NoSuchBucket|SignatureDoesNotMatch|InvalidAccessKeyId|AccessDenied|InvalidBucketName'
  match_category transport-client 'dial tcp|connection refused|connection reset|timed out|i/o timeout|network is unreachable|no such host|unexpected EOF'
  [ "$matched" -le 1 ] || category=unknown
- fail "custom S3 CREATE probe capture=$capture_state root=$root_result tcp-connect=$tcp_connection validation-write=$validation_write category=$category SQLSTATE=$code"
+ fail "custom S3 CREATE probe capture=$capture_state root=$root_result bootstrap-tcp=$bootstrap_tcp bootstrap-accepted=$bootstrap_accepted bootstrap-c2u=$bootstrap_sent bootstrap-u2c=$bootstrap_received root-tcp=$root_tcp root-accepted=$root_accepted root-c2u=$root_sent root-u2c=$root_received validation-write=$validation_write category=$category SQLSTATE=$code"
 }
 validation_object_state() {
  validation_capture=$1
@@ -469,11 +490,16 @@ sql_as root "SELECT count(*) FROM [SHOW EXTERNAL CONNECTIONS] WHERE connection_n
 probe_uri="s3://disposable-backup/fixture-only?AWS_ACCESS_KEY_ID=$synthetic_access&AWS_SECRET_ACCESS_KEY=$synthetic_secret&AWS_ENDPOINT=https%3A%2F%2F127.0.0.1%3A9009&AWS_REGION=us-east-1&AWS_USE_PATH_STYLE=true"
 validation_object='fixture/disposable-backup/fixture-only/crdb_external_storage_location'
 assert_validation_object_absent
-tcp_baseline=$(tcp_read_count) || fail 'TCP observer baseline unavailable'
-if ! sql_as bootstrap "CREATE EXTERNAL CONNECTION jandibat_privilege_probe AS '$probe_uri';" \
- >"$fixture_dir/privilege-probe" 2>&1; then
+tcp_bootstrap_baseline=$(tcp_read_count) || fail 'TCP observer baseline unavailable'
+if sql_as bootstrap "CREATE EXTERNAL CONNECTION jandibat_privilege_probe AS '$probe_uri';" \
+ >"$fixture_dir/privilege-probe" 2>&1; then bootstrap_result=success; else bootstrap_result=failure; fi
+tcp_snapshot "$tcp_bootstrap_baseline"
+bootstrap_tcp=$tcp_connection bootstrap_accepted=$tcp_accepted bootstrap_sent=$tcp_sent bootstrap_received=$tcp_received
+tcp_bootstrap_after=${tcp_after:-}
+if [ "$bootstrap_result" = failure ]; then
  diagnose_custom_s3_create "$fixture_dir/privilege-probe"
 fi
+[ "$bootstrap_tcp" != inspection-unavailable ] || fail 'TCP observer snapshot unavailable'
 sql_as bootstrap "CHECK EXTERNAL CONNECTION 'external://jandibat_privilege_probe' WITH transfer = '1MiB';" \
  >"$fixture_dir/privilege-check" 2>&1 || fail 'custom S3 CHECK privilege'
 sql_as bootstrap 'DROP EXTERNAL CONNECTION jandibat_privilege_probe;' \

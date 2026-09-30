@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -475,6 +475,10 @@ test('custom S3 CREATE failure reports only validated SQLSTATE and fixed categor
     const end = fixture.indexOf('\ncleanup() {', start);
     assert.ok(start >= 0 && end > start, 'custom S3 CREATE diagnostic missing');
     const diagnostic = fixture.slice(start, end);
+    const bootstrapStart = fixture.indexOf('\ntcp_snapshot "$tcp_bootstrap_baseline"');
+    const bootstrapEnd = fixture.indexOf('\nif [ "$bootstrap_result" = failure ]; then', bootstrapStart);
+    assert.ok(bootstrapStart >= 0 && bootstrapEnd > bootstrapStart, 'bootstrap snapshot sequence missing');
+    const bootstrapSnapshot = fixture.slice(bootstrapStart, bootstrapEnd);
     const capture = join(dir, 'capture');
     const calls = join(dir, 'calls');
     const secret = 'private+credential';
@@ -486,10 +490,9 @@ fail() { echo "RED: $1 (details redacted)" >&2; exit 1; }
 fixture_dir=$TEST_FIXTURE_DIR
 probe_uri=$TEST_PROBE_URI
 tcp_counter=$TEST_FIXTURE_DIR/tcp-counter
-bootstrap_tcp=\${TEST_BOOTSTRAP_TCP:-not-observed} bootstrap_accepted=\${TEST_BOOTSTRAP_ACCEPTED:-0} bootstrap_sent=\${TEST_BOOTSTRAP_SENT:-0} bootstrap_received=\${TEST_BOOTSTRAP_RECEIVED:-0}
-tcp_bootstrap_after=\${TEST_BOOTSTRAP_AFTER:-4 0 0}
 tcp_observer_pid=$$
-printf '%s\n' "$tcp_bootstrap_after" >"$tcp_counter"
+tcp_bootstrap_baseline=\${TEST_BOOTSTRAP_BASELINE:-4 0 0}
+printf '%s\n' "\${TEST_BOOTSTRAP_AFTER:-4 0 0}" >"$tcp_counter"
 validation_object=fixture/disposable-backup/fixture-only/crdb_external_storage_location
 mc() {
  [ "$1" = stat ] && [ "$2" = --no-list ] && [ "$3" = "$validation_object" ] || return 2
@@ -515,6 +518,7 @@ sql_as() {
  esac
 }
 ${diagnostic}
+${bootstrapSnapshot}
 diagnose_custom_s3_create "$CAPTURE"`], {
         encoding: 'utf8', env: { ...process.env, CAPTURE: capture, TEST_FIXTURE_DIR: dir, TEST_CALLS: calls,
           TEST_PROBE_URI: 's3://disposable-backup/fixture-only?AWS_SECRET_ACCESS_KEY=private%2Bcredential',
@@ -590,9 +594,12 @@ diagnose_custom_s3_create "$CAPTURE"`], {
     const tcpObserved = run('opaque client failure\n', { TEST_TCP_AFTER: '5 0 0' });
     assert.equal(tcpObserved.stderr, 'RED: custom S3 CREATE probe capture=nonempty root=failure bootstrap-tcp=not-observed bootstrap-accepted=0 bootstrap-c2u=0 bootstrap-u2c=0 root-tcp=observed root-accepted=1 root-c2u=0 root-u2c=0 validation-write=not-observed category=unknown SQLSTATE=unavailable (details redacted)\n');
     assert.equal(tcpObserved.calls, 'root-create\nstat-after\n');
-    const separated = run('opaque client failure\n', { TEST_BOOTSTRAP_TCP: 'observed', TEST_BOOTSTRAP_ACCEPTED: '2', TEST_BOOTSTRAP_SENT: '12', TEST_BOOTSTRAP_RECEIVED: '7', TEST_BOOTSTRAP_AFTER: '4 12 7', TEST_TCP_AFTER: '5 20 10' });
+    const separated = run('opaque client failure\n', { TEST_BOOTSTRAP_AFTER: '6 12 7', TEST_TCP_AFTER: '7 20 10' });
     assert.equal(separated.stderr, 'RED: custom S3 CREATE probe capture=nonempty root=failure bootstrap-tcp=observed bootstrap-accepted=2 bootstrap-c2u=12 bootstrap-u2c=7 root-tcp=observed root-accepted=1 root-c2u=8 root-u2c=3 validation-write=not-observed category=unknown SQLSTATE=unavailable (details redacted)\n');
     assert.equal(separated.calls, 'root-create\nstat-after\n');
+    const rejectedBootstrap = run('opaque client failure\n', { TEST_BOOTSTRAP_BASELINE: '4 100 40', TEST_BOOTSTRAP_AFTER: '5 99 47', TEST_TCP_AFTER: '6 112 50' });
+    assert.equal(rejectedBootstrap.stderr, 'RED: custom S3 CREATE probe capture=nonempty root=failure bootstrap-tcp=inspection-unavailable bootstrap-accepted=inspection-unavailable bootstrap-c2u=inspection-unavailable bootstrap-u2c=inspection-unavailable root-tcp=inspection-unavailable root-accepted=inspection-unavailable root-c2u=inspection-unavailable root-u2c=inspection-unavailable validation-write=not-observed category=unknown SQLSTATE=unavailable (details redacted)\n');
+    assert.equal(rejectedBootstrap.calls, 'root-create\nstat-after\n');
     const tcpUnavailable = run('opaque client failure\n', { TEST_TCP_AFTER: 'malformed' });
     assert.equal(tcpUnavailable.stderr, 'RED: custom S3 CREATE probe capture=nonempty root=failure bootstrap-tcp=not-observed bootstrap-accepted=0 bootstrap-c2u=0 bootstrap-u2c=0 root-tcp=inspection-unavailable root-accepted=inspection-unavailable root-c2u=inspection-unavailable root-u2c=inspection-unavailable validation-write=not-observed category=unknown SQLSTATE=unavailable (details redacted)\n');
     assert.equal(tcpUnavailable.calls, 'root-create\nstat-after\n');
@@ -730,6 +737,7 @@ test('TCP observer attributes bounded directional bytes separately and rejects m
     const counter = join(dir, 'counter');
     const run = (before, after) => {
       if (after === null) rmSync(counter, { force: true });
+      else if (after === 'unreadable') { rmSync(counter, { force: true }); mkdirSync(counter); }
       else writeFileSync(counter, after);
       return spawnSync('sh', ['-c', `${code}\ntcp_counter=$TEST_COUNTER\ntcp_observer_pid=$TEST_OBSERVER_PID\ntcp_snapshot "$TEST_BASELINE"\nprintf '%s %s %s %s\\n' "$tcp_connection" "$tcp_accepted" "$tcp_sent" "$tcp_received"`], {
         encoding: 'utf8', env: { ...process.env, TEST_COUNTER: counter, TEST_BASELINE: before, TEST_OBSERVER_PID: String(process.pid) },
@@ -742,6 +750,7 @@ test('TCP observer attributes bounded directional bytes separately and rejects m
       ['4 100 40', '5 112\n', 'inspection-unavailable inspection-unavailable inspection-unavailable inspection-unavailable\n'],
       ['4 100 40', '5 112 47\nprivate payload\n', 'inspection-unavailable inspection-unavailable inspection-unavailable inspection-unavailable\n'],
       ['4 100 40', '5 99 47\n', 'inspection-unavailable inspection-unavailable inspection-unavailable inspection-unavailable\n'],
+      ['4 100 40', 'unreadable', 'inspection-unavailable inspection-unavailable inspection-unavailable inspection-unavailable\n'],
     ]) {
       const result = run(before, after);
       assert.equal(result.status, 0);

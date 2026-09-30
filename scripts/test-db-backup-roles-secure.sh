@@ -56,14 +56,14 @@ tcp_snapshot() {
  tcp_after=
  tcp_before=$(printf '%s\n' "$1" | tcp_validate_count 2>/dev/null) || return 0
  tcp_observer_live || return 0
- tcp_after=$(tcp_read_count) || return 0
+ tcp_candidate=$(tcp_read_count) || return 0
  tcp_observer_live || return 0
  # The validator has reduced both strings to three bounded decimal fields.
  # shellcheck disable=SC2086
  set -- $tcp_before
  before_connections=$1 before_sent=$2 before_received=$3
  # shellcheck disable=SC2086
- set -- $tcp_after
+ set -- $tcp_candidate
  [ "$1" -ge "$before_connections" ] && [ "$2" -ge "$before_sent" ] &&
   [ "$3" -ge "$before_received" ] || return 0
  tcp_accepted=$(($1 - before_connections))
@@ -74,6 +74,7 @@ tcp_snapshot() {
  else
   tcp_connection=not-observed
  fi
+ tcp_after=$tcp_candidate
 }
 diagnose_custom_s3_create() {
  capture=$1

@@ -23,6 +23,15 @@ fi
 source_sha=$(git -c core.fsmonitor=false rev-parse HEAD 2>/dev/null) || invalid
 case "$source_sha" in ''|*[!0-9a-f]*) invalid;; esac
 [ "${#source_sha}" -eq 40 ] || invalid
+sbom_file="restore-tools-sha256-$hex.syft.json"
+sbom_sha=$(node --input-type=module -e '
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+const bytes = readFileSync(process.argv[1]);
+assert.equal(JSON.parse(bytes).source?.metadata?.imageID, process.argv[2]);
+process.stdout.write(createHash("sha256").update(bytes).digest("hex"));
+' "$evidence/$sbom_file" "$image_id") || { echo 'restore-tools secure proof failed: local SBOM (details redacted)' >&3; exit 1; }
 donor='cockroachdb/cockroach:v26.2.5@sha256:771325a0586bf61d53322d24f5a6de8962568b0fc181fa45db364278e5961282'
 phase=setup
 default_user=false; verified_connection=false; dns=false
@@ -60,8 +69,8 @@ cleanup() {
  if [ "$status" -eq 0 ]; then phase=passed; else echo "restore-tools secure proof failed: $phase (details redacted)" >&3; fi
  # Only validated identifiers, fixed phase names and literal booleans enter
  # this sidecar. Credentials, addresses and raw diagnostics never leave /tmp.
- if ! printf '{"schema":1,"sourceSha":"%s","imageId":"%s","serverDonorDigest":"%s","phase":"%s","checks":{"defaultUser":%s,"verifiedConnection":%s,"dns":%s,"bootstrapReruns":%s,"migrationReruns":%s,"grantsRoles":%s,"rotation":%s,"wrongCa":%s,"wrongHostname":%s,"wrongPassword":%s,"cleanup":%s}}\n' \
-  "$source_sha" "$image_id" "${donor##*@}" "$phase" "$default_user" "$verified_connection" "$dns" \
+ if ! printf '{"schema":2,"sourceSha":"%s","imageId":"%s","sbom":{"file":"%s","sha256":"%s"},"serverDonorDigest":"%s","phase":"%s","checks":{"defaultUser":%s,"verifiedConnection":%s,"dns":%s,"bootstrapReruns":%s,"migrationReruns":%s,"grantsRoles":%s,"rotation":%s,"wrongCa":%s,"wrongHostname":%s,"wrongPassword":%s,"cleanup":%s}}\n' \
+  "$source_sha" "$image_id" "$sbom_file" "$sbom_sha" "${donor##*@}" "$phase" "$default_user" "$verified_connection" "$dns" \
   "$bootstrap_reruns" "$migration_reruns" "$grants_roles" "$rotation" "$wrong_ca" "$wrong_hostname" "$wrong_password" "$cleaned" \
   >"$evidence/.restore-tools-secure.json"; then exit 1; fi
  mv "$evidence/.restore-tools-secure.json" "$evidence/restore-tools-secure.json" || exit 1

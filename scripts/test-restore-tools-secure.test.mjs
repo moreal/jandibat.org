@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSyn
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
+import { createHash } from 'node:crypto';
 
 const root = resolve(import.meta.dirname, '..');
 const image = 'sha256:' + 'a'.repeat(64);
@@ -12,6 +13,8 @@ function fixture(t, failure = '') {
   const dir = mkdtempSync(join(tmpdir(), 'restore-secure-test-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   mkdirSync(join(dir, 'bin')); mkdirSync(join(dir, 'private')); mkdirSync(join(dir, 'evidence'));
+  const sbomFile = `restore-tools-${image.replace(':', '-')}.syft.json`;
+  writeFileSync(join(dir, 'evidence', sbomFile), JSON.stringify({ source: { metadata: { imageID: image } } }));
   const executable = (name, body) => writeFileSync(join(dir, 'bin', name), `#!${process.execPath}\n${body}`, { mode: 0o755 });
   executable('uname', `console.log(process.argv[2] === '-s' ? (process.env.FAILURE === 'non-linux' ? 'Darwin' : 'Linux') : 'x86_64');`);
   executable('sleep', '');
@@ -97,10 +100,25 @@ test('secure proof uses the exact immutable packaged client and isolates every S
   assert.ok(calls.some(c => c.args[0] === 'rm' && c.args.at(-1) === 'c'.repeat(64)));
   assert.equal(f.result().imageId, image); assert.equal(f.result().serverDonorDigest, donor.split('@')[1]);
   assert.match(f.result().sourceSha, /^[0-9a-f]{40}$/); assert.equal(f.result().phase, 'passed');
+  const sbomFile = `restore-tools-${image.replace(':', '-')}.syft.json`;
+  assert.equal(f.result().schema, 2);
+  assert.deepEqual(f.result().sbom, { file: sbomFile,
+    sha256: createHash('sha256').update(readFileSync(join(f.dir, 'evidence', sbomFile))).digest('hex') });
   assert.ok(Object.values(f.result().checks).every(v => v === true));
   assert.deepEqual(readdirSync(join(f.dir, 'private')), []);
-  assert.deepEqual(readdirSync(join(f.dir, 'evidence')), ['restore-tools-secure.json']);
+  assert.deepEqual(readdirSync(join(f.dir, 'evidence')).sort(), ['restore-tools-secure.json', sbomFile].sort());
   assert.doesNotMatch(result.stdout + result.stderr + JSON.stringify(f.result()), /postgresql|SYNTHETIC|x509|password authentication/);
+});
+
+for (const failure of ['missing', 'wrong-image']) test(`secure proof rejects ${failure} local SBOM before Docker`, t => {
+  const f = fixture(t);
+  const path = join(f.dir, 'evidence', `restore-tools-${image.replace(':', '-')}.syft.json`);
+  if (failure === 'missing') rmSync(path);
+  else writeFileSync(path, JSON.stringify({ source: { metadata: { imageID: 'sha256:' + 'b'.repeat(64) } } }));
+  const result = f.run();
+  assert.notEqual(result.status, 0);
+  assert.equal(f.calls().length, 0);
+  assert.equal(existsSync(join(f.dir, 'evidence/restore-tools-secure.json')), false);
 });
 
 for (const failure of ['default-user','stdin-ignored','wrong-ca-accepted','wrong-host-accepted','tls-unreachable','tls-success-with-diagnostic','old-password-accepted','cleanup-network','secret-output','network-create','server-create']) {

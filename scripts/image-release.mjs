@@ -5,17 +5,127 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { loadPreflight, verifyImportedScan } from './restore-tools-runtime.mjs';
 
 const names = ['api', 'worker', 'maintenance', 'web', 'restore-tools'];
+const root = fileURLToPath(new URL('../', import.meta.url));
+// Set only in a later independently human-reviewed change. Evidence, environment
+// variables and reviewer strings cannot install their own approval authority.
+const licenseReviewTrust = null;
 const hash = bytes => 'sha256:' + createHash('sha256').update(bytes).digest('hex');
 const fileHash = path => hash(readFileSync(path)).slice('sha256:'.length);
 const json = path => JSON.parse(readFileSync(path, 'utf8'));
-function command(program, args, allowFailure = false) {
-  const result = spawnSync(program, args, { encoding: 'utf8', maxBuffer: 128 * 1024 * 1024 });
+function command(program, args, allowFailure = false, encoding = 'utf8') {
+  const result = spawnSync(program, args, { encoding, maxBuffer: 128 * 1024 * 1024 });
   if (!allowFailure && result.status !== 0) throw new Error(`${program} failed: ${result.error || result.stderr}`);
   return result;
 }
 function save(path, value) { writeFileSync(path, JSON.stringify(value, null, 2) + '\n'); }
+
+function verifyLocalScan(evidence, { name, imageId }) {
+  const prefix = `${name}-${imageId.replace(':', '-')}`;
+  const receipt = json(join(evidence, `${prefix}.release.json`));
+  assert.deepEqual(Object.keys(receipt).sort(), ['artifacts', 'imageId', 'manifestDigest', 'name', 'target']);
+  assert.deepEqual([receipt.name, receipt.imageId, receipt.manifestDigest, receipt.target], [name, imageId, null, `docker:${imageId}`]);
+  assert.deepEqual(Object.keys(receipt.artifacts).sort(), ['grype', 'spdx', 'syft']);
+  const paths = {};
+  for (const [kind, artifact] of Object.entries(receipt.artifacts)) {
+    assert.deepEqual(Object.keys(artifact).sort(), ['file', 'sha256']);
+    assert.equal(artifact.file, `${prefix}.${kind}.json`);
+    assert.match(artifact.sha256, /^[0-9a-f]{64}$/);
+    paths[kind] = join(evidence, artifact.file);
+    assert.equal(fileHash(paths[kind]), artifact.sha256);
+  }
+  verifyScanArtifacts(paths, imageId, null, receipt.target);
+}
+
+function committedBytes(commit, file) {
+  assert.match(commit || '', /^[0-9a-f]{40}$/);
+  assert.match(file || '', /^[A-Za-z0-9_-][A-Za-z0-9_./-]*$/);
+  assert.ok(file.split('/').every(part => part && part !== '.' && part !== '..'), 'committed review path');
+  const entry = command('git', ['-c', 'core.fsmonitor=false', '-C', root, 'ls-tree', commit, '--', file]).stdout;
+  assert.match(entry, /^100644 blob [0-9a-f]{40}\t/, 'review evidence must be a committed regular file');
+  return command('git', ['-c', 'core.fsmonitor=false', '-C', root, 'show', `${commit}:${file}`], false, null).stdout;
+}
+
+function verifyLicenseReview(evidence, runtime) {
+  assert.deepEqual(runtime.licenseReview, { status: 'approved', record: 'license-review.json' }, 'license-review-pending: human approval required');
+  assert.ok(licenseReviewTrust, 'license-review-pending: independent human review trust pin is not installed');
+  const trust = licenseReviewTrust;
+  assert.deepEqual(Object.keys(trust).sort(), ['commit', 'file', 'sha256']);
+  assert.equal(trust.file, 'license-attestation.json');
+  const attestationBytes = committedBytes(trust.commit, trust.file);
+  assert.equal(hash(attestationBytes).slice(7), trust.sha256, 'pinned independent review hash');
+  assert.deepEqual(readFileSync(join(evidence, trust.file)), attestationBytes, 'portable attestation equals committed bytes');
+  command('git', ['-c', 'core.fsmonitor=false', '-C', root, 'merge-base', '--is-ancestor', trust.commit, 'HEAD']);
+  const attestation = JSON.parse(attestationBytes);
+  assert.deepEqual(Object.keys(attestation).sort(), ['review', 'reviewedAt', 'reviewer', 'schemaVersion', 'status']);
+  assert.equal(attestation.schemaVersion, 1);
+  assert.equal(attestation.status, 'approved');
+  assert.match(attestation.reviewer, /^@[A-Za-z0-9][A-Za-z0-9-]{0,37}$/);
+  assert.match(attestation.reviewedAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+  assert.equal(new Date(attestation.reviewedAt).toISOString(), attestation.reviewedAt.replace('Z', '.000Z'));
+  const reference = attestation.review;
+  assert.deepEqual(Object.keys(reference).sort(), ['commit', 'file', 'sha256']);
+  assert.equal(reference.file, 'license-review.json');
+  assert.notEqual(reference.commit, trust.commit, 'independent review must be separately committed');
+  const reviewBytes = committedBytes(reference.commit, reference.file);
+  assert.equal(hash(reviewBytes).slice(7), reference.sha256, 'independent review binds committed record');
+  assert.deepEqual(readFileSync(join(evidence, reference.file)), reviewBytes, 'portable review equals committed bytes');
+  command('git', ['-c', 'core.fsmonitor=false', '-C', root, 'merge-base', '--is-ancestor', reference.commit, trust.commit]);
+  const review = JSON.parse(reviewBytes);
+  assert.deepEqual(Object.keys(review).sort(), ['author', 'donor', 'donorLicenses', 'donorObligations', 'imageId', 'packages', 'runtime', 'sbom', 'schemaVersion', 'sourceSha', 'status']);
+  assert.equal(review.schemaVersion, 1);
+  assert.equal(review.status, 'approved');
+  assert.match(review.author, /^@[A-Za-z0-9][A-Za-z0-9-]{0,37}$/);
+  assert.notEqual(review.author.toLowerCase(), attestation.reviewer.toLowerCase(), 'independent human reviewer required');
+  for (const key of ['sourceSha', 'imageId', 'sbom', 'runtime', 'donor', 'donorLicenses'])
+    assert.deepEqual(review[key], runtime[key], `license review exact ${key} binding`);
+  assert.deepEqual(review.packages.map(({ name, version, license }) => ({ name, version, license })), runtime.licenseDeclarations,
+    'license review must cover all seven exact APK declarations');
+  for (const obligation of [...review.packages.flatMap(pkg => {
+    assert.deepEqual(Object.keys(pkg).sort(), ['license', 'licenseText', 'name', 'notice', 'source', 'sourceOffer', 'version']);
+    return [pkg.source, pkg.licenseText, pkg.notice, pkg.sourceOffer];
+  }), review.donorObligations]) {
+    assert.deepEqual(Object.keys(obligation).sort(), ['file', 'sha256']);
+    assert.match(obligation.sha256, /^[0-9a-f]{64}$/);
+    const bytes = committedBytes(reference.commit, obligation.file);
+    assert.ok(bytes.toString('utf8').trim().length > 0, 'nonempty reviewed license/source/notice/offer record');
+    assert.equal(hash(bytes).slice(7), obligation.sha256, 'committed obligation hash');
+  }
+}
+
+function verifySupplementalEvidence(evidence, sourceSha, imageId) {
+  const candidate = loadPreflight();
+  const runtime = json(join(evidence, 'restore-tools-runtime.json'));
+  assert.equal(runtime.schemaVersion, 1);
+  assert.equal(runtime.status, 'passed', 'runtime inspection must pass');
+  assert.equal(runtime.sourceSha, sourceSha, 'runtime exact source binding');
+  assert.equal(runtime.imageId, imageId, 'runtime exact imported image binding');
+  assert.equal(runtime.packageManager, 'apk');
+  for (const key of ['runtime', 'packageDb', 'packages', 'licenseDeclarations'])
+    assert.deepEqual(runtime[key], candidate[key], `runtime frozen ${key}`);
+  assert.deepEqual(runtime.donor, { source: candidate.donor.source, amd64Digest: candidate.donor.amd64Digest });
+  assert.deepEqual(runtime.donorLicenses, candidate.donor.licenses);
+  assert.deepEqual(runtime.preflight, { file: 'preflight-36411980538.json',
+    sha256: 'a963547f904eff70405115c0371717f59fdd856585081d31f59365a6bd2b6878', sourceSha: candidate.sourceSha,
+    runId: '36411980538', artifactId: '10964941196' });
+  const scanned = verifyImportedScan(evidence, imageId);
+  assert.deepEqual(runtime.sbom, scanned.receipt.artifacts.syft, 'runtime exact local SBOM binding');
+  assert.deepEqual(runtime.scanReceipt, { file: scanned.receiptFile, sha256: scanned.receiptHash });
+  const secure = json(join(evidence, 'restore-tools-secure.json'));
+  assert.deepEqual(Object.keys(secure).sort(), ['checks', 'imageId', 'phase', 'sbom', 'schema', 'serverDonorDigest', 'sourceSha']);
+  assert.equal(secure.schema, 2);
+  assert.equal(secure.sourceSha, sourceSha, 'secure exact source binding');
+  assert.equal(secure.imageId, imageId, 'secure exact imported image binding');
+  assert.deepEqual(secure.sbom, runtime.sbom, 'secure exact local SBOM binding');
+  assert.equal(secure.serverDonorDigest, candidate.donor.source.split('@')[1]);
+  assert.equal(secure.phase, 'passed');
+  assert.deepEqual(secure.checks, Object.fromEntries(['defaultUser', 'verifiedConnection', 'dns', 'bootstrapReruns',
+    'migrationReruns', 'grantsRoles', 'rotation', 'wrongCa', 'wrongHostname', 'wrongPassword', 'cleanup'].map(key => [key, true])));
+  verifyLicenseReview(evidence, runtime);
+}
 
 function verifyScanArtifacts(paths, imageId, manifestDigest, target) {
   assert.match(json(paths.spdx).spdxVersion, /^SPDX-/);
@@ -51,6 +161,8 @@ function validate(evidence) {
   assert.deepEqual(Object.keys(release).sort(), ['images', 'schemaVersion', 'sourceSha']);
   assert.ok(Array.isArray(release.images));
   assert.deepEqual(release.images.map(image => image.name).sort(), [...names].sort());
+  for (const image of release.images) verifyLocalScan(evidence, image);
+  verifySupplementalEvidence(evidence, release.sourceSha, release.images.find(image => image.name === 'restore-tools').imageId);
   for (const image of release.images) {
     assert.deepEqual(Object.keys(image).sort(), ['imageId', 'manifestDigest', 'name', 'ref', 'scanReceipt', 'scanReceiptSha256', 'tag']);
     assert.match(image.imageId, /^sha256:[0-9a-f]{64}$/);
@@ -165,10 +277,16 @@ function publish(evidence) {
     const manifestDigest = hash(raw);
     const image = `ghcr.io/${repository.toLowerCase()}/${name}`;
     const tag = `${image}:${sha}`;
-    const existing = existingManifest(tag);
-    assert.ok(existing === null || existing === manifestDigest, `immutable SHA tag mismatch: ${tag}`);
-    return { ...candidate, manifestDigest, tag, existing, ref: `${image}@${manifestDigest}` };
+    return { ...candidate, manifestDigest, tag, ref: `${image}@${manifestDigest}` };
   });
+  // Direct callers get the same fail-closed boundary as the build workflow.
+  // No registry inspection, copy, tag or output occurs before every local gate.
+  for (const candidate of candidates) verifyLocalScan(evidence, candidate);
+  verifySupplementalEvidence(evidence, sha, candidates.find(candidate => candidate.name === 'restore-tools').imageId);
+  for (const candidate of candidates) {
+    const existing = existingManifest(candidate.tag);
+    assert.ok(existing === null || existing === candidate.manifestDigest, `immutable SHA tag mismatch: ${candidate.tag}`);
+  }
   // Workflow concurrency serializes writers. Check all tags before pushing any,
   // and check again at each write; existing SHA tags are never repointed.
   for (const candidate of candidates) {

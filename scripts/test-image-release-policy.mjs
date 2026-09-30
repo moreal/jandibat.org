@@ -684,6 +684,74 @@ function registryFixture(t, mode = 'matching') {
     writeFileSync(join(layout, 'manifest.json'), manifest);
     writeFileSync(join(evidence, `${name}.json`), JSON.stringify({ name, imageId: digest, layout }));
   }
+  const save = (file, value) => writeFileSync(join(evidence, file), JSON.stringify(value));
+  const reference = file => ({ file, sha256: fileSha(join(evidence, file)) });
+  // All five local scans are green before exercising the supplemental gates.
+  for (const name of names) {
+    const prefix = `${name}-${digest.replace(':', '-')}`;
+    save(`${prefix}.spdx.json`, { spdxVersion: 'SPDX-2.3' });
+    save(`${prefix}.syft.json`, { source: { metadata: { imageID: digest } } });
+    save(`${prefix}.grype.json`, { source: { target: { imageID: digest } }, matches: [] });
+    save(`${prefix}.release.json`, { name, imageId: digest, manifestDigest: null, target: `docker:${digest}`,
+      artifacts: Object.fromEntries(['spdx', 'syft', 'grype'].map(kind => [kind, reference(`${prefix}.${kind}.json`)])) });
+  }
+  const candidate = JSON.parse(readFileSync(join(root, 'docs/evidence/restore-runtime/preflight-36411980538.json')));
+  const sbom = reference(`restore-tools-${digest.replace(':', '-')}.syft.json`);
+  const runtime = { schemaVersion: 1, sourceSha: sha, imageId: digest, status: 'passed',
+    licenseReview: { status: 'approved', record: 'license-review.json' },
+    preflight: { file: 'preflight-36411980538.json', sha256: 'a963547f904eff70405115c0371717f59fdd856585081d31f59365a6bd2b6878',
+      sourceSha: '6da761b20045d8fbb88ebaf186fab2e13b37c6e0', runId: '36411980538', artifactId: '10964941196' },
+    runtime: candidate.runtime, donor: { source: candidate.donor.source, amd64Digest: candidate.donor.amd64Digest },
+    sbom, scanReceipt: reference(`restore-tools-${digest.replace(':', '-')}.release.json`),
+    packageManager: 'apk', packageDb: candidate.packageDb, packages: candidate.packages,
+    licenseDeclarations: candidate.licenseDeclarations, donorLicenses: candidate.donor.licenses };
+  save('restore-tools-runtime.json', runtime);
+  save('restore-tools-secure.json', { schema: 2, sourceSha: sha, imageId: digest, sbom,
+    serverDonorDigest: candidate.donor.source.split('@')[1], phase: 'passed',
+    checks: Object.fromEntries(['defaultUser', 'verifiedConnection', 'dns', 'bootstrapReruns', 'migrationReruns',
+      'grantsRoles', 'rotation', 'wrongCa', 'wrongHostname', 'wrongPassword', 'cleanup'].map(key => [key, true])) });
+  const review = { schemaVersion: 1, status: 'approved', sourceSha: sha, imageId: digest, sbom,
+    runtime: runtime.runtime, donor: runtime.donor, donorLicenses: runtime.donorLicenses,
+    author: '@fixture-author', packages: candidate.licenseDeclarations.map(pkg => ({ ...pkg,
+      source: { file: 'source.txt', sha256: '' }, licenseText: { file: 'license.txt', sha256: '' },
+      notice: { file: 'notice.txt', sha256: '' }, sourceOffer: { file: 'source-offer.txt', sha256: '' } })),
+    donorObligations: { file: 'donor-obligations.txt', sha256: '' } };
+  // An isolated repository provides committed synthetic records. The production
+  // validator has no trust pin; only this temporary copy receives a fixture pin.
+  const checkout = join(dir, 'checkout');
+  mkdirSync(join(checkout, 'scripts'), { recursive: true });
+  cpSync(join(root, 'docs/evidence/restore-runtime'), join(checkout, 'docs/evidence/restore-runtime'), { recursive: true });
+  for (const file of ['image-release.mjs', 'restore-tools-runtime.mjs', 'probe-restore-runtime-candidate.mjs'])
+    cpSync(script(file), join(checkout, 'scripts', file));
+  const git = (...args) => execFileSync('git', ['-c', 'core.fsmonitor=false', '-c', 'commit.gpgsign=false', '-C', checkout, ...args], { encoding: 'utf8',
+    env: { ...process.env, GIT_AUTHOR_NAME: 'Synthetic fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid',
+      GIT_COMMITTER_NAME: 'Synthetic fixture', GIT_COMMITTER_EMAIL: 'fixture@example.invalid' } }).trim();
+  git('init', '--quiet');
+  for (const item of [...review.packages.flatMap(pkg => [pkg.source, pkg.licenseText, pkg.notice, pkg.sourceOffer]), review.donorObligations]) {
+    writeFileSync(join(checkout, item.file), `SYNTHETIC TEST ONLY: ${item.file}\n`);
+    item.sha256 = fileSha(join(checkout, item.file));
+  }
+  const releaseScript = join(checkout, 'scripts/image-release.mjs');
+  const productionScript = readFileSync(releaseScript, 'utf8');
+  function repin(mutateReview = () => {}, mutateAttestation = () => {}) {
+    mutateReview(review);
+    writeFileSync(join(checkout, 'license-review.json'), JSON.stringify(review));
+    git('add', '.');
+    git('commit', '--quiet', '--allow-empty', '-m', 'Synthetic license fixture\n\nAssisted-by: Codex:gpt-6-sol');
+    const recordCommit = git('rev-parse', 'HEAD');
+    const attestation = { schemaVersion: 1, status: 'approved', reviewer: '@fixture-independent',
+      reviewedAt: '2026-09-30T00:00:00Z', review: { commit: recordCommit, file: 'license-review.json',
+        sha256: fileSha(join(checkout, 'license-review.json')) } };
+    mutateAttestation(attestation);
+    writeFileSync(join(checkout, 'license-attestation.json'), JSON.stringify(attestation));
+    git('add', 'license-attestation.json');
+    git('commit', '--quiet', '-m', 'Synthetic independent attestation\n\nAssisted-by: Codex:gpt-6-sol');
+    const trust = { commit: git('rev-parse', 'HEAD'), file: 'license-attestation.json', sha256: fileSha(join(checkout, 'license-attestation.json')) };
+    writeFileSync(releaseScript, productionScript.replace('const licenseReviewTrust = null;', `const licenseReviewTrust = ${JSON.stringify(trust)};`));
+    save('license-review.json', review);
+    save('license-attestation.json', attestation);
+  }
+  repin();
   executable(dir, 'skopeo', `
 const fs = require('node:fs'); const args = process.argv.slice(2);
 fs.appendFileSync(process.env.TRACE, JSON.stringify(['skopeo', ...args]) + '\\n');
@@ -746,8 +814,141 @@ process.stdout.write(JSON.stringify({matches:process.env.MODE === 'scan-fail' ? 
 if (process.env.MODE === 'scan-fail' || (process.env.MODE === 'partial-scan' && args[0].includes('/restore-tools@'))) process.exit(2);
 `);
   const env = { PATH: `${join(dir, 'bin')}:${process.env.PATH}`, MODE: mode, TRACE: join(dir, 'trace'), PUBLISHED: join(dir, 'published'), EVIDENCE: evidence, MANIFEST: manifest, MANIFEST_DIGEST: manifestDigest, IMAGE_ID: digest, GITHUB_SHA: sha, GITHUB_REPOSITORY: 'Owner/Repo', GITHUB_OUTPUT: join(dir, 'outputs') };
-  return { dir, evidence, env, manifestDigest, run: () => invoke('image-release.mjs', env, ['publish', evidence]), trace: () => existsSync(env.TRACE) ? readFileSync(env.TRACE,'utf8').trim().split('\n').map(JSON.parse) : [] };
+  const runScript = (operation, directory = evidence, production = false) => spawnSync(process.execPath,
+    [production ? script('image-release.mjs') : releaseScript, operation, directory], { cwd: root,
+      env: { ...process.env, ...env }, encoding: 'utf8', timeout: 30000 });
+  return { dir, evidence, env, manifestDigest, git, checkout, repin, runScript, run: () => runScript('publish'),
+    trace: () => existsSync(env.TRACE) ? readFileSync(env.TRACE,'utf8').trim().split('\n').map(JSON.parse) : [] };
 }
+
+for (const [label, file, mutate] of [
+  ...['runtime', 'secure'].flatMap(kind => [
+    [`missing ${kind}`, `restore-tools-${kind}.json`, null],
+    [`failed ${kind}`, `restore-tools-${kind}.json`, v => { if (kind === 'runtime') v.status = 'failed'; else v.phase = 'failed'; }],
+    [`stale-source ${kind}`, `restore-tools-${kind}.json`, v => { v.sourceSha = 'd'.repeat(40); }],
+    [`wrong-image ${kind}`, `restore-tools-${kind}.json`, v => { v.imageId = previousDigest; }],
+    [`wrong-SBOM ${kind}`, `restore-tools-${kind}.json`, v => { v.sbom.sha256 = 'f'.repeat(64); }],
+  ]),
+  ['false secure check', 'restore-tools-secure.json', v => { v.checks.wrongCa = false; }],
+  ['missing secure check', 'restore-tools-secure.json', v => { delete v.checks.wrongHostname; }],
+  ['wrong-base runtime', 'restore-tools-runtime.json', v => { v.runtime.amd64Digest = previousDigest; }],
+  ['wrong-donor runtime', 'restore-tools-runtime.json', v => { v.donor.amd64Digest = previousDigest; }],
+  ['wrong-donor secure', 'restore-tools-secure.json', v => { v.serverDonorDigest = previousDigest; }],
+  ['absent license state', 'restore-tools-runtime.json', v => { delete v.licenseReview; }],
+  ['pending license state', 'restore-tools-runtime.json', v => { v.licenseReview = { status: 'license-review-pending' }; }],
+  ['absent license record', 'license-review.json', null],
+  ['pending license record', 'license-review.json', v => { v.status = 'license-review-pending'; }],
+  ['stale-source license', 'license-review.json', v => { v.sourceSha = 'd'.repeat(40); }],
+  ['wrong-base license', 'license-review.json', v => { v.runtime.indexDigest = previousDigest; }],
+  ['wrong-donor license', 'license-review.json', v => { v.donor.amd64Digest = previousDigest; }],
+  ['wrong-image license', 'license-review.json', v => { v.imageId = previousDigest; }],
+  ['wrong-SBOM license', 'license-review.json', v => { v.sbom.sha256 = 'f'.repeat(64); }],
+  ['missing APK obligation', 'license-review.json', v => { v.packages.pop(); }],
+  ['missing donor obligation', 'license-review.json', v => { delete v.donorObligations; }],
+  ['fabricated attestation', 'license-attestation.json', v => { v.reviewer = '@fabricated'; }],
+  ['absent attestation', 'license-attestation.json', null],
+  ['uncommitted review', 'license-attestation.json', v => { v.review.commit = 'f'.repeat(40); }],
+]) {
+  for (const operation of ['publish', 'validate']) test(`${operation} rejects ${label} before any registry effect or output`, t => {
+    const f = registryFixture(t);
+    let directory = f.evidence;
+    if (operation === 'validate') {
+      const result = f.run(); assert.equal(result.status, 0, result.stderr);
+      directory = join(f.dir, 'relocated'); cpSync(f.evidence, directory, { recursive: true });
+      rmSync(f.env.TRACE); rmSync(f.env.GITHUB_OUTPUT);
+    }
+    const path = join(directory, file);
+    if (mutate) { const value = JSON.parse(readFileSync(path)); mutate(value); writeFileSync(path, JSON.stringify(value)); }
+    else rmSync(path);
+    const result = f.runScript(operation, directory);
+    assert.notEqual(result.status, 0, `${label} was accepted`);
+    assert.equal(result.stdout, '');
+    assert.deepEqual(f.trace(), [], 'no inspect/copy/tag/scan before all supplemental gates');
+    assert.equal(existsSync(f.env.GITHUB_OUTPUT), false);
+    if (operation === 'publish') assert.equal(existsSync(join(directory, 'release.json')), false);
+  });
+}
+
+for (const operation of ['publish', 'validate']) test(`production has no license trust pin: synthetic approvals cannot authorize ${operation}`, t => {
+  const f = registryFixture(t);
+  if (operation === 'validate') {
+    const result = f.run(); assert.equal(result.status, 0, result.stderr);
+    rmSync(f.env.TRACE); rmSync(f.env.GITHUB_OUTPUT);
+  }
+  assert.notEqual(f.runScript(operation, f.evidence, true).status, 0);
+  assert.deepEqual(f.trace(), []);
+  assert.equal(existsSync(f.env.GITHUB_OUTPUT), false);
+});
+
+// Recommit/re-pin deliberately invalid synthetic reviews so these cases test
+// semantic binding as well as the portable-vs-committed byte checks above.
+for (const [label, mutateReview, mutateAttestation] of [
+  ['pending', v => { v.status = 'license-review-pending'; }],
+  ['source', v => { v.sourceSha = 'd'.repeat(40); }],
+  ['base', v => { v.runtime.indexDigest = previousDigest; }],
+  ['base child', v => { v.runtime.amd64Digest = previousDigest; }],
+  ['donor', v => { v.donor.source = v.donor.source.split('@')[0] + '@' + previousDigest; }],
+  ['donor child', v => { v.donor.amd64Digest = previousDigest; }],
+  ['image', v => { v.imageId = previousDigest; }],
+  ['SBOM', v => { v.sbom.sha256 = 'f'.repeat(64); }],
+  ['APK coverage', v => { v.packages.pop(); }],
+  ['APK license text', v => { delete v.packages[0].licenseText; }],
+  ['APK source offer', v => { delete v.packages[0].sourceOffer; }],
+  ['donor obligations', v => { delete v.donorObligations; }],
+  ['donor license hash', v => { v.donorLicenses[0].sha256 = 'f'.repeat(64); }],
+  ['uncommitted text', v => { v.packages[0].licenseText.sha256 = 'f'.repeat(64); }],
+  ['self review', undefined, v => { v.reviewer = '@fixture-author'; }],
+  ['uncommitted record', undefined, v => { v.review.commit = 'f'.repeat(40); }],
+]) for (const operation of ['publish', 'validate']) test(`${operation} rejects committed license ${label} mismatch without registry access`, t => {
+  const f = registryFixture(t);
+  if (operation === 'validate') {
+    const result = f.run(); assert.equal(result.status, 0, result.stderr);
+    rmSync(f.env.TRACE); rmSync(f.env.GITHUB_OUTPUT);
+  }
+  f.repin(mutateReview, mutateAttestation);
+  const moved = join(f.dir, 'relocated'); cpSync(f.evidence, moved, { recursive: true });
+  const result = f.runScript(operation, operation === 'validate' ? moved : f.evidence);
+  assert.notEqual(result.status, 0, `committed license ${label} accepted`);
+  assert.equal(result.stdout, '');
+  assert.deepEqual(f.trace(), []);
+  assert.equal(existsSync(f.env.GITHUB_OUTPUT), false);
+  if (operation === 'publish') assert.equal(existsSync(join(f.evidence, 'release.json')), false);
+});
+
+for (const name of names) test(`publish rejects rehashed local ${name} High finding before any registry effect`, t => {
+  const f = registryFixture(t);
+  const prefix = `${name}-${digest.replace(':', '-')}`;
+  const grypePath = join(f.evidence, `${prefix}.grype.json`);
+  const report = JSON.parse(readFileSync(grypePath));
+  report.matches = [{ vulnerability: { severity: 'High' } }];
+  writeFileSync(grypePath, JSON.stringify(report));
+  const receiptPath = join(f.evidence, `${prefix}.release.json`);
+  const receipt = JSON.parse(readFileSync(receiptPath));
+  receipt.artifacts.grype.sha256 = fileSha(grypePath);
+  writeFileSync(receiptPath, JSON.stringify(receipt));
+  const result = f.run();
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /high\/critical finding/);
+  assert.deepEqual(f.trace(), []);
+  assert.equal(result.stdout, '');
+  assert.equal(existsSync(f.env.GITHUB_OUTPUT), false);
+  assert.equal(existsSync(join(f.evidence, 'release.json')), false);
+});
+
+test('license obligation hashes use committed bytes without UTF-8 replacement', t => {
+  const f = registryFixture(t);
+  const bytes = Buffer.from([0xff, 0xfe, 0x0a]);
+  writeFileSync(join(f.checkout, 'license.txt'), bytes);
+  f.repin(review => {
+    for (const pkg of review.packages)
+      pkg.licenseText.sha256 = createHash('sha256').update(bytes.toString('utf8')).digest('hex');
+  });
+  const result = f.run();
+  assert.notEqual(result.status, 0, 'decoded text hash must not stand in for committed bytes');
+  assert.deepEqual(f.trace(), []);
+  assert.equal(existsSync(f.env.GITHUB_OUTPUT), false);
+  assert.equal(existsSync(join(f.evidence, 'release.json')), false);
+});
 
 for (const mode of ['matching', 'absent', 'new-repository', 'structured-name', 'structured-manifest', 'structured-reordered', 'skopeo-1.24.1-manifest', 'skopeo-1.24.1-name']) {
   test(`registry ${mode}: publish all five immutable refs, with exact digest scan evidence`, t => {
@@ -783,7 +984,7 @@ for (const mode of ['matching', 'absent', 'new-repository', 'structured-name', '
     }
     const moved = join(f.dir, 'relocated');
     cpSync(f.evidence, moved, { recursive: true });
-    const validated = invoke('image-release.mjs', f.env, ['validate', moved]);
+    const validated = f.runScript('validate', moved);
     assert.equal(validated.status, 0, validated.stderr);
   });
 }
@@ -813,12 +1014,12 @@ test('relocated evidence rejects absolute paths and altered artifact bytes', t =
   const release = JSON.parse(readFileSync(releasePath));
   release.images[0].scanReceipt = join(moved, release.images[0].scanReceipt);
   writeFileSync(releasePath, JSON.stringify(release));
-  assert.notEqual(invoke('image-release.mjs', f.env, ['validate', moved]).status, 0);
+  assert.notEqual(f.runScript('validate', moved).status, 0);
   release.images[0].scanReceipt = basename(release.images[0].scanReceipt);
   writeFileSync(releasePath, JSON.stringify(release));
   const receipt = JSON.parse(readFileSync(join(moved, release.images[0].scanReceipt)));
   writeFileSync(join(moved, receipt.artifacts.spdx.file), 'altered');
-  assert.notEqual(invoke('image-release.mjs', f.env, ['validate', moved]).status, 0);
+  assert.notEqual(f.runScript('validate', moved).status, 0);
 });
 
 for (const [label, kind, corrupt] of [
@@ -844,7 +1045,7 @@ for (const [label, kind, corrupt] of [
     writeFileSync(receiptPath, JSON.stringify(receipt));
     image.scanReceiptSha256 = fileSha(receiptPath);
     writeFileSync(aggregatePath, JSON.stringify(aggregate));
-    assert.notEqual(invoke('image-release.mjs', f.env, ['validate', moved]).status, 0);
+    assert.notEqual(f.runScript('validate', moved).status, 0);
   });
 }
 

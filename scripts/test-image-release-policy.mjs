@@ -933,7 +933,7 @@ else process.exit(2);
   assert.ok(f.trace().some(a => a[0] === 'grype' && a[1] === `docker:${imageId}`));
 });
 
-for (const failure of ['none', 'app-import', 'extract', 'create', 'collision', 'wrong-driver', 'base-collision', 'base-hardlink-collision', 'base-bin-alias', 'base-export', 'base-late-from', 'build', 'restore-import', 'payload', 'runtime', 'runtime-phase', 'runtime-malformed', 'secure']) {
+for (const failure of ['none', 'app-import', 'extract', 'create', 'collision', 'wrong-driver', 'base-collision', 'base-hardlink-collision', 'base-bin-alias', 'base-export', 'base-late-from', 'build', 'restore-import', 'payload', 'runtime', 'runtime-phase', 'runtime-malformed', 'runtime-nul', 'runtime-control', 'runtime-multiline', 'runtime-oversized', 'secure']) {
 const uncertainOwnership = ['create', 'collision'].includes(failure);
 test(`release packaging ${uncertainOwnership ? 'preserves uncertain builder after' : 'cleans owned builder after'} ${failure === 'none' ? 'success' : failure + ' failure'}`, t => {
   const dir = fixture(t);
@@ -964,8 +964,16 @@ const a = process.argv.slice(2);
 if (a[0] === '-e') process.stdout.write('sha256:' + 'a'.repeat(64));
 else if (a[0] === 'scripts/restore-tools-runtime.mjs') {
  require('node:fs').appendFileSync(process.env.TRACE + '.proofs', JSON.stringify(a) + '\\n');
- if (['runtime', 'runtime-phase', 'runtime-malformed'].includes(process.env.FAILURE)) {
-  if (process.env.FAILURE !== 'runtime') require('node:fs').writeFileSync(process.env.IMAGE_VALIDATION_STAGE_FILE, process.env.FAILURE === 'runtime-phase' ? 'restore-runtime-final-inventory\\n' : process.env.SENTINEL);
+ if (process.env.FAILURE.startsWith('runtime')) {
+  const prefix = 'restore-runtime-final-inventory';
+  const markers = {
+   'runtime-phase': prefix + '\\n', 'runtime-malformed': process.env.SENTINEL,
+   'runtime-nul': Buffer.concat([Buffer.from(prefix),Buffer.from([0])]),
+   'runtime-control': Buffer.concat([Buffer.from(prefix),Buffer.from([13])]),
+   'runtime-multiline': prefix + '\\nrestore-runtime-cleanup\\n',
+   'runtime-oversized': prefix + 'x'.repeat(1000),
+  };
+  if (process.env.FAILURE !== 'runtime') require('node:fs').writeFileSync(process.env.IMAGE_VALIDATION_STAGE_FILE, markers[process.env.FAILURE]);
   console.error(process.env.SENTINEL); process.exit(59);
  }
 }
@@ -1079,11 +1087,15 @@ process.exit(7);
   const result = invoke('run-image-validation-ci.sh', env, [evidence], cwd);
   const expectedStatus = { none: 0, 'app-import': 51, extract: 54, create: 8, collision: 8, 'wrong-driver': 1, 'base-collision': 2, 'base-hardlink-collision': 2, 'base-bin-alias': 2, 'base-export': 2, 'base-late-from': 2, build: 9, 'restore-import': 52, payload: 53, runtime: 59, 'runtime-phase': 59, 'runtime-malformed': 59, secure: 58 };
   const expectedStage = { 'app-import': 'application archive import', extract: 'restore builder/context', create: 'restore builder/context', collision: 'restore builder/context', 'wrong-driver': 'restore builder/context', 'base-collision': 'restore builder/context', 'base-hardlink-collision': 'restore builder/context', 'base-bin-alias': 'restore builder/context', 'base-export': 'restore builder/context', 'base-late-from': 'restore builder/context', build: 'restore build', 'restore-import': 'restore image import and scan', payload: 'restore payload contract', runtime: 'restore runtime evidence', 'runtime-phase': 'restore runtime final inventory', 'runtime-malformed': 'restore runtime evidence', secure: 'restore secure client proof' };
+  for (const mode of ['runtime-nul', 'runtime-control', 'runtime-multiline', 'runtime-oversized']) {
+    expectedStatus[mode] = 59;
+    expectedStage[mode] = 'restore runtime evidence';
+  }
   assert.equal(result.status, expectedStatus[failure], result.stderr);
   assert.equal(result.stdout, '');
   assert.equal(result.stderr, failure === 'none' ? '' : `::error::Image validation failed during ${expectedStage[failure]}.\n`);
   assert.doesNotMatch(result.stdout + result.stderr, /SENTINEL|injected|sha256:|jandibat-restore-/);
-  if (['none', 'runtime', 'runtime-phase', 'runtime-malformed', 'secure'].includes(failure)) {
+  if (['none', 'secure'].includes(failure) || failure.startsWith('runtime')) {
     const proofs = readFileSync(env.TRACE + '.proofs', 'utf8').trim().split('\n').map(JSON.parse);
     assert.deepEqual(proofs, [
       ['scripts/test-restore-tools-payload.sh', 'sha256:' + 'a'.repeat(64)],

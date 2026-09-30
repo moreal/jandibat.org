@@ -6,6 +6,13 @@ if [ -z "$evidence" ]; then
 	printf '%s\n' '::error::Image validation failed during setup.' >&2
 	exit 2
 fi
+stage_parser_module=$(dirname -- "$0")/image-validation-stage.sh
+if [ ! -r "$stage_parser_module" ]; then
+	printf '%s\n' '::error::Image validation failed during setup.' >&2
+	exit 2
+fi
+# shellcheck source=scripts/image-validation-stage.sh
+. "$stage_parser_module" 2>/dev/null
 umask 077
 if mkdir -p "$evidence" >/dev/null 2>&1; then :; else
 	status=$?
@@ -26,15 +33,7 @@ else
 	status=$?
 fi
 
-case "$(dd if="$marker" bs=64 count=1 2>/dev/null | od -An -tu1 | awk '
-	{ for (i = 1; i <= NF; i++) {
-		count++; byte = $i
-		if (byte == 10) { if (newline++) invalid = 1 }
-		else if (newline || (byte != 45 && (byte < 97 || byte > 122))) invalid = 1
-		else value = value sprintf("%c", byte)
-	} }
-	END { if (!invalid && count > 0 && count < 64 && length(value) > 0) print value }
-')" in
+case "$(read_image_validation_stage "$marker")" in
 	payload-build) printf '%s\n' '::error::Image validation failed during payload build.' >&2 ;;
 	payload-rebuild) printf '%s\n' '::error::Image validation failed during payload rebuild.' >&2 ;;
 	payload-compare) printf '%s\n' '::error::Image validation failed during payload comparison.' >&2 ;;

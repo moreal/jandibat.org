@@ -7,15 +7,7 @@ record_failure() {
 	status=$1
 	if [ "$status" -ne 0 ] && [ -n "${IMAGE_VALIDATION_STAGE_FILE:-}" ]; then
 		if [ "$stage" = restore-runtime ]; then
-			case "$(dd if="$IMAGE_VALIDATION_STAGE_FILE" bs=64 count=1 2>/dev/null | od -An -tu1 | awk '
-				{ for (i = 1; i <= NF; i++) {
-					count++; byte = $i
-					if (byte == 10) { if (newline++) invalid = 1 }
-					else if (newline || (byte != 45 && (byte < 97 || byte > 122))) invalid = 1
-					else value = value sprintf("%c", byte)
-				} }
-				END { if (!invalid && count > 0 && count < 64 && length(value) > 0) print value }
-			')" in
+			case "$(read_image_validation_stage "$IMAGE_VALIDATION_STAGE_FILE")" in
 				restore-runtime-preflight|restore-runtime-scan|restore-runtime-imported-config|restore-runtime-daemon-oci-copy|restore-runtime-oci-unpack|restore-runtime-final-inventory|restore-runtime-cleanup|restore-runtime-sidecar-write) return ;;
 			esac
 		fi
@@ -23,6 +15,13 @@ record_failure() {
 	fi
 }
 trap 'record_failure "$?"' EXIT
+stage_parser_module=$(dirname -- "$0")/image-validation-stage.sh
+if [ ! -r "$stage_parser_module" ]; then
+	printf '%s\n' 'image validation stage parser unavailable' >&2
+	exit 2
+fi
+# shellcheck source=scripts/image-validation-stage.sh
+. "$stage_parser_module" 2>/dev/null
 test "$(nix eval --impure --raw --expr builtins.currentSystem)" = x86_64-linux || {
 	echo 'release image validation requires an actual x86_64-linux builder and Docker runtime' >&2
 	exit 2

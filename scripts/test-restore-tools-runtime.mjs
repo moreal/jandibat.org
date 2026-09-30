@@ -381,12 +381,12 @@ test('runtime CI diagnostic still rejects when writing the phase marker fails', 
   assert.equal(existsSync(join(f.directory, 'restore-tools-runtime.json')), false);
 });
 
-for (const kind of ['absent', 'empty', 'unknown', 'multiline', 'extra-newline', 'nul', 'oversized']) {
+for (const kind of ['absent', 'empty', 'unknown', 'multiline', 'extra-newline', 'nul', 'control', 'oversized']) {
   test(`runtime CI diagnostic fails closed on a ${kind} phase marker`, t => {
     const f = fixture(t);
     const sentinel = `SYNTHETIC-${randomUUID()}`;
     const marker = { empty: '', unknown: sentinel, multiline: `restore-runtime-scan\n${sentinel}`,
-      'extra-newline': 'restore-runtime-scan\n\n', nul: 'restore-runtime-scan\0',
+      'extra-newline': 'restore-runtime-scan\n\n', nul: 'restore-runtime-scan\0', control: 'restore-runtime-scan\r',
       oversized: 'restore-runtime-scan' + 'x'.repeat(1000) }[kind];
     writeFileSync(join(f.directory, 'bin/nix'), `#!${process.execPath}\nif (process.env.DIAGNOSTIC_MARKER) require('node:fs').writeFileSync(process.env.IMAGE_VALIDATION_STAGE_FILE,Buffer.from(process.env.DIAGNOSTIC_MARKER,'base64')); console.error(process.env.DIAGNOSTIC_SENTINEL); process.exit(67);`, { mode: 0o755 });
     const result = spawnSync('sh', [join(root, 'scripts/run-image-validation-ci.sh'), f.directory], {
@@ -400,3 +400,21 @@ for (const kind of ['absent', 'empty', 'unknown', 'multiline', 'extra-newline', 
     assert.ok(readFileSync(join(f.directory, '.image-validation-output'), 'utf8').includes(sentinel));
   });
 }
+
+for (const [label, bytes, expected] of [
+  ['valid', 'restore-runtime-final-inventory\n', 'restore-runtime-final-inventory\n'],
+  ['without newline', 'restore-runtime-scan', 'restore-runtime-scan\n'],
+  ['absent', undefined, ''], ['empty', '', ''],
+  ['NUL', 'restore-runtime-scan\0', ''], ['control', 'restore-runtime-scan\r', ''],
+  ['multiline', 'restore-runtime-scan\nrestore-runtime-cleanup\n', ''],
+  ['oversized', 'restore-runtime-scan' + 'x'.repeat(1000), ''],
+]) test(`shared image stage parser handles ${label} bytes without diagnostics`, t => {
+  const f = fixture(t);
+  const marker = join(f.directory, 'marker');
+  if (bytes !== undefined) writeFileSync(marker, bytes);
+  const result = spawnSync('sh', ['-c', '. "$1"; read_image_validation_stage "$2"', 'marker-test',
+    join(root, 'scripts/image-validation-stage.sh'), marker], { cwd: root, encoding: 'utf8' });
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, expected);
+  assert.equal(result.stderr, '');
+});

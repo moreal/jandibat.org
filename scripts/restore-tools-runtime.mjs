@@ -21,6 +21,9 @@ const sorted = items => [...items].sort((a, b) => JSON.stringify(a).localeCompar
 const runtimeStages = Object.freeze({
   preflight: 'restore-runtime-preflight', scan: 'restore-runtime-scan',
   importedConfig: 'restore-runtime-imported-config', daemonOciCopy: 'restore-runtime-daemon-oci-copy',
+  ociScratch: 'restore-runtime-oci-scratch', skopeoCopy: 'restore-runtime-skopeo-copy',
+  ociIndex: 'restore-runtime-oci-index', ociManifest: 'restore-runtime-oci-manifest',
+  ociConfigDigest: 'restore-runtime-oci-config-digest', ociConfigBlob: 'restore-runtime-oci-config-blob',
   ociUnpack: 'restore-runtime-oci-unpack', finalInventory: 'restore-runtime-final-inventory',
   cleanup: 'restore-runtime-cleanup', sidecarWrite: 'restore-runtime-sidecar-write',
 });
@@ -175,7 +178,7 @@ export function produceRuntimeEvidence(imageId, evidence) {
   assert.equal(loaded.Os, 'linux');
   assert.equal(loaded.Architecture, 'amd64');
   assert.equal(loaded.Config.User, '65532:65532');
-  runtimeStage = runtimeStages.daemonOciCopy;
+  runtimeStage = runtimeStages.ociScratch;
   const scratch = mkdtempSync(join(tmpdir(), 'jandibat-final-runtime-'));
   let sidecar;
   try {
@@ -183,11 +186,16 @@ export function produceRuntimeEvidence(imageId, evidence) {
     // The daemon transport reads the already-imported ID, never a mutable tag or
     // a potentially changed candidate layer layout. OCI conversion preserves
     // config bytes (checked below) while allowing Umoci's manifest media type.
+    runtimeStage = runtimeStages.skopeoCopy;
     command('skopeo', ['copy', '--format', 'oci', `docker-daemon:${imageId}`, `oci:${layout}:final`]);
+    runtimeStage = runtimeStages.ociIndex;
     const ociIndex = json(join(layout, 'index.json'));
     assert.equal(ociIndex.manifests.length, 1);
+    runtimeStage = runtimeStages.ociManifest;
     const ociManifest = json(join(layout, 'blobs/sha256', ociIndex.manifests[0].digest.slice(7)));
+    runtimeStage = runtimeStages.ociConfigDigest;
     assert.equal(ociManifest.config.digest, imageId, 'unpacked image config identity');
+    runtimeStage = runtimeStages.ociConfigBlob;
     assert.equal(`sha256:${fileHash(join(layout, 'blobs/sha256', imageId.slice(7)))}`, imageId);
     runtimeStage = runtimeStages.ociUnpack;
     command('umoci', ['unpack', '--rootless', '--image', `${layout}:final`, join(scratch, 'bundle')]);

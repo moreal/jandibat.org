@@ -8,7 +8,7 @@ record_failure() {
 	if [ "$status" -ne 0 ] && [ -n "${IMAGE_VALIDATION_STAGE_FILE:-}" ]; then
 		if [ "$stage" = restore-runtime ]; then
 			case "$(read_image_validation_stage "$IMAGE_VALIDATION_STAGE_FILE")" in
-				restore-runtime-preflight|restore-runtime-scan|restore-runtime-imported-config|restore-runtime-daemon-oci-copy|restore-runtime-oci-unpack|restore-runtime-final-inventory|restore-runtime-cleanup|restore-runtime-sidecar-write) return ;;
+				restore-runtime-preflight|restore-runtime-scan|restore-runtime-imported-config|restore-runtime-daemon-oci-copy|restore-runtime-oci-scratch|restore-runtime-skopeo-copy|restore-runtime-oci-index|restore-runtime-oci-manifest|restore-runtime-oci-config-digest|restore-runtime-oci-config-blob|restore-runtime-oci-unpack|restore-runtime-final-inventory|restore-runtime-cleanup|restore-runtime-sidecar-write) return ;;
 			esac
 		fi
 		printf '%s\n' "$stage" 2>/dev/null >"$IMAGE_VALIDATION_STAGE_FILE" || :

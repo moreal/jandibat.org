@@ -48,6 +48,12 @@ case "$(read_image_validation_stage "$marker")" in
 	restore-runtime-scan) printf '%s\n' '::error::Image validation failed during restore runtime scan.' >&2 ;;
 	restore-runtime-imported-config) printf '%s\n' '::error::Image validation failed during restore runtime imported config.' >&2 ;;
 	restore-runtime-daemon-oci-copy) printf '%s\n' '::error::Image validation failed during restore runtime daemon OCI copy.' >&2 ;;
+	restore-runtime-oci-scratch) printf '%s\n' '::error::Image validation failed during restore runtime OCI scratch creation.' >&2 ;;
+	restore-runtime-skopeo-copy) printf '%s\n' '::error::Image validation failed during restore runtime Skopeo copy.' >&2 ;;
+	restore-runtime-oci-index) printf '%s\n' '::error::Image validation failed during restore runtime OCI index.' >&2 ;;
+	restore-runtime-oci-manifest) printf '%s\n' '::error::Image validation failed during restore runtime OCI manifest.' >&2 ;;
+	restore-runtime-oci-config-digest) printf '%s\n' '::error::Image validation failed during restore runtime OCI config digest.' >&2 ;;
+	restore-runtime-oci-config-blob) printf '%s\n' '::error::Image validation failed during restore runtime OCI config blob.' >&2 ;;
 	restore-runtime-oci-unpack) printf '%s\n' '::error::Image validation failed during restore runtime OCI unpack.' >&2 ;;
 	restore-runtime-final-inventory) printf '%s\n' '::error::Image validation failed during restore runtime final inventory.' >&2 ;;
 	restore-runtime-cleanup) printf '%s\n' '::error::Image validation failed during restore runtime cleanup.' >&2 ;;

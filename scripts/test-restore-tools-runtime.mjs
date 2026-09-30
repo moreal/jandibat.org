@@ -313,7 +313,7 @@ crypto.createHash = function(...args) {
  instance.digest = function(encoding) { return fixture && encoding === 'hex' ? 'a963547f904eff70405115c0371717f59fdd856585081d31f59365a6bd2b6878' : digest.call(this,encoding); }; return instance;
 };
 const originalScratch = fs.mkdtempSync;
-fs.mkdtempSync = function(prefix,...args) { return originalScratch.call(this,String(prefix).includes('jandibat-final-runtime-') ? ${JSON.stringify(join(f.directory, 'scratch-'))} : prefix,...args); };
+fs.mkdtempSync = function(prefix,...args) { if (process.env.DIAGNOSTIC_PHASE === 'oci-scratch' && String(prefix).includes('jandibat-final-runtime-')) throw new Error(process.env.DIAGNOSTIC_SENTINEL); return originalScratch.call(this,String(prefix).includes('jandibat-final-runtime-') ? ${JSON.stringify(join(f.directory, 'scratch-'))} : prefix,...args); };
 const originalRemove = fs.rmSync;
 fs.rmSync = function(path,options) { if (process.env.DIAGNOSTIC_PHASE === 'cleanup' && options?.recursive && String(path).startsWith(${JSON.stringify(join(f.directory, 'scratch-'))})) throw new Error(process.env.DIAGNOSTIC_SENTINEL); return originalRemove.call(this,path,options); };
 const originalWrite = fs.writeFileSync;
@@ -329,11 +329,11 @@ syncBuiltinESMExports();`);
   executable('nix', `const {spawnSync}=require('node:child_process'); const result=spawnSync(${JSON.stringify(process.execPath)},[${JSON.stringify(producer)},${JSON.stringify(id)},${JSON.stringify(f.directory)}],{stdio:'inherit'}); process.exit(result.status ?? 99);`);
   executable('docker', `if (process.env.DIAGNOSTIC_PHASE === 'imported-config') { console.log(process.env.DIAGNOSTIC_SENTINEL); console.error(process.env.DIAGNOSTIC_SENTINEL); process.exit(62); } console.log(JSON.stringify([{Id:${JSON.stringify(id)},Os:'linux',Architecture:'amd64',Config:{User:'65532:65532'}}]));`);
   executable('skopeo', `const fs=require('node:fs'); const path=require('node:path');
-if (process.env.DIAGNOSTIC_PHASE === 'daemon-oci-copy') { console.log(process.env.DIAGNOSTIC_SENTINEL); console.error(process.env.DIAGNOSTIC_SENTINEL); process.exit(63); }
+if (process.env.DIAGNOSTIC_PHASE === 'skopeo-copy') { console.log(process.env.DIAGNOSTIC_SENTINEL); console.error(process.env.DIAGNOSTIC_SENTINEL); process.exit(63); }
 const destination=process.argv.at(-1).slice(4,-':final'.length); fs.mkdirSync(path.join(destination,'blobs/sha256'),{recursive:true});
-const config=${JSON.stringify(configBytes)}; const manifest=JSON.stringify({config:{digest:${JSON.stringify(id)}}}); const manifestId=require('node:crypto').createHash('sha256').update(manifest).digest('hex');
-fs.writeFileSync(path.join(destination,'index.json'),JSON.stringify({manifests:[{digest:'sha256:'+manifestId}]}));
-fs.writeFileSync(path.join(destination,'blobs/sha256',manifestId),manifest); fs.writeFileSync(path.join(destination,'blobs/sha256',${JSON.stringify(id.slice(7))}),config);`);
+const phase=process.env.DIAGNOSTIC_PHASE; const config=${JSON.stringify(configBytes)}; const manifest=JSON.stringify({config:{digest:phase === 'oci-config-digest' ? 'sha256:'+'0'.repeat(64) : ${JSON.stringify(id)}}}); const manifestId=require('node:crypto').createHash('sha256').update(manifest).digest('hex');
+fs.writeFileSync(path.join(destination,'index.json'),phase === 'oci-index' ? process.env.DIAGNOSTIC_SENTINEL : JSON.stringify({manifests:[{digest:'sha256:'+manifestId}]}));
+fs.writeFileSync(path.join(destination,'blobs/sha256',manifestId),phase === 'oci-manifest' ? process.env.DIAGNOSTIC_SENTINEL : manifest); fs.writeFileSync(path.join(destination,'blobs/sha256',${JSON.stringify(id.slice(7))}),phase === 'oci-config-blob' ? process.env.DIAGNOSTIC_SENTINEL : config);`);
   executable('umoci', `const fs=require('node:fs'); if (process.env.DIAGNOSTIC_PHASE === 'oci-unpack') { console.log(process.env.DIAGNOSTIC_SENTINEL); console.error(process.env.DIAGNOSTIC_SENTINEL); process.exit(64); } fs.cpSync(${JSON.stringify(f.rootfs)},process.argv.at(-1)+'/rootfs',{recursive:true});`);
   return { ...f, sentinel, env: { ...process.env, PATH: `${join(f.directory, 'bin')}:${process.env.PATH}`,
     GITHUB_SHA: '', NODE_OPTIONS: `--require=${preload}`, DIAGNOSTIC_PHASE: phase, DIAGNOSTIC_SENTINEL: sentinel } };
@@ -341,7 +341,10 @@ fs.writeFileSync(path.join(destination,'blobs/sha256',manifestId),manifest); fs.
 
 for (const [phase, label] of [
   ['preflight', 'preflight'], ['scan', 'scan'], ['imported-config', 'imported config'],
-  ['daemon-oci-copy', 'daemon OCI copy'], ['oci-unpack', 'OCI unpack'],
+  ['oci-scratch', 'OCI scratch creation'], ['skopeo-copy', 'Skopeo copy'],
+  ['oci-index', 'OCI index'], ['oci-manifest', 'OCI manifest'],
+  ['oci-config-digest', 'OCI config digest'], ['oci-config-blob', 'OCI config blob'],
+  ['oci-unpack', 'OCI unpack'],
   ['final-inventory', 'final inventory'], ['cleanup', 'cleanup'], ['sidecar-write', 'sidecar write'],
 ]) test(`runtime CI diagnostic localizes ${phase} with a fixed safe annotation`, async t => {
   const f = await diagnosticFixture(t, phase);
@@ -370,7 +373,7 @@ test('runtime CI diagnostic leaves successful synthetic evidence and pending lic
 });
 
 test('runtime CI diagnostic still rejects when writing the phase marker fails', async t => {
-  const f = await diagnosticFixture(t, 'daemon-oci-copy');
+  const f = await diagnosticFixture(t, 'skopeo-copy');
   const result = spawnSync('sh', [join(root, 'scripts/run-image-validation-ci.sh'), f.directory], {
     cwd: root, env: { ...f.env, DIAGNOSTIC_MARKER_DENIED: '1' }, encoding: 'utf8',
   });
